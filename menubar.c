@@ -131,7 +131,9 @@ static BOOL BarGlass(void) { return g_cfg.material == MAT_GLASS && !B.look.light
 static BOOL CaptureBarBack(void)
 {
     if (!B.hwnd || !BarGlass()) return FALSE;
-    const int sw = max(1, (B.mon.right - B.mon.left) / BACK_SCALE), sh = max(1, (B.h + BACK_SCALE - 1) / BACK_SCALE);
+    /* algo más que la barra: el desenfoque de su borde de abajo cuenta con lo que hay
+     * debajo, igual que el del notch pegado cuenta con lo que hay detrás de la barra */
+    const int sw = max(1, (B.mon.right - B.mon.left) / BACK_SCALE), sh = max(1, (B.h + BS(24) + BACK_SCALE - 1) / BACK_SCALE);
     if (s_back.w != sw || s_back.h != sh) {
         Canvas_Free(&s_back);
         if (!Canvas_Init(&s_back, sw, sh)) return FALSE;

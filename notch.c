@@ -116,6 +116,7 @@ static struct {
     int     bellPx;
     int     unread;             /* notificaciones ofuscadas sin ver */
     DWORD   backTick;
+    int     backOX, backOY;     /* origen de la captura respecto a la ventana */
 } N;
 
 /* Tarjetas ya dibujadas a escala 1: el scroll y el hover solo las escalan. */
@@ -793,6 +794,7 @@ static void RenderFrame(void)
     const int y0 = max(0, (int)floorf(top) - 1),       y1 = min(N.winH, (int)ceilf(bottom) + 1);
     const DWORD bg = L->bg, hairColor = L->light ? 0xC7C7CC : 0x5A5A5E;
     const BOOL glass = g_cfg.material == MAT_GLASS;
+    const BOOL hair = L->hairline && !(N.attached && Bar_HeightOn(&N.mon) > 0);
     if (glass) CaptureBackdrop();
     const BOOL simple = !glass && L->bgA >= 1.0f && N.fade >= 0.999f && N.op >= 0.999f && N.content.px;
 
@@ -836,7 +838,7 @@ static void RenderFrame(void)
             if (N.fade > 0 && N.content.px && qx >= 0 && qy >= 0 && qx < N.content.w && qy < N.content.h)
                 c = Gfx_Mix(bg, N.content.px[qy * N.content.w + qx] & 0xFFFFFF, N.fade);
             if (glass) c = OverGlass(Gfx_Mix(SampleBack(x, y), bg, 0.52f), c, bg);
-            if (L->hairline && d > -2.0f && d < 0.5f)
+            if (hair && d > -2.0f && d < 0.5f)
                 c = Gfx_Mix(c, hairColor, 0.55f * Gfx_Cov(fabsf(d + 0.8f) - 0.5f));
 
             float k = a;
@@ -869,7 +871,12 @@ static void RenderFrame(void)
  * saturación. Solo vive en memoria y solo mientras la isla está en pantalla.     */
 static void CaptureBackdrop(void)
 {
-    const int sw = max(1, N.winW / BACK_SCALE), sh = max(1, N.winH / BACK_SCALE);
+    /* pegada a la barra, la isla y la barra son una sola pieza de vidrio: se captura desde
+     * el borde del monitor (lo que hay detrás de la barra cuenta para el desenfoque) y en la
+     * misma rejilla y con el mismo radio que la barra, así no se nota la unión */
+    const int ext = N.attached ? max(0, N.winY - N.mon.top) : 0;
+    const int ox = ((N.winX - N.mon.left) % BACK_SCALE + BACK_SCALE) % BACK_SCALE;
+    const int sw = max(1, (N.winW + ox + BACK_SCALE - 1) / BACK_SCALE), sh = max(1, (N.winH + ext + BACK_SCALE - 1) / BACK_SCALE);
     if (N.back.w != sw || N.back.h != sh) {
         Canvas_Free(&N.back);
         if (!Canvas_Init(&N.back, sw, sh)) return;
@@ -877,10 +884,11 @@ static void CaptureBackdrop(void)
     HDC screen = GetDC(NULL);
     SetStretchBltMode(N.back.dc, HALFTONE);
     SetBrushOrgEx(N.back.dc, 0, 0, NULL);
-    StretchBlt(N.back.dc, 0, 0, sw, sh, screen, N.winX, N.winY, N.winW, N.winH, SRCCOPY);
+    StretchBlt(N.back.dc, 0, 0, sw, sh, screen, N.winX - ox, N.winY - ext, sw * BACK_SCALE, sh * BACK_SCALE, SRCCOPY);
     ReleaseDC(NULL, screen);
     GdiFlush();
-    for (int i = 0; i < 2; ++i) Gfx_BoxBlur(N.back.px, sw, sh, max(1, NS(14) / BACK_SCALE));
+    N.backOX = ox; N.backOY = ext;
+    for (int i = 0; i < 2; ++i) Gfx_BoxBlur(N.back.px, sw, sh, max(1, MulDiv(16, (int)N.dpi, 96) / BACK_SCALE));
     /* vibrancia: un poco más de saturación, como el vidrio de Apple */
     for (int i = 0; i < sw * sh; ++i) {
         const DWORD v = N.back.px[i];
@@ -895,7 +903,7 @@ static void CaptureBackdrop(void)
 static DWORD SampleBack(int x, int y)
 {
     if (!N.back.px) return N.look.bg;
-    const float fx = (x + 0.5f) / BACK_SCALE - 0.5f, fy = (y + 0.5f) / BACK_SCALE - 0.5f;
+    const float fx = (x + N.backOX + 0.5f) / BACK_SCALE - 0.5f, fy = (y + N.backOY + 0.5f) / BACK_SCALE - 0.5f;
     const int x0 = max(0, min(N.back.w - 1, (int)floorf(fx))), y0 = max(0, min(N.back.h - 1, (int)floorf(fy)));
     const int x1 = min(N.back.w - 1, x0 + 1), y1 = min(N.back.h - 1, y0 + 1);
     const float tx = max(0.0f, min(1.0f, fx - x0)), ty = max(0.0f, min(1.0f, fy - y0));
