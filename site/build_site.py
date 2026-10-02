@@ -6,13 +6,15 @@
 - docs/assets/site.css, site.js
 - docs/assets/logo.png, favicon.png, apple-touch-icon.png, og.png
 - docs/assets/sounds/*.wav   los sonidos de la demo (de sounds/, a 24 kHz)
+- docs/gracias.html          destino de los formularios sin JavaScript
+Se publica en Netlify (Netlify Forms) con .github/workflows/web.yml.
 Requiere Pillow. REPO y SITE son las únicas direcciones del sitio.
 """
 import os, io, wave, audioop, re
 from PIL import Image, ImageDraw, ImageFont
 
 REPO = 'https://github.com/JosueGM24/OpenDock'
-SITE = 'https://josuegm24.github.io/OpenDock/'
+SITE = 'https://opendock.netlify.app/'   # cámbialo si tu sitio de Netlify tiene otro nombre o dominio
 DOWNLOAD = REPO + '/releases/latest/download/OpenDock.exe'
 
 here = os.path.dirname(os.path.abspath(__file__))
@@ -109,6 +111,29 @@ css = ':root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(s
 open(os.path.join(out, 'index.html'), 'w', encoding='utf-8', newline='\n').write(html)
 open(os.path.join(assets, 'site.css'), 'w', encoding='utf-8', newline='\n').write(css)
 open(os.path.join(assets, 'site.js'), 'w', encoding='utf-8', newline='\n').write(js)
-open(os.path.join(out, '.nojekyll'), 'w').close()
+gracias = f'''<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gracias — OpenDock</title>
+<meta name="robots" content="noindex">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+{fonts}
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<div class="wrap" style="min-height:100vh;display:grid;place-content:center;gap:18px;text-align:center;justify-items:center">
+  <img src="assets/logo.png" alt="" width="72" height="72">
+  <h2>Gracias, ya me llegó tu mensaje</h2>
+  <p style="color:#B3B9C5;max-width:44ch;margin:0">Lo reviso en los próximos días. Si dejaste tu correo, te escribo en cuanto tenga novedades.</p>
+  <a class="btn btn-primary" href="./">Volver a OpenDock</a>
+</div>
+</body>
+</html>
+'''
+open(os.path.join(out, 'gracias.html'), 'w', encoding='utf-8', newline='\n').write(gracias)
+nj = os.path.join(out, '.nojekyll')
+if os.path.exists(nj): os.remove(nj)
 total = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(out) for f in fs)
 print('docs/ listo,', total // 1024, 'KB')

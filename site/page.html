@@ -303,6 +303,55 @@ pre.cmd .c { color: var(--mute); }
 footer { padding-block: 56px 40px; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; color: var(--mute); font-size: 13px; }
 footer p { margin: 0; max-width: 62ch; }
 
+
+/* ── opiniones: reportar un error / sugerir una función ── */
+.talk { margin-block: 96px; display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 48px; align-items: start; }
+.talk-intro p { color: #B3B9C5; max-width: 40ch; }
+.talk-intro .who { margin-top: 28px; display: grid; gap: 14px; }
+.tabs { display: inline-flex; background: #0E1116; border: 1px solid #1E232C; border-radius: 999px; padding: 4px; margin-bottom: 18px; }
+.tabs button { border: 0; background: transparent; padding: 10px 18px; border-radius: 999px; font: 500 14px/1 var(--body); color: #AEB5C2; cursor: pointer; transition: background .25s, color .25s; }
+.tabs button[aria-selected="true"] { background: var(--ink); color: #06080B; }
+.fcard { background: var(--panel); border: 1px solid var(--line); border-radius: 24px; padding: clamp(20px, 4vw, 32px); position: relative; }
+.fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.fgrid .full { grid-column: 1 / -1; }
+.field { display: grid; gap: 7px; align-content: start; }
+.field label { font: 500 13px/1.3 var(--body); color: #D6DAE2; }
+.field label small { color: var(--mute); font-weight: 400; }
+.field input, .field select, .field textarea { width: 100%; font: 15px/1.45 var(--body); color: var(--ink); background: #06080B; border: 1px solid #232833; border-radius: 12px; padding: 11px 13px; transition: border-color .2s, box-shadow .2s; }
+.field textarea { min-height: 112px; resize: vertical; }
+.field select { appearance: none; background-image: linear-gradient(45deg, transparent 50%, #8C93A1 50%), linear-gradient(135deg, #8C93A1 50%, transparent 50%); background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 34px; }
+.field input:focus, .field select:focus, .field textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(143, 184, 255, .18); }
+.field.bad input, .field.bad textarea { border-color: #FF6B6B; }
+.field .err { font-size: 12px; color: #FF8A8A; }
+.field .err:empty { display: none; }
+.hp { position: absolute !important; left: -9999px !important; width: 1px; height: 1px; overflow: hidden; }
+.factions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 20px; }
+.send { display: inline-flex; align-items: center; gap: 10px; padding: 13px 22px; border-radius: 999px; border: 0; cursor: pointer; background: var(--ink); color: #06080B; font: 600 15px/1 var(--body); transition: transform .45s var(--spring), opacity .2s; }
+.send:hover { transform: translateY(-1px); }
+.send[disabled] { opacity: .6; cursor: progress; transform: none; }
+.send .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; display: none; animation: spin .7s linear infinite; }
+.send[disabled] .spin { display: inline-block; }
+@keyframes spin { to { rotate: 360deg; } }
+.fnote { font-size: 13px; color: var(--mute); }
+.fstatus { font-size: 14px; color: #FF8A8A; }
+.done { display: grid; gap: 12px; justify-items: start; padding-block: 12px; }
+.done .ok { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: rgba(48, 209, 88, .14); color: #30D158; }
+.done h3 { margin: 0; font: 700 24px/1.15 var(--display); }
+.done p { margin: 0; color: #B3B9C5; max-width: 44ch; }
+.done button { margin-top: 6px; background: none; border: 1px solid #2A303B; color: var(--ink); border-radius: 999px; padding: 9px 16px; font: 500 14px/1 var(--body); cursor: pointer; }
+/* créditos */
+.maker { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.maker .av { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: linear-gradient(160deg, #96BEFF, #5464F0); color: #fff; font: 700 17px/1 var(--display); flex: none; }
+.maker b { display: block; font: 600 15px/1.3 var(--body); }
+.maker a { color: var(--accent); text-decoration: none; }
+.maker a:hover { text-decoration: underline; }
+.coffee { justify-self: start; display: inline-flex; align-items: center; gap: 10px; padding: 11px 18px; border-radius: 999px; text-decoration: none; background: #FFDD00; color: #1A1A1A; font: 600 14px/1 var(--body); transition: transform .45s var(--spring); }
+.coffee:hover { transform: translateY(-2px) rotate(-1deg); }
+.coffee svg { width: 18px; height: 18px; }
+footer a { color: #C9CED8; }
+@media (max-width: 860px) { .talk { grid-template-columns: 1fr; gap: 28px; } }
+@media (max-width: 560px) { .fgrid { grid-template-columns: 1fr; } }
+
 @media (max-width: 860px) {
   .hero-copy, .quiet, .oss, .part.full { grid-template-columns: 1fr; }
   .cta-row { justify-self: start; }
@@ -331,6 +380,7 @@ footer p { margin: 0; max-width: 62ch; }
       <a href="#piezas">Qué trae</a>
       <a href="#codigo">Código</a>
       <a href="#instalar">Instalar</a>
+      <a href="#opinion">Opinar</a>
       <span class="tag">Código abierto · MIT</span>
     </nav>
   </header>
@@ -469,6 +519,7 @@ footer p { margin: 0; max-width: 62ch; }
       <img class="oss-logo" src="__LOGO__" alt="Logo de OpenDock: un cuadrado azul con el notch negro arriba">
       <h2>Código abierto, de principio a fin</h2>
       <p>OpenDock se publica con licencia MIT: úsalo, estúdialo, modifícalo y compártelo. Son unas diez mil líneas de C contra la API de Win32, sin frameworks ni dependencias en tiempo de ejecución. Cada pieza vive en su propio archivo, así que es fácil encontrar lo que quieres cambiar.</p>
+      <div class="maker"><span class="av" aria-hidden="true">D</span><div><b>Hecho por Daniel Godínez</b><a href="https://danielgodinez.netlify.app/" rel="noopener">danielgodinez.netlify.app</a></div></div>
       <pre class="cmd"><span class="c"># con MSYS2 (mingw-w64)</span>
 ./build.sh
 <span class="c"># o con Visual Studio</span>
@@ -516,8 +567,55 @@ build.bat</pre>
     </div>
   </section>
 
+
+  <section class="talk" id="opinion">
+    <div class="talk-intro">
+      <h2>¿Algo falla o se te ocurre algo?</h2>
+      <p>Cuéntamelo aquí: llega directo a mi correo. Si dejas el tuyo, te aviso cuando esté arreglado o cuando la idea llegue a una versión.</p>
+      <div class="who">
+        <div class="maker"><span class="av" aria-hidden="true">D</span><div><b>Hecho por Daniel Godínez</b><a href="https://danielgodinez.netlify.app/" rel="noopener">danielgodinez.netlify.app</a></div></div>
+        <a class="coffee" href="https://buymeacoffee.com/danielgodinez" rel="noopener"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h13v5a6 6 0 0 1-6 6H10a6 6 0 0 1-6-6z"/><path d="M17 9h1.5a2.5 2.5 0 0 1 0 5H17"/><path d="M8 2.5c0 1 .8 1.3.8 2.3M11.5 2.5c0 1 .8 1.3.8 2.3"/></svg>Invítame un café</a>
+      </div>
+    </div>
+    <div>
+      <div class="tabs" role="tablist" aria-label="Tipo de mensaje">
+        <button role="tab" id="tabBug" aria-controls="panelBug" aria-selected="true">Reportar un error</button>
+        <button role="tab" id="tabIdea" aria-controls="panelIdea" aria-selected="false">Sugerir una función</button>
+      </div>
+      <div class="fcard" role="tabpanel" id="panelBug" aria-labelledby="tabBug">
+        <form name="reportar-error" method="POST" action="/gracias.html" data-netlify="true" netlify-honeypot="bot-field" novalidate>
+          <input type="hidden" name="form-name" value="reportar-error"><input type="hidden" name="version" value="OpenDock 2.0.0">
+          <p class="hp"><label>No llenes esto: <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
+          <div class="fgrid">
+            <div class="field"><label for="bName">Nombre <small>(opcional)</small></label><input id="bName" name="nombre" autocomplete="name"></div>
+            <div class="field"><label for="bMail">Correo <small>(para avisarte)</small></label><input id="bMail" name="correo" type="email" autocomplete="email" placeholder="tu@correo.com"><span class="err" aria-live="polite"></span></div>
+            <div class="field"><label for="bPiece">Dónde pasa</label><select id="bPiece" name="pieza"><option>Notch y notificaciones</option><option>Barra superior</option><option>Centro de control</option><option>Dock</option><option>Esquinas redondeadas</option><option>Sonidos</option><option>Instalación</option><option>Otra cosa</option></select></div>
+            <div class="field"><label for="bWin">Windows</label><select id="bWin" name="windows"><option>Windows 11</option><option>Windows 10</option><option>No lo sé</option></select></div>
+            <div class="field full"><label for="bWhat">Qué pasó</label><textarea id="bWhat" name="que-paso" required minlength="10" placeholder="Al abrir el centro de control con Vidrio, la barra parpadea…"></textarea><span class="err" aria-live="polite"></span></div>
+            <div class="field full"><label for="bSteps">Cómo reproducirlo <small>(opcional)</small></label><textarea id="bSteps" name="pasos" placeholder="1. Activo la barra superior&#10;2. Cambio el material a Vidrio&#10;3. …"></textarea></div>
+          </div>
+          <div class="factions"><button class="send" type="submit"><span class="spin" aria-hidden="true"></span><span class="lbl">Enviar reporte</span></button><span class="fstatus" role="status" aria-live="polite"></span></div>
+        </form>
+      </div>
+      <div class="fcard" role="tabpanel" id="panelIdea" aria-labelledby="tabIdea" hidden>
+        <form name="sugerir-funcion" method="POST" action="/gracias.html" data-netlify="true" netlify-honeypot="bot-field" novalidate>
+          <input type="hidden" name="form-name" value="sugerir-funcion"><input type="hidden" name="version" value="OpenDock 2.0.0">
+          <p class="hp"><label>No llenes esto: <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
+          <div class="fgrid">
+            <div class="field"><label for="iName">Nombre <small>(opcional)</small></label><input id="iName" name="nombre" autocomplete="name"></div>
+            <div class="field"><label for="iMail">Correo <small>(opcional)</small></label><input id="iMail" name="correo" type="email" autocomplete="email" placeholder="tu@correo.com"><span class="err" aria-live="polite"></span></div>
+            <div class="field full"><label for="iPiece">Para qué parte</label><select id="iPiece" name="pieza"><option>Notch y notificaciones</option><option>Barra superior</option><option>Centro de control</option><option>Dock</option><option>Esquinas redondeadas</option><option>Sonidos</option><option>Instalación</option><option>Otra cosa</option></select></div>
+            <div class="field full"><label for="iTitle">Tu idea en una frase</label><input id="iTitle" name="idea" required minlength="5" placeholder="Que el dock muestre la batería de mis audífonos"><span class="err" aria-live="polite"></span></div>
+            <div class="field full"><label for="iWhy">Cuéntame más</label><textarea id="iWhy" name="detalle" required minlength="10" placeholder="Qué te gustaría que hiciera y en qué te ayudaría."></textarea><span class="err" aria-live="polite"></span></div>
+          </div>
+          <div class="factions"><button class="send" type="submit"><span class="spin" aria-hidden="true"></span><span class="lbl">Enviar idea</span></button><span class="fstatus" role="status" aria-live="polite"></span></div>
+        </form>
+      </div>
+    </div>
+  </section>
+
   <footer>
-    <p>OpenDock 2.0, antes CornerRadius. Código con licencia MIT. Sonidos de Material Design Sound Resources, © Google, licencia CC BY 4.0.</p>
+    <p>OpenDock 2.0, antes CornerRadius. Hecho por <a href="https://danielgodinez.netlify.app/" rel="noopener">Daniel Godínez</a> · <a href="https://buymeacoffee.com/danielgodinez" rel="noopener">Invítame un café</a>. Código con licencia MIT. Sonidos de Material Design Sound Resources, © Google, licencia CC BY 4.0.</p>
     <span class="meta">Hecho en C, sin frameworks.</span>
   </footer>
 </div>
@@ -1172,5 +1270,48 @@ build.bat</pre>
   }));
   $('radius').addEventListener('input', e => { const r = +e.target.value; $('rOut').textContent = r + ' px'; $('vCorners').style.setProperty('--cr', r); desk.style.setProperty('--rr', Math.max(.01, r) + 'px'); });
   wake();
+})();
+
+/* ── formularios: Netlify Forms por AJAX ── */
+(() => {
+  const tabs = [['tabBug', 'panelBug'], ['tabIdea', 'panelIdea']];
+  tabs.forEach(([t, p]) => document.getElementById(t).addEventListener('click', () => {
+    tabs.forEach(([t2, p2]) => { document.getElementById(t2).setAttribute('aria-selected', String(t2 === t)); document.getElementById(p2).hidden = p2 !== p; });
+  }));
+  const MSG = { 'que-paso': 'Cuéntame qué pasó (al menos 10 caracteres).', idea: 'Escribe tu idea en una frase.', detalle: 'Cuéntame un poco más (al menos 10 caracteres).', correo: 'Ese correo no parece válido.' };
+  const check = f => {
+    let ok = true;
+    f.querySelectorAll('input[required], textarea[required], input[type="email"]').forEach(el => {
+      const box = el.closest('.field'), err = box.querySelector('.err');
+      const bad = el.type === 'email' ? el.value.trim() !== '' && !el.checkValidity() : !el.checkValidity() || el.value.trim().length < (el.minLength || 1);
+      box.classList.toggle('bad', bad); if (err) err.textContent = bad ? (MSG[el.name] || 'Revisa este campo.') : '';
+      if (bad && ok) { el.focus(); ok = false; }
+    });
+    return ok;
+  };
+  document.querySelectorAll('form[data-netlify]').forEach(f => {
+    const btn = f.querySelector('.send'), lbl = btn.querySelector('.lbl'), label = lbl.textContent, status = f.querySelector('.fstatus');
+    f.addEventListener('input', e => { const box = e.target.closest('.field'); if (box && box.classList.contains('bad')) { box.classList.remove('bad'); const er = box.querySelector('.err'); if (er) er.textContent = ''; } });
+    f.addEventListener('submit', async e => {
+      e.preventDefault(); status.textContent = '';
+      if (!check(f)) return;
+      btn.disabled = true; lbl.textContent = 'Enviando…';
+      try {
+        const r = await fetch('/', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(f)).toString() });
+        if (!r.ok) throw new Error(r.status);
+        const card = f.parentElement, bug = f.name === 'reportar-error';
+        f.hidden = true;
+        const done = document.createElement('div'); done.className = 'done'; done.setAttribute('role', 'status');
+        done.innerHTML = '<span class="ok"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>'
+          + '<h3>' + (bug ? 'Gracias, ya me llegó el reporte' : 'Gracias, ya me llegó tu idea') + '</h3>'
+          + '<p>' + (f.querySelector('[name="correo"]').value.trim() ? 'Te escribo a tu correo en cuanto tenga novedades.' : 'Lo reviso en los próximos días.') + '</p>'
+          + '<button type="button">' + (bug ? 'Reportar otro error' : 'Enviar otra idea') + '</button>';
+        done.querySelector('button').onclick = () => { done.remove(); f.reset(); f.hidden = false; f.querySelector('input:not([type="hidden"]), textarea').focus(); };
+        card.appendChild(done); done.querySelector('h3').focus?.();
+      } catch (err) {
+        status.textContent = 'No se pudo enviar. Revisa tu conexión e inténtalo de nuevo.';
+      } finally { btn.disabled = false; lbl.textContent = label; }
+    });
+  });
 })();
 </script>

@@ -647,3 +647,46 @@
   $('radius').addEventListener('input', e => { const r = +e.target.value; $('rOut').textContent = r + ' px'; $('vCorners').style.setProperty('--cr', r); desk.style.setProperty('--rr', Math.max(.01, r) + 'px'); });
   wake();
 })();
+
+/* ── formularios: Netlify Forms por AJAX ── */
+(() => {
+  const tabs = [['tabBug', 'panelBug'], ['tabIdea', 'panelIdea']];
+  tabs.forEach(([t, p]) => document.getElementById(t).addEventListener('click', () => {
+    tabs.forEach(([t2, p2]) => { document.getElementById(t2).setAttribute('aria-selected', String(t2 === t)); document.getElementById(p2).hidden = p2 !== p; });
+  }));
+  const MSG = { 'que-paso': 'Cuéntame qué pasó (al menos 10 caracteres).', idea: 'Escribe tu idea en una frase.', detalle: 'Cuéntame un poco más (al menos 10 caracteres).', correo: 'Ese correo no parece válido.' };
+  const check = f => {
+    let ok = true;
+    f.querySelectorAll('input[required], textarea[required], input[type="email"]').forEach(el => {
+      const box = el.closest('.field'), err = box.querySelector('.err');
+      const bad = el.type === 'email' ? el.value.trim() !== '' && !el.checkValidity() : !el.checkValidity() || el.value.trim().length < (el.minLength || 1);
+      box.classList.toggle('bad', bad); if (err) err.textContent = bad ? (MSG[el.name] || 'Revisa este campo.') : '';
+      if (bad && ok) { el.focus(); ok = false; }
+    });
+    return ok;
+  };
+  document.querySelectorAll('form[data-netlify]').forEach(f => {
+    const btn = f.querySelector('.send'), lbl = btn.querySelector('.lbl'), label = lbl.textContent, status = f.querySelector('.fstatus');
+    f.addEventListener('input', e => { const box = e.target.closest('.field'); if (box && box.classList.contains('bad')) { box.classList.remove('bad'); const er = box.querySelector('.err'); if (er) er.textContent = ''; } });
+    f.addEventListener('submit', async e => {
+      e.preventDefault(); status.textContent = '';
+      if (!check(f)) return;
+      btn.disabled = true; lbl.textContent = 'Enviando…';
+      try {
+        const r = await fetch('/', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(f)).toString() });
+        if (!r.ok) throw new Error(r.status);
+        const card = f.parentElement, bug = f.name === 'reportar-error';
+        f.hidden = true;
+        const done = document.createElement('div'); done.className = 'done'; done.setAttribute('role', 'status');
+        done.innerHTML = '<span class="ok"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>'
+          + '<h3>' + (bug ? 'Gracias, ya me llegó el reporte' : 'Gracias, ya me llegó tu idea') + '</h3>'
+          + '<p>' + (f.querySelector('[name="correo"]').value.trim() ? 'Te escribo a tu correo en cuanto tenga novedades.' : 'Lo reviso en los próximos días.') + '</p>'
+          + '<button type="button">' + (bug ? 'Reportar otro error' : 'Enviar otra idea') + '</button>';
+        done.querySelector('button').onclick = () => { done.remove(); f.reset(); f.hidden = false; f.querySelector('input:not([type="hidden"]), textarea').focus(); };
+        card.appendChild(done); done.querySelector('h3').focus?.();
+      } catch (err) {
+        status.textContent = 'No se pudo enviar. Revisa tu conexión e inténtalo de nuevo.';
+      } finally { btn.disabled = false; lbl.textContent = label; }
+    });
+  });
+})();

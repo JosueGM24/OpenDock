@@ -6,14 +6,14 @@
 <title>OpenDock — notch, barra superior y dock para Windows</title>
 <meta name="description" content="OpenDock pone tus notificaciones en un notch y añade una barra superior con centro de control y un dock a Windows 10 y 11. Código abierto, sin red, menos de 15 MB de memoria.">
 <meta name="theme-color" content="#000000">
-<link rel="canonical" href="https://josuegm24.github.io/OpenDock/">
+<link rel="canonical" href="https://opendock.netlify.app/">
 <link rel="icon" type="image/png" href="assets/favicon.png">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <meta property="og:type" content="website">
 <meta property="og:title" content="OpenDock">
 <meta property="og:description" content="OpenDock pone tus notificaciones en un notch y añade una barra superior con centro de control y un dock a Windows 10 y 11. Código abierto, sin red, menos de 15 MB de memoria.">
-<meta property="og:url" content="https://josuegm24.github.io/OpenDock/">
-<meta property="og:image" content="https://josuegm24.github.io/OpenDock/assets/og.png">
+<meta property="og:url" content="https://opendock.netlify.app/">
+<meta property="og:image" content="https://opendock.netlify.app/assets/og.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -28,6 +28,7 @@
       <a href="#piezas">Qué trae</a>
       <a href="https://github.com/JosueGM24/OpenDock">GitHub</a>
       <a href="#instalar">Instalar</a>
+      <a href="#opinion">Opinar</a>
       <span class="tag">Código abierto · MIT</span>
     </nav>
   </header>
@@ -166,6 +167,7 @@
       <img class="oss-logo" src="assets/logo.png" alt="Logo de OpenDock: un cuadrado azul con el notch negro arriba">
       <h2>Código abierto, de principio a fin</h2>
       <p>OpenDock se publica con licencia MIT: úsalo, estúdialo, modifícalo y compártelo. Son unas diez mil líneas de C contra la API de Win32, sin frameworks ni dependencias en tiempo de ejecución. Cada pieza vive en su propio archivo, así que es fácil encontrar lo que quieres cambiar.</p>
+      <div class="maker"><span class="av" aria-hidden="true">D</span><div><b>Hecho por Daniel Godínez</b><a href="https://danielgodinez.netlify.app/" rel="noopener">danielgodinez.netlify.app</a></div></div>
       <pre class="cmd"><span class="c"># con MSYS2 (mingw-w64)</span>
 ./build.sh
 <span class="c"># o con Visual Studio</span>
@@ -213,8 +215,55 @@ build.bat</pre>
     </div>
   </section>
 
+
+  <section class="talk" id="opinion">
+    <div class="talk-intro">
+      <h2>¿Algo falla o se te ocurre algo?</h2>
+      <p>Cuéntamelo aquí: llega directo a mi correo. Si dejas el tuyo, te aviso cuando esté arreglado o cuando la idea llegue a una versión.</p>
+      <div class="who">
+        <div class="maker"><span class="av" aria-hidden="true">D</span><div><b>Hecho por Daniel Godínez</b><a href="https://danielgodinez.netlify.app/" rel="noopener">danielgodinez.netlify.app</a></div></div>
+        <a class="coffee" href="https://buymeacoffee.com/danielgodinez" rel="noopener"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h13v5a6 6 0 0 1-6 6H10a6 6 0 0 1-6-6z"/><path d="M17 9h1.5a2.5 2.5 0 0 1 0 5H17"/><path d="M8 2.5c0 1 .8 1.3.8 2.3M11.5 2.5c0 1 .8 1.3.8 2.3"/></svg>Invítame un café</a>
+      </div>
+    </div>
+    <div>
+      <div class="tabs" role="tablist" aria-label="Tipo de mensaje">
+        <button role="tab" id="tabBug" aria-controls="panelBug" aria-selected="true">Reportar un error</button>
+        <button role="tab" id="tabIdea" aria-controls="panelIdea" aria-selected="false">Sugerir una función</button>
+      </div>
+      <div class="fcard" role="tabpanel" id="panelBug" aria-labelledby="tabBug">
+        <form name="reportar-error" method="POST" action="/gracias.html" data-netlify="true" netlify-honeypot="bot-field" novalidate>
+          <input type="hidden" name="form-name" value="reportar-error"><input type="hidden" name="version" value="OpenDock 2.0.0">
+          <p class="hp"><label>No llenes esto: <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
+          <div class="fgrid">
+            <div class="field"><label for="bName">Nombre <small>(opcional)</small></label><input id="bName" name="nombre" autocomplete="name"></div>
+            <div class="field"><label for="bMail">Correo <small>(para avisarte)</small></label><input id="bMail" name="correo" type="email" autocomplete="email" placeholder="tu@correo.com"><span class="err" aria-live="polite"></span></div>
+            <div class="field"><label for="bPiece">Dónde pasa</label><select id="bPiece" name="pieza"><option>Notch y notificaciones</option><option>Barra superior</option><option>Centro de control</option><option>Dock</option><option>Esquinas redondeadas</option><option>Sonidos</option><option>Instalación</option><option>Otra cosa</option></select></div>
+            <div class="field"><label for="bWin">Windows</label><select id="bWin" name="windows"><option>Windows 11</option><option>Windows 10</option><option>No lo sé</option></select></div>
+            <div class="field full"><label for="bWhat">Qué pasó</label><textarea id="bWhat" name="que-paso" required minlength="10" placeholder="Al abrir el centro de control con Vidrio, la barra parpadea…"></textarea><span class="err" aria-live="polite"></span></div>
+            <div class="field full"><label for="bSteps">Cómo reproducirlo <small>(opcional)</small></label><textarea id="bSteps" name="pasos" placeholder="1. Activo la barra superior&#10;2. Cambio el material a Vidrio&#10;3. …"></textarea></div>
+          </div>
+          <div class="factions"><button class="send" type="submit"><span class="spin" aria-hidden="true"></span><span class="lbl">Enviar reporte</span></button><span class="fstatus" role="status" aria-live="polite"></span></div>
+        </form>
+      </div>
+      <div class="fcard" role="tabpanel" id="panelIdea" aria-labelledby="tabIdea" hidden>
+        <form name="sugerir-funcion" method="POST" action="/gracias.html" data-netlify="true" netlify-honeypot="bot-field" novalidate>
+          <input type="hidden" name="form-name" value="sugerir-funcion"><input type="hidden" name="version" value="OpenDock 2.0.0">
+          <p class="hp"><label>No llenes esto: <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
+          <div class="fgrid">
+            <div class="field"><label for="iName">Nombre <small>(opcional)</small></label><input id="iName" name="nombre" autocomplete="name"></div>
+            <div class="field"><label for="iMail">Correo <small>(opcional)</small></label><input id="iMail" name="correo" type="email" autocomplete="email" placeholder="tu@correo.com"><span class="err" aria-live="polite"></span></div>
+            <div class="field full"><label for="iPiece">Para qué parte</label><select id="iPiece" name="pieza"><option>Notch y notificaciones</option><option>Barra superior</option><option>Centro de control</option><option>Dock</option><option>Esquinas redondeadas</option><option>Sonidos</option><option>Instalación</option><option>Otra cosa</option></select></div>
+            <div class="field full"><label for="iTitle">Tu idea en una frase</label><input id="iTitle" name="idea" required minlength="5" placeholder="Que el dock muestre la batería de mis audífonos"><span class="err" aria-live="polite"></span></div>
+            <div class="field full"><label for="iWhy">Cuéntame más</label><textarea id="iWhy" name="detalle" required minlength="10" placeholder="Qué te gustaría que hiciera y en qué te ayudaría."></textarea><span class="err" aria-live="polite"></span></div>
+          </div>
+          <div class="factions"><button class="send" type="submit"><span class="spin" aria-hidden="true"></span><span class="lbl">Enviar idea</span></button><span class="fstatus" role="status" aria-live="polite"></span></div>
+        </form>
+      </div>
+    </div>
+  </section>
+
   <footer>
-    <p>OpenDock 2.0, antes CornerRadius. Código con licencia MIT. Sonidos de Material Design Sound Resources, © Google, licencia CC BY 4.0.</p>
+    <p>OpenDock 2.0, antes CornerRadius. Hecho por <a href="https://danielgodinez.netlify.app/" rel="noopener">Daniel Godínez</a> · <a href="https://buymeacoffee.com/danielgodinez" rel="noopener">Invítame un café</a>. Código con licencia MIT. Sonidos de Material Design Sound Resources, © Google, licencia CC BY 4.0.</p>
     <span class="meta"><a href="https://github.com/JosueGM24/OpenDock">GitHub</a> · <a href="https://github.com/JosueGM24/OpenDock/releases">Versiones</a> · <a href="https://github.com/JosueGM24/OpenDock/blob/main/LICENSE">Licencia MIT</a></span>
   </footer>
 </div>

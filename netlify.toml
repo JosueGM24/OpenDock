@@ -1,0 +1,18 @@
+# La web de OpenDock: archivos estáticos en docs/ (generados con site/build_site.py).
+# La publica .github/workflows/web.yml; también sirve si conectas el repo en Netlify.
+[build]
+  publish = "docs"
+  command = "echo 'sin compilación: docs/ ya está generado'"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=604800"
