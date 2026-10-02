@@ -47,6 +47,7 @@
 #define TIMER_EDGE      5
 #define TIMER_WN        6
 #define TIMER_WNPOLL    7
+#define TIMER_FSCHECK   20      /* la ventana de delante cambió de tamaño: ¿pantalla completa? */
 
 #define HK_TOGGLE       1
 #define HK_UP           2
@@ -66,7 +67,7 @@ static HWND      g_corners[MAX_CORNERS];
 static int       g_count;
 static NOTIFYICONDATAW g_nid;
 static UINT      g_wmTaskbarCreated;
-static HWINEVENTHOOK g_fgHook;
+static HWINEVENTHOOK g_fgHook, g_locHook;
 static BOOL      g_noSave;                  /* tras desinstalar: no volver a crear la clave */
 static wchar_t   g_relaunch[MAX_PATH];      /* tras instalar: arrancar la copia instalada */
 static DWORD     g_clipSeq;                 /* último cambio de portapapeles revisado */
@@ -314,8 +315,49 @@ static void RebuildCorners(void)
     DestroyCornersFrom(used);
 }
 
+/* ¿La ventana de delante ocupa su monitor entero y sin marco (Escritorio remoto maximizado,
+ * vídeo, juego)? Entonces la barra y el dock se apartan en lugar de subirse encima. */
+static BOOL FullscreenForeground(RECT *mon)
+{
+    HWND w = GetForegroundWindow();
+    if (!w || !IsWindowVisible(w)) return FALSE;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    if (pid == GetCurrentProcessId()) return FALSE;
+    wchar_t cls[64];
+    if (GetClassNameW(w, cls, 64) && (!lstrcmpW(cls, L"Progman") || !lstrcmpW(cls, L"WorkerW") ||
+        !lstrcmpW(cls, L"Shell_TrayWnd") || !lstrcmpW(cls, L"Shell_SecondaryTrayWnd")))
+        return FALSE;
+    if ((GetWindowLongW(w, GWL_STYLE) & WS_CAPTION) == WS_CAPTION) return FALSE;   /* maximizada normal */
+    RECT r;
+    MONITORINFO mi = { sizeof(mi) };
+    if (!GetWindowRect(w, &r) || !GetMonitorInfoW(MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST), &mi)) return FALSE;
+    if (r.left > mi.rcMonitor.left || r.top > mi.rcMonitor.top || r.right < mi.rcMonitor.right || r.bottom < mi.rcMonitor.bottom)
+        return FALSE;
+    *mon = mi.rcMonitor;
+    return TRUE;
+}
+
+static void CheckFullscreen(void)
+{
+    RECT mon;
+    const BOOL fs = FullscreenForeground(&mon);
+    Bar_FullscreenFg(fs ? &mon : NULL);
+    Dock_FullscreenFg(fs ? &mon : NULL);
+}
+
+/* La ventana de delante se movió o cambió de tamaño (maximizar el Escritorio remoto lo
+ * pasa a pantalla completa sin cambiar de ventana): se comprueba un instante después. */
+static void CALLBACK LocationHook(HWINEVENTHOOK h, DWORD ev, HWND w, LONG o, LONG c, DWORD t, DWORD ms)
+{
+    (void)h; (void)ev; (void)t; (void)ms;
+    if (o == OBJID_WINDOW && c == CHILDID_SELF && w && w == GetForegroundWindow())
+        SetTimer(g_ctrl, TIMER_FSCHECK, 120, NULL);
+}
+
 static void RaiseCorners(void)
 {
+    CheckFullscreen();
     Bar_Raise();
     Dock_Raise();
     for (int i = 0; i < g_count; ++i)
@@ -785,6 +827,7 @@ static LRESULT CALLBACK CtrlProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_TIMER:
         if (w == TIMER_REBUILD) { KillTimer(h, TIMER_REBUILD); RebuildCorners(); Bar_Reposition(); Dock_Reposition(); }
         else if (w == TIMER_TOPMOST) RaiseCorners();
+        else if (w == TIMER_FSCHECK) { KillTimer(h, TIMER_FSCHECK); CheckFullscreen(); }
         else if (w == TIMER_CLIP) { KillTimer(h, TIMER_CLIP); CheckClipboardCapture(); }
         else if (w == TIMER_EDGE) CheckEdge();
         else if (w == TIMER_WN) { KillTimer(h, TIMER_WN); if (g_cfg.mirror) Wn_Refresh(TRUE); }
@@ -801,6 +844,7 @@ static LRESULT CALLBACK CtrlProc(HWND h, UINT m, WPARAM w, LPARAM l)
 
     case WM_DESTROY:
         if (g_fgHook) UnhookWinEvent(g_fgHook);
+        if (g_locHook) UnhookWinEvent(g_locHook);
         RemoveClipboardFormatListener(h);
         Bar_Destroy();
         Bar_ApplyClock(FALSE);      /* sin CornerRadius, el reloj de Windows vuelve */
@@ -951,6 +995,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
 
     g_fgHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, NULL,
                                ForegroundHook, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    g_locHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, NULL,
+                                LocationHook, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
     SetTimer(g_ctrl, TIMER_TOPMOST, 1500, NULL);
 
     g_clipSeq = GetClipboardSequenceNumber();

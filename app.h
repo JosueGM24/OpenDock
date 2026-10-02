@@ -259,6 +259,7 @@ void Bar_Reposition(void);
 void Bar_ForegroundChanged(void);
 int  Bar_HeightOn(const RECT *mon);
 void Bar_Raise(void);
+void Bar_FullscreenFg(const RECT *mon);     /* monitor con una ventana a pantalla completa delante, o NULL */
 void Bar_StyleChanged(void);
 void Bar_PulseVolume(BOOL up);
 void Bar_Destroy(void);
@@ -268,6 +269,7 @@ void Dock_Register(void);
 void Dock_Apply(void);
 void Dock_Reposition(void);
 void Dock_Raise(void);
+void Dock_FullscreenFg(const RECT *mon);
 void Dock_RestoreTaskbar(void);
 void Dock_ConfigChanged(void);
 void Dock_TrayPeek(BOOL on);

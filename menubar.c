@@ -2280,6 +2280,28 @@ static void StartTrayWatch(void)
     if (IsWindowVisible(w)) PlaceTrayFlyout(w);
 }
 
+/* Pantalla completa: lo avisa Windows (ABN_FULLSCREENAPP) o lo vemos nosotros en la ventana
+ * de delante (el Escritorio remoto maximizado, por ejemplo, no siempre lo avisa). */
+static BOOL s_fsAbn, s_fsFg;
+
+static void BarApplyFullscreen(void)
+{
+    const BOOL fs = s_fsAbn || s_fsFg;
+    if (!B.hwnd || fs == B.fullscreen) return;
+    B.fullscreen = fs;
+    if (fs && TP.hwnd) DestroyWindow(TP.hwnd);
+    if (fs) CC_Close();
+    ShowWindow(B.hwnd, fs ? SW_HIDE : SW_SHOWNOACTIVATE);
+    if (g_ctrl) PostMessageW(g_ctrl, WM_BARCHANGED, 0, 0);
+    if (!fs) SetWindowPos(B.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+void Bar_FullscreenFg(const RECT *mon)
+{
+    s_fsFg = mon && EqualRect(mon, &B.mon);
+    BarApplyFullscreen();
+}
+
 static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
@@ -2296,10 +2318,8 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_BAR_APPBAR:
         if (w == ABN_POSCHANGED) BarPosition();
         else if (w == ABN_FULLSCREENAPP) {          /* juegos, vídeo, presentaciones: fuera */
-            B.fullscreen = (BOOL)l;
-            ShowWindow(h, B.fullscreen ? SW_HIDE : SW_SHOWNOACTIVATE);
-            if (g_ctrl) PostMessageW(g_ctrl, WM_BARCHANGED, 0, 0);
-            if (!B.fullscreen) SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            s_fsAbn = (BOOL)l;
+            BarApplyFullscreen();
         }
         return 0;
     case WM_WINDOWPOSCHANGED: {

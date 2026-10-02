@@ -98,6 +98,7 @@ static struct {
     BOOL     menuOpen;
     BOOL     atDock;            /* cursor en la zona del dock (incluido el hueco hasta el borde) */
     int      taskWatch;         /* ticks restantes de TIMER_DTASK */
+    BOOL     fsSys, fsFg;       /* pantalla completa: según Windows · según la ventana de delante */
 } D;
 
 static int DS(int v) { return MulDiv(v, (int)D.dpi, 96); }
@@ -1179,6 +1180,21 @@ static void ApplyAutoHide(void)
     else { KillTimer(D.hwnd, TIMER_DPOLL); D.atDock = FALSE; }
 }
 
+static void DockApplyFullscreen(void)
+{
+    const BOOL fs = D.fsSys || D.fsFg;
+    if (!D.hwnd || fs == D.fullscreen) return;
+    D.fullscreen = fs;
+    ShowWindow(D.hwnd, fs ? SW_HIDE : SW_SHOWNOACTIVATE);
+    if (!fs) { Rescan(); Kick(); }
+}
+
+void Dock_FullscreenFg(const RECT *mon)
+{
+    D.fsFg = mon && EqualRect(mon, &D.mon);
+    DockApplyFullscreen();
+}
+
 static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
@@ -1196,11 +1212,7 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
     case WM_DOCK_APPBAR:
         if (w == ABN_POSCHANGED) AppBarPos();
-        else if (w == ABN_FULLSCREENAPP && (BOOL)l != D.fullscreen) {
-            D.fullscreen = (BOOL)l;
-            ShowWindow(h, D.fullscreen ? SW_HIDE : SW_SHOWNOACTIVATE);
-            if (!D.fullscreen) { Rescan(); Kick(); }
-        }
+        else if (w == ABN_FULLSCREENAPP) { D.fsSys = (BOOL)l; DockApplyFullscreen(); }
         return 0;
     case WM_WINDOWPOSCHANGED: {
         APPBARDATA abd = { sizeof(abd) };
@@ -1255,12 +1267,9 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
             QUERY_USER_NOTIFICATION_STATE qs;
             BOOL fs = SUCCEEDED(SHQueryUserNotificationState(&qs)) &&
                       (qs == QUNS_BUSY || qs == QUNS_RUNNING_D3D_FULL_SCREEN || qs == QUNS_PRESENTATION_MODE);
-            if (fs != D.fullscreen) {
-                D.fullscreen = fs;
-                ShowWindow(h, fs ? SW_HIDE : SW_SHOWNOACTIVATE);
-                if (!fs) { Rescan(); Render(); }
-            }
-            if (!fs && !D.inside) { Rescan(); Kick(); }   /* repaso de seguridad */
+            D.fsSys = fs;
+            DockApplyFullscreen();
+            if (!D.fullscreen && !D.inside) { Rescan(); Kick(); }   /* repaso de seguridad */
             if (g_cfg.dockHideTaskbar && !D.shellOpen && !D.peek) SetTaskbarOff(TRUE);
         } else if (w == TIMER_DRESCAN) {
             KillTimer(h, TIMER_DRESCAN);
