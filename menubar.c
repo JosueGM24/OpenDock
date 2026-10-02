@@ -30,6 +30,7 @@
 #define WM_BAR_APPBAR   (WM_APP + 60)
 #define TIMER_CLOCK     1
 #define TIMER_STATUS    2
+#define TIMER_BANIM     3       /* muelles de los iconos de la barra */
 #define BAR_H           28      /* alto lógico de la barra */
 #define CC_W            340     /* el mismo ancho que los ajustes, que viven dentro */
 
@@ -66,6 +67,9 @@ static struct {
     BOOL    registered, fullscreen;
     RECT    hit[BH_COUNT];
     int     pressed;
+    int     bhot;               /* icono bajo el cursor */
+    float   bs[BH_COUNT], bsv[BH_COUNT];    /* su escala animada (vectorial: crece nítido) */
+    LARGE_INTEGER blast;
     wchar_t app[64];
     int     lastMinute;
 
@@ -526,6 +530,49 @@ static void FormatClock(wchar_t *out, int cap)
     out[cap - 1] = 0;
 }
 
+static float BarScale(int id) { return B.bs[id] > 0.1f ? B.bs[id] : 1.0f; }
+
+static void BarKick(void)
+{
+    if (!B.hwnd) return;
+    QueryPerformanceCounter(&B.blast);
+    SetTimer(B.hwnd, TIMER_BANIM, 10, NULL);
+}
+
+/* Al cambiar el volumen (rueda, centro de control) el altavoz da un "pop". */
+void Bar_PulseVolume(BOOL up)
+{
+    if (!B.hwnd) return;
+    if (B.bs[BH_VOL] < 0.1f) B.bs[BH_VOL] = 1.0f;
+    B.bsv[BH_VOL] += up ? 2.6f : -1.6f;
+    BarKick();
+}
+
+static void BarAnimate(void)
+{
+    LARGE_INTEGER t, f;
+    QueryPerformanceCounter(&t);
+    QueryPerformanceFrequency(&f);
+    float dt = (float)(t.QuadPart - B.blast.QuadPart) / (float)f.QuadPart;
+    B.blast = t;
+    if (dt > 0.05f) dt = 0.05f;
+    const float z = Pop_Zeta();
+    BOOL moving = FALSE;
+    for (int id = BH_VOL; id <= BH_CC; ++id) {
+        if (id == BH_CLOCK) continue;
+        if (B.bs[id] < 0.1f) B.bs[id] = 1.0f;
+        const float tg = B.pressed == id && B.bhot == id ? 0.88f : B.bhot == id ? 1.16f : 1.0f;
+        for (int k = 0; k < 2; ++k) {
+            const float acc = (tg - B.bs[id]) * 520.0f - B.bsv[id] * 2.0f * sqrtf(520.0f) * z;
+            B.bsv[id] += acc * dt * 0.5f; B.bs[id] += B.bsv[id] * dt * 0.5f;
+        }
+        if (fabsf(B.bs[id] - tg) < 0.001f && fabsf(B.bsv[id]) < 0.01f) { B.bs[id] = tg; B.bsv[id] = 0; }
+        else moving = TRUE;
+    }
+    InvalidateRect(B.hwnd, NULL, FALSE);
+    if (!moving) KillTimer(B.hwnd, TIMER_BANIM);
+}
+
 static void PaintBar(HDC target)
 {
     RECT rc;
@@ -557,7 +604,7 @@ static void PaintBar(HDC target)
     const float ih = (float)BS(14), gap = (float)BS(16);    /* altura óptica y separación */
     float icx, icy, isz, iw;
     iw = PlaceIcon(&kInkGear, (float)r, (float)cy, ih, &icx, &icy, &isz);
-    DrawGear(c, icx, icy, isz, L->fg);
+    DrawGear(c, icx, icy, isz * BarScale(BH_CC), L->fg);
     SetRect(&B.hit[BH_CC], r - (int)iw - BS(8), 0, r + BS(8), H);
     r -= (int)iw + BS(18);
 
@@ -570,20 +617,20 @@ static void PaintBar(HDC target)
 
     if (B.battery >= 0) {       /* el porcentaje va dentro de la batería */
         iw = PlaceIcon(&kInkBatt, (float)r, (float)cy, ih, &icx, &icy, &isz);
-        DrawBattery(c, icx, icy, isz, B.battery, B.charging, TRUE, L->fg, L->bg);
+        DrawBattery(c, icx, icy, isz * BarScale(BH_BATT), B.battery, B.charging, TRUE, L->fg, L->bg);
         SetRect(&B.hit[BH_BATT], r - (int)iw - BS(4), 0, r + BS(6), H);
         r -= (int)(iw + gap);
     }
 
     iw = PlaceIcon(&kInkWifi, (float)r, (float)cy, ih, &icx, &icy, &isz);
-    DrawWifi(c, icx, icy, isz, WifiArcs(), B.wifi < 0, L->fg);
+    DrawWifi(c, icx, icy, isz * BarScale(BH_WIFI), WifiArcs(), B.wifi < 0, L->fg);
     SetRect(&B.hit[BH_WIFI], r - (int)iw - BS(4), 0, r + BS(6), H);
     r -= (int)(iw + gap);
 
     if (B.volume >= 0) {
         const BOOL mute = B.muted || B.volume <= 0.001f;
         iw = PlaceIcon(&kInkSound, (float)r, (float)cy, ih, &icx, &icy, &isz);
-        DrawSound(c, icx, icy, isz, B.volume < 0.5f ? 1 : 2, mute, L->fg);
+        DrawSound(c, icx, icy, isz * BarScale(BH_VOL), B.volume < 0.5f ? 1 : 2, mute, L->fg);
         SetRect(&B.hit[BH_VOL], r - (int)iw - BS(4), 0, r + BS(6), H);
     }
 
@@ -605,6 +652,13 @@ static struct {
     float  is[2], isv[2];       /* 0 pantalla · 1 sonido */
     float  fill[2], fillv[2];
     Canvas el, ico;             /* lienzos de paso para componer escalado */
+    /* subpágina abierta cuando section == 1: 1 ajustes · 2 Wi-Fi · 3 Bluetooth */
+    int    page, listH, lhot;
+    Canvas lcv;
+    RECT   lhit[24];
+    int    lid[24], nl;
+    HFONT  fHead;
+    GUID   wguid;
     wchar_t btDev[64];          /* primer dispositivo conectado */
     RECT   hit[CH_COUNT];
     int    dragging;            /* CH_BRIGHT / CH_VOL mientras se arrastra */
@@ -1005,6 +1059,238 @@ static void PaintControls(void)
     }
 }
 
+/* ───────────────────────── Listas: Wi-Fi y Bluetooth ───────────────────────── */
+typedef struct { wchar_t ssid[33], prof[256]; int q; BOOL secure, connected; } WNet;
+typedef struct { wchar_t name[64]; BOOL connected; ULONG cod; } BDev;
+#define MAX_NETS 9
+#define MAX_DEVS 9
+static WNet s_nets[MAX_NETS];
+static int  s_nnets;
+static BDev s_devs[MAX_DEVS];
+static int  s_ndevs;
+#define TIMER_WSCAN 7
+
+static BOOL WifiIface(GUID *g)
+{
+    DWORD ver = 0;
+    if (!B.wlan && WlanOpenHandle(2, NULL, &ver, &B.wlan) != ERROR_SUCCESS) { B.wlan = NULL; return FALSE; }
+    PWLAN_INTERFACE_INFO_LIST list = NULL;
+    if (WlanEnumInterfaces(B.wlan, NULL, &list) != ERROR_SUCCESS || !list) return FALSE;
+    const BOOL ok = list->dwNumberOfItems > 0;
+    if (ok) *g = list->InterfaceInfo[0].InterfaceGuid;
+    WlanFreeMemory(list);
+    return ok;
+}
+
+static void ReadNetworks(void)
+{
+    s_nnets = 0;
+    if (!WifiIface(&C.wguid)) return;
+    PWLAN_AVAILABLE_NETWORK_LIST nl = NULL;
+    if (WlanGetAvailableNetworkList(B.wlan, &C.wguid, 0, NULL, &nl) != ERROR_SUCCESS || !nl) return;
+    for (DWORD i = 0; i < nl->dwNumberOfItems; ++i) {
+        const WLAN_AVAILABLE_NETWORK *n = &nl->Network[i];
+        if (!n->dot11Ssid.uSSIDLength) continue;                 /* redes ocultas */
+        wchar_t ssid[33];
+        const int len = MultiByteToWideChar(CP_UTF8, 0, (const char *)n->dot11Ssid.ucSSID, (int)min(n->dot11Ssid.uSSIDLength, 32), ssid, 32);
+        ssid[max(0, len)] = 0;
+        int j = 0;
+        while (j < s_nnets && lstrcmpW(s_nets[j].ssid, ssid)) ++j;     /* una fila por nombre */
+        if (j == s_nnets) {
+            if (s_nnets >= MAX_NETS) continue;
+            ZeroMemory(&s_nets[j], sizeof(WNet));
+            lstrcpyW(s_nets[j].ssid, ssid);
+            s_nnets++;
+        }
+        WNet *w = &s_nets[j];
+        w->q = max(w->q, (int)n->wlanSignalQuality);
+        w->secure |= n->bSecurityEnabled;
+        if (n->dwFlags & WLAN_AVAILABLE_NETWORK_CONNECTED) w->connected = TRUE;
+        if (n->strProfileName[0] && !w->prof[0]) lstrcpynW(w->prof, n->strProfileName, 256);
+    }
+    WlanFreeMemory(nl);
+    /* la conectada primero, luego por señal */
+    for (int i = 0; i < s_nnets; ++i)
+        for (int j = i + 1; j < s_nnets; ++j)
+            if (s_nets[j].connected > s_nets[i].connected ||
+                (s_nets[j].connected == s_nets[i].connected && s_nets[j].q > s_nets[i].q)) {
+                WNet t = s_nets[i]; s_nets[i] = s_nets[j]; s_nets[j] = t;
+            }
+}
+
+static void ReadDevices(void)
+{
+    s_ndevs = 0;
+    BLUETOOTH_DEVICE_SEARCH_PARAMS sp = { sizeof(sp) };
+    sp.fReturnAuthenticated = sp.fReturnRemembered = sp.fReturnConnected = TRUE;   /* sin búsqueda activa */
+    BLUETOOTH_DEVICE_INFO di = { sizeof(di) };
+    HBLUETOOTH_DEVICE_FIND f = BluetoothFindFirstDevice(&sp, &di);
+    if (!f) return;
+    do {
+        if (s_ndevs >= MAX_DEVS || !di.szName[0]) continue;
+        BDev *d = &s_devs[s_ndevs++];
+        lstrcpynW(d->name, di.szName, 64);
+        d->connected = di.fConnected;
+        d->cod = di.ulClassofDevice;
+    } while (BluetoothFindNextDevice(f, &di));
+    BluetoothFindDeviceClose(f);
+    for (int i = 0; i < s_ndevs; ++i)               /* los conectados primero */
+        for (int j = i + 1; j < s_ndevs; ++j)
+            if (s_devs[j].connected > s_devs[i].connected) { BDev t = s_devs[i]; s_devs[i] = s_devs[j]; s_devs[j] = t; }
+}
+
+static LPCWSTR DevGlyph(ULONG cod)
+{
+    switch ((cod >> 8) & 0x1F) {
+    case 0x04: return L"\xE7F6";        /* audio: auriculares */
+    case 0x02: return L"\xE8EA";        /* teléfono */
+    case 0x01: return L"\xE7F8";        /* equipo */
+    case 0x05: return (cod & 0x40) ? L"\xE765" : L"\xE962";    /* teclado · ratón */
+    }
+    return L"\xE702";
+}
+
+enum { LH_BACK = 1, LH_MORE = 2, LH_ROW = 10 };
+#define LIST_ROW 48
+
+static int ListHeight(void)
+{
+    const int n = C.page == 2 ? s_nnets : s_ndevs;
+    return CC_PAD + 34 + CC_GAP + max(1, n) * LIST_ROW + 8 + CC_GAP + CC_FOOT + CC_PAD;
+}
+
+static void AddL(RECT r, int id) { if (C.nl < 24) { C.lhit[C.nl] = r; C.lid[C.nl++] = id; } }
+
+/* Página de lista: volver, título, filas en una tarjeta y un enlace a los ajustes. */
+static const Canvas *PaintList(void)
+{
+    const int W = CS(CC_W), H = CS(ListHeight());
+    if (!C.lcv.dc || C.lcv.w != W || C.lcv.h != H) {
+        Canvas_Free(&C.lcv);
+        if (!Canvas_Init(&C.lcv, W, H)) return NULL;
+    }
+    Canvas *c = &C.lcv;
+    const BarLook *L = &B.look;
+    const BOOL wifi = C.page == 2;
+    C.nl = 0;
+    CCBackground(c);
+    const int pad = CS(CC_PAD), gap = CS(CC_GAP);
+
+    /* cabecera */
+    const float d = (float)CS(32);
+    Gfx_FillCircle(c, pad + d * 0.5f, pad + d * 0.5f, d * 0.5f, CardColor(), 1.0f);
+    Gfx_Text(c, C.fIcon, L"\xE76B", pad, pad, (int)d, (int)d, L->fg, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    RECT br = { pad, pad, pad + (int)d, pad + (int)d };
+    AddL(br, LH_BACK);
+    Gfx_Text(c, C.fHead, wifi ? L"Wi\x2011" L"Fi" : L"Bluetooth", pad + (int)d + CS(12), pad, CS(200), (int)d, L->fg,
+             DT_SINGLELINE | DT_VCENTER);
+    int y = pad + CS(34) + gap;
+
+    /* filas */
+    const int n = wifi ? s_nnets : s_ndevs, rh = CS(LIST_ROW);
+    RECT card = { pad, y, W - pad, y + max(1, n) * rh + CS(8) };
+    Card(c, card);
+    if (!n) {
+        Gfx_Text(c, C.fSub, wifi ? L"Buscando redes\x2026" : (C.bt < 0 ? L"Sin Bluetooth" : L"No hay dispositivos emparejados"),
+                 card.left, card.top, card.right - card.left, card.bottom - card.top, L->fg2, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    }
+    for (int i = 0; i < n; ++i) {
+        RECT rr = { card.left + CS(4), card.top + CS(4) + i * rh, card.right - CS(4), card.top + CS(4) + (i + 1) * rh };
+        if (i) Gfx_FillRRect(c, (float)rr.left + CS(52), (float)rr.top, (float)(rr.right - rr.left - CS(60)), (float)max(1, CS(1)), 0,
+                             L->light ? 0xE5E5EA : 0x3A3A3C, 1.0f);
+        const float bd = (float)CS(30), cy = (rr.top + rr.bottom) * 0.5f, cx = rr.left + CS(8) + bd * 0.5f;
+        BOOL on;
+        LPCWSTR name, sub;
+        wchar_t sb[48];
+        if (wifi) {
+            const WNet *w = &s_nets[i];
+            on = w->connected;
+            Gfx_FillCircle(c, cx, cy, bd * 0.5f, on ? L->tileOn : (L->light ? 0xE5E5EA : 0x3A3A3C), 1.0f);
+            DrawWifi(c, cx, cy, bd * 0.62f, w->q >= 60 ? 2 : w->q >= 30 ? 1 : 0, FALSE, on ? 0xFFFFFF : L->fg);
+            name = w->ssid;
+            lstrcpyW(sb, on ? L"Conectado" : w->prof[0] ? L"Red conocida" : w->secure ? L"Protegida" : L"Abierta");
+            sub = sb;
+        } else {
+            const BDev *dv = &s_devs[i];
+            on = dv->connected;
+            Gfx_FillCircle(c, cx, cy, bd * 0.5f, on ? L->tileOn : (L->light ? 0xE5E5EA : 0x3A3A3C), 1.0f);
+            Gfx_Text(c, C.fIcon, DevGlyph(dv->cod), (int)(cx - bd * 0.5f), (int)(cy - bd * 0.5f), (int)bd, (int)bd,
+                     on ? 0xFFFFFF : L->fg, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            name = dv->name;
+            sub = on ? L"Conectado" : L"No conectado";
+        }
+        const int tx = (int)(cx + bd * 0.5f) + CS(12);
+        TwoLines(c, tx, rr.top, rr.right - tx - CS(36), rr.bottom - rr.top, name, sub);
+        if (wifi && s_nets[i].secure)       /* candado de las redes protegidas */
+            Gfx_Text(c, C.fIcon, L"\xE72E", rr.right - CS(32), rr.top, CS(24), rr.bottom - rr.top, L->fg2,
+                     DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        AddL(rr, LH_ROW + i);
+    }
+    y = card.bottom + gap;
+
+    RECT mr = { pad, y, W - pad, y + CS(CC_FOOT) };
+    Gfx_FillRRect(c, (float)mr.left, (float)mr.top, (float)(mr.right - mr.left), (float)(mr.bottom - mr.top),
+                  (mr.bottom - mr.top) * 0.5f, CardColor(), 1.0f);
+    Gfx_Text(c, C.fSub, wifi ? L"Configuración de Wi\x2011" L"Fi  \x203A" : L"Configuración de Bluetooth  \x203A",
+             mr.left, mr.top, mr.right - mr.left, mr.bottom - mr.top, L->fg, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    AddL(mr, LH_MORE);
+    return c;
+}
+
+static int ListHit(int x, int y)
+{
+    const POINT p = { x, y };
+    for (int i = C.nl - 1; i >= 0; --i) if (PtInRect(&C.lhit[i], p)) return C.lid[i];
+    return 0;
+}
+
+static void CCKick(void);
+static void CC_Close(void);
+
+static void CC_GoList(int page)
+{
+    C.page = page;
+    C.lhot = 0;
+    if (page == 2) {
+        ReadNetworks();
+        if (B.wlan) WlanScan(B.wlan, &C.wguid, NULL, NULL, NULL);     /* refresca en segundo plano */
+        SetTimer(C.hwnd, TIMER_WSCAN, 1800, NULL);
+    } else {
+        ReadBluetooth();
+        ReadDevices();
+    }
+    C.listH = CS(ListHeight());
+    C.section = 1;
+    C.hot = C.press = 0;
+    C.dragging = 0;
+    CCKick();
+}
+
+static void ListClick(int id)
+{
+    if (id == LH_BACK) { C.section = 0; C.hot = C.press = 0; KillTimer(C.hwnd, TIMER_WSCAN); CCKick(); return; }
+    if (id == LH_MORE) { CC_Close(); OpenUri(C.page == 2 ? L"ms-settings:network-wifi" : L"ms-settings:bluetooth"); return; }
+    const int i = id - LH_ROW;
+    if (C.page == 2 && i >= 0 && i < s_nnets) {
+        const WNet *w = &s_nets[i];
+        if (w->connected) return;
+        if (w->prof[0] && B.wlan) {         /* red conocida: conectar aquí mismo */
+            WLAN_CONNECTION_PARAMETERS cp = { 0 };
+            cp.wlanConnectionMode = wlan_connection_mode_profile;
+            cp.strProfile = w->prof;
+            cp.dot11BssType = dot11_BSS_type_any;
+            WlanConnect(B.wlan, &C.wguid, &cp, NULL);
+            SetTimer(C.hwnd, TIMER_WSCAN, 1500, NULL);     /* y se refresca el estado */
+        } else {                            /* nueva: la contraseña se pide en Windows */
+            CC_Close();
+            OpenUri(L"ms-settings:network-wifi");
+        }
+    } else if (C.page == 3) {
+        CC_Close();
+        OpenUri(L"ms-settings:bluetooth");
+    }
+}
+
 /* Copia src sobre dst desplazada dx px, con opacidad a. */
 static void BlitFade(Canvas *dst, const Canvas *src, int dx, float a)
 {
@@ -1034,7 +1320,7 @@ static void PaintCC(void)
         if (C.ccv.px) BlitFade(&C.cv, &C.ccv, (int)(-t * slide), 1.0f - t);
     }
     if (t > 0.001f) {
-        const Canvas *sc = Panel_RenderEmbedded();
+        const Canvas *sc = C.page == 1 ? Panel_RenderEmbedded() : PaintList();
         if (sc) BlitFade(&C.cv, sc, (int)((1.0f - t) * slide), t);
     }
     Pop_Present(&C.pop, &C.cv);
@@ -1055,7 +1341,7 @@ static void CCAdvance(void)
     float dt = (float)(t.QuadPart - C.last.QuadPart) / (float)f.QuadPart;
     C.last = t;
     if (dt > 0.05f) dt = 0.05f;
-    const float tT = (float)C.section, tH = (float)(C.section ? C.setH : CS(CCHeight()));
+    const float tT = (float)C.section, tH = (float)(C.section ? (C.page == 1 ? C.setH : C.listH) : CS(CCHeight()));
     for (int k = 0; k < 2; ++k) {
         CCSpring(&C.secT, &C.secV, tT, dt * 0.5f, 300.0f, 0.92f);
         CCSpring(&C.hcur, &C.hv, tH, dt * 0.5f, 380.0f, Pop_Zeta());
@@ -1067,9 +1353,9 @@ static void CCAdvance(void)
         const BOOL btn = id == CH_HIDEBAR || id == CH_SETTINGS, row = id == CH_WIFI || id == CH_BT;
         const BOOL slider = id == CH_VOL || id == CH_BRIGHT;
         float tg = 1.0f;
-        if (C.dragging == id)  tg = 1.035f;
-        else if (C.press == id) tg = 0.95f;
-        else if (C.hot == id)   tg = btn ? 1.05f : row || slider ? 1.025f : 1.035f;
+        if (C.dragging == id)  tg = 1.02f;
+        else if (C.press == id) tg = 0.97f;
+        else if (C.hot == id)   tg = btn ? 1.03f : row || slider ? 1.012f : 1.02f;
         const float b0 = C.hs[id];
         for (int k = 0; k < 2; ++k) CCSpring(&C.hs[id], &C.hsv[id], tg, dt * 0.5f, 420.0f, z);
         if (fabsf(C.hs[id] - tg) < 0.0006f && fabsf(C.hsv[id]) < 0.01f) { C.hs[id] = tg; C.hsv[id] = 0; }
@@ -1104,8 +1390,10 @@ static void CCKick(void)
 static void CC_GoSettings(int tab)
 {
     C.setH = Panel_Embed(C.hwnd, B.dpi, tab, &C.glass, C.ox, C.oy);
+    C.page = 1;
     C.section = 1;
     C.dragging = 0;
+    C.hot = C.press = 0;                 /* que nada se quede agrandado al volver */
     CCKick();
 }
 
@@ -1113,6 +1401,7 @@ void CC_ShowControls(void)
 {
     if (!C.hwnd) return;
     C.section = 0;
+    C.hot = C.press = 0;
     CCKick();
 }
 
@@ -1142,7 +1431,8 @@ static void SliderValue(int which, int x)
     if (which == CH_VOL) SetVolume(v);
     else { C.brightness = (int)(v * 100.0f + 0.5f); Brightness_Request(C.brightness); }
     /* el icono responde al cambio: crece hacia donde va el valor y rebota */
-    C.isv[k] += (v > before ? 1.0f : -0.6f) * min(8.0f, 2.0f + fabsf(v - before) * 60.0f);
+    C.isv[k] += (v > before ? 1.0f : -0.6f) * min(3.5f, 1.2f + fabsf(v - before) * 30.0f);
+    if (k) Bar_PulseVolume(v > before);
     CCKick();
     InvalidateRect(C.hwnd, NULL, FALSE);
     if (B.hwnd) InvalidateRect(B.hwnd, NULL, FALSE);
@@ -1156,8 +1446,27 @@ static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
     if (m >= WM_MOUSEFIRST && m <= WM_MOUSELAST && m != WM_MOUSEWHEEL && m != WM_MOUSEHWHEEL) l = Pop_Mouse(&C.pop, l);
     /* en la sección de ajustes, ratón, teclado y temporizadores son del panel alojado */
     if (Panel_IsEmbedded() && ((m == WM_TIMER && Panel_IsTimer(w)) ||
-        (C.section == 1 && ((m >= WM_MOUSEFIRST && m <= WM_MOUSELAST) || m == WM_MOUSELEAVE || m == WM_KEYDOWN || m == WM_CAPTURECHANGED))))
+        (C.section == 1 && C.page == 1 && ((m >= WM_MOUSEFIRST && m <= WM_MOUSELAST) || m == WM_MOUSELEAVE || m == WM_KEYDOWN || m == WM_CAPTURECHANGED))))
         return Panel_HostInput(h, m, w, l);
+    if (C.section == 1 && C.page >= 2) {             /* páginas de Wi-Fi y Bluetooth */
+        switch (m) {
+        case WM_MOUSEMOVE: {
+            const int hv = ListHit((short)LOWORD(l), (short)HIWORD(l));
+            if (hv != C.lhot) {
+                C.lhot = hv;
+                TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 };
+                TrackMouseEvent(&tme);
+                InvalidateRect(h, NULL, FALSE);
+            }
+            return 0;
+        }
+        case WM_MOUSELEAVE: C.lhot = 0; InvalidateRect(h, NULL, FALSE); return 0;
+        case WM_LBUTTONDOWN: return 0;
+        case WM_LBUTTONUP: ListClick(ListHit((short)LOWORD(l), (short)HIWORD(l))); return 0;
+        case WM_KEYDOWN: if (w == VK_ESCAPE) ListClick(LH_BACK); return 0;
+        case WM_MOUSEWHEEL: return 0;
+        }
+    }
     switch (m) {
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: {
@@ -1168,6 +1477,17 @@ static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     }
     case WM_NCHITTEST: return Pop_NcHit(&C.pop, l);
+    case WM_TIMER:
+        if (w == TIMER_WSCAN) {
+            KillTimer(h, TIMER_WSCAN);
+            if (C.section == 1 && C.page == 2) {
+                ReadNetworks();
+                ReadWifi();
+                C.listH = CS(ListHeight());
+                CCKick();
+            }
+        }
+        return 0;
     case WM_POPFRAME:
         Pop_Step(&C.pop);
         if (!C.hwnd) return 0;              /* se terminó de cerrar */
@@ -1212,12 +1532,12 @@ static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
         CCKick();
         if (C.dragging) { C.dragging = 0; ReleaseCapture(); return 0; }
         switch (CCHitTest((short)LOWORD(l), (short)HIWORD(l))) {
-        case CH_WIFI:     CC_Close(); OpenUri(L"ms-settings:network-wifi"); break;
-        case CH_BT:       CC_Close(); OpenUri(L"ms-settings:bluetooth"); break;
+        case CH_WIFI:     CC_GoList(2); break;             /* la lista, en la misma ventana */
+        case CH_BT:       CC_GoList(3); break;
         case CH_BATT:     CC_Close(); OpenUri(L"ms-settings:batterysaver"); break;
         case CH_DND:      CC_Close(); OpenUri(L"ms-settings:notifications"); break;
         case CH_NOTIF:    CC_Close(); Notch_OpenCenter(); break;
-        case CH_VOLICON:  ToggleMute(); C.isv[1] += 7.0f; CCKick(); if (B.hwnd) InvalidateRect(B.hwnd, NULL, FALSE); break;
+        case CH_VOLICON:  ToggleMute(); C.isv[1] += 3.0f; CCKick(); Bar_PulseVolume(TRUE); break;
         case CH_HIDEBAR:  CC_Close(); App_SetMenuBar(FALSE, TRUE); break;
         case CH_SETTINGS: CC_GoSettings(0); break;
         }
@@ -1229,9 +1549,9 @@ static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_MOUSEWHEEL: {
         const BOOL up = GET_WHEEL_DELTA_WPARAM(w) > 0;
         SetVolume((B.muted ? 0 : B.volume) + (up ? 0.05f : -0.05f));
-        C.isv[1] += up ? 4.0f : -2.5f;
+        C.isv[1] += up ? 2.2f : -1.4f;
         CCKick();
-        if (B.hwnd) InvalidateRect(B.hwnd, NULL, FALSE);
+        Bar_PulseVolume(up);
         return 0;
     }
     case WM_CLOSE:
@@ -1245,6 +1565,10 @@ static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
         Canvas_Free(&C.ccv);
         Canvas_Free(&C.el);
         Canvas_Free(&C.ico);
+        Canvas_Free(&C.lcv);
+        KillTimer(h, TIMER_WSCAN);
+        C.page = 0;
+        if (C.fHead) { DeleteObject(C.fHead); C.fHead = NULL; }
         C.section = 0;
         HFONT *all[] = { &C.fTitle, &C.fSub, &C.fIcon, &C.fIconBig };
         for (int i = 0; i < 4; ++i) if (*all[i]) { DeleteObject(*all[i]); *all[i] = NULL; }
@@ -1278,6 +1602,8 @@ static void CC_Open(int section, int tab)
     C.fSub   = Gfx_Font(ui, CS(12), FW_NORMAL,   CLEARTYPE_QUALITY);
     C.fIcon  = Gfx_Font(ic, CS(14), FW_NORMAL,   CLEARTYPE_QUALITY);
     C.fIconBig = Gfx_Font(ui, CS(20), FW_BOLD, CLEARTYPE_QUALITY);     /* el porcentaje de batería */
+    if (C.fHead) DeleteObject(C.fHead);
+    C.fHead = Gfx_Font(ui, CS(17), FW_BOLD, CLEARTYPE_QUALITY);
     const BOOL attached = !g_cfg.floating;
     const int w = CS(CC_W), h = CS(CCHeight());
     C.ox = B.mon.right - w - (attached ? CS(14) : CS(8));
@@ -1297,6 +1623,7 @@ static void CC_Open(int section, int tab)
         Pop_Open(&C.pop, C.hwnd, CS(18), (float)CS(18), 0.94f, 0.0f);  /* flotante: sale del engrane */
     }
     C.section = section;
+    C.page = section ? 1 : 0;
     C.secT = (float)section; C.secV = 0;
     if (section) C.setH = Panel_Embed(C.hwnd, B.dpi, tab, &C.glass, C.ox, C.oy);
     C.hcur = (float)(section ? C.setH : h); C.hv = 0;
@@ -1395,17 +1722,38 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
         SHAppBarMessage(ABM_WINDOWPOSCHANGED, &abd);
         break;
     }
+    case WM_MOUSEMOVE: {
+        POINT p = { (short)LOWORD(l), (short)HIWORD(l) };
+        int hv = BH_NONE;
+        for (int i = 1; i < BH_COUNT; ++i) if (PtInRect(&B.hit[i], p)) hv = i;
+        if (hv != B.bhot) {
+            B.bhot = hv;
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 };
+            TrackMouseEvent(&tme);
+            BarKick();
+        }
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        B.bhot = BH_NONE;
+        B.pressed = BH_NONE;
+        BarKick();
+        return 0;
     case WM_LBUTTONDOWN: {
         POINT p = { (short)LOWORD(l), (short)HIWORD(l) };
         B.pressed = BH_NONE;
         for (int i = 1; i < BH_COUNT; ++i) if (PtInRect(&B.hit[i], p)) B.pressed = i;
+        BarKick();
         return 0;
     }
     case WM_LBUTTONUP: {
         POINT p = { (short)LOWORD(l), (short)HIWORD(l) };
         int hit = BH_NONE;
         for (int i = 1; i < BH_COUNT; ++i) if (PtInRect(&B.hit[i], p)) hit = i;
-        if (hit != B.pressed) return 0;
+        const int was = B.pressed;
+        B.pressed = BH_NONE;
+        BarKick();
+        if (hit != was) return 0;
         switch (hit) {
         case BH_LOGO:  Panel_ShowTab(0); break;
         case BH_CLOCK: Notch_OpenCenter(); break;
@@ -1415,7 +1763,7 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
     case WM_MOUSEWHEEL:     /* rueda sobre la barra = volumen, como en muchas barras de macOS */
         SetVolume((B.muted ? 0 : B.volume) + (GET_WHEEL_DELTA_WPARAM(w) > 0 ? 0.04f : -0.04f));
-        InvalidateRect(h, NULL, FALSE);
+        Bar_PulseVolume(GET_WHEEL_DELTA_WPARAM(w) > 0);
         return 0;
     case WM_TIMER:
         if (w == TIMER_CLOCK) {
@@ -1424,6 +1772,8 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
             if (st.wMinute != B.lastMinute) { B.lastMinute = st.wMinute; InvalidateRect(h, NULL, FALSE); }
             /* vidrio: si cambió lo que hay detrás (ventana arrastrada, fondo nuevo), repintar */
             if (BarGlass() && CaptureBarBack()) InvalidateRect(h, NULL, FALSE);
+        } else if (w == TIMER_BANIM) {
+            BarAnimate();
         } else if (w == TIMER_STATUS) {
             ReadBattery();
             ReadWifi();
@@ -1442,6 +1792,7 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_DESTROY: {
         KillTimer(h, TIMER_CLOCK);
         KillTimer(h, TIMER_STATUS);
+        KillTimer(h, TIMER_BANIM);
         if (B.registered) {
             APPBARDATA abd = { sizeof(abd) };
             abd.hWnd = h;

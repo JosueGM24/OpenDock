@@ -248,6 +248,7 @@ void Bar_ForegroundChanged(void);
 int  Bar_HeightOn(const RECT *mon);
 void Bar_Raise(void);
 void Bar_StyleChanged(void);
+void Bar_PulseVolume(BOOL up);
 void Bar_Destroy(void);
 
 /* ── dock.c: dock inferior estilo macOS ── */
