@@ -12,7 +12,7 @@
 #include <shellapi.h>
 #include "resource.h"
 
-#define PANEL_CLASS   L"CornerRadius.Panel"
+#define PANEL_CLASS   L"OpenDock.Panel"
 #define PW            340       /* ancho lógico (96 DPI) */
 #define BODY_Y        116       /* inicio del contenido de la pestaña */
 #define FOOT_H        96
@@ -938,7 +938,7 @@ void Panel_ShowTab(int tab)
     /* vidrio: lo que hay detrás, en toda la columna (el panel cambia de alto con las pestañas) */
     if (P.th.dark && g_cfg.material == MAT_GLASS) Pop_CaptureGlass(&P.glass, x, wa.top, w, wa.bottom - wa.top, S(28));
     P.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED, PANEL_CLASS,
-                             L"CornerRadius \x2014 Configuración", WS_POPUP,
+                             L"OpenDock \x2014 Configuración", WS_POPUP,
                              x, top, w, h, NULL, NULL, g_inst, NULL);
     if (!P.hwnd) return;
     if (g_cfg.hideCapture) SetWindowDisplayAffinity(P.hwnd, WDA_EXCLUDEFROMCAPTURE);

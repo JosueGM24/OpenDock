@@ -22,7 +22,7 @@
 #include <propsys.h>
 #include <math.h>
 
-#define DOCK_CLASS    L"CornerRadius.Dock"
+#define DOCK_CLASS    L"OpenDock.Dock"
 #define WM_DFRAME     (WM_APP + 70)
 #define WM_DOCK_APPBAR (WM_APP + 71)
 #define TIMER_DSTATUS 1
@@ -1519,7 +1519,7 @@ void Dock_Apply(void)
         QueryPerformanceFrequency(&D.freq);
         QueryPerformanceCounter(&D.last);
         D.hwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                                 DOCK_CLASS, L"CornerRadius Dock", WS_POPUP,
+                                 DOCK_CLASS, L"OpenDock Dock", WS_POPUP,
                                  D.mon.left, D.mon.bottom - WinH(), D.mon.right - D.mon.left, WinH(),
                                  NULL, NULL, g_inst, NULL);
         if (!D.hwnd) return;

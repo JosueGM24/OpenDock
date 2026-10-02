@@ -1,4 +1,4 @@
-/* Declaraciones compartidas entre los módulos de CornerRadius. */
+/* Declaraciones compartidas entre los módulos de OpenDock. */
 #pragma once
 #ifndef UNICODE
 #define UNICODE
@@ -12,10 +12,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#define APP_NAME        L"CornerRadius"
-#define APP_VERSION     L"1.2.0"
-#define APP_PUBLISHER   L"CornerRadius"
-#define REG_KEY         L"Software\\CornerRadius"
+#define APP_NAME        L"OpenDock"
+#define APP_VERSION     L"2.0.0"
+#define APP_PUBLISHER   L"OpenDock"
+#define REG_KEY         L"Software\\OpenDock"
 
 #define WM_TRAY         (WM_APP + 1)
 #define WM_SETRADIUS    (WM_APP + 2)
@@ -288,6 +288,7 @@ void Dock_Destroy(void);
 
 /* ── install.c: instalación por usuario (sin admin) ── */
 BOOL Inst_IsRunningInstalled(void);
+BOOL Inst_MigrateLegacy(void);   /* de CornerRadius (nombre anterior): TRUE si estaba instalada */
 BOOL Inst_Exists(void);
 BOOL Inst_Install(wchar_t *outExe);
 void Inst_Unregister(void);

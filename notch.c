@@ -1,5 +1,5 @@
 /*
- * notch.c — la "isla" de CornerRadius, estilo Dynamic Island.
+ * notch.c — la "isla" de OpenDock, estilo Dynamic Island.
  *
  * Una sola ventana layered que cambia de forma con resortes entre estados:
  *   PEEK    aviso breve (cambios de la app, capturas, notificaciones de Windows)
@@ -17,7 +17,7 @@
 #include <mmsystem.h>
 #include <math.h>
 
-#define NOTCH_CLASS L"CornerRadius.Notch"
+#define NOTCH_CLASS L"OpenDock.Notch"
 #define WM_NOTCH_FRAME (WM_APP + 40)   /* fotograma del marcapasos */
 #define BACK_SCALE  4      /* el fondo del vidrio se captura a 1/4 y se desenfoca */
 #define TIMER_FRAME 1
@@ -1183,7 +1183,7 @@ static BOOL EnsureWindow(void)
 {
     if (N.hwnd) return TRUE;
     N.hwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                             NOTCH_CLASS, L"CornerRadius", WS_POPUP, 0, 0, 0, 0, NULL, NULL, g_inst, NULL);
+                             NOTCH_CLASS, L"OpenDock", WS_POPUP, 0, 0, 0, 0, NULL, NULL, g_inst, NULL);
     if (!N.hwnd) return FALSE;
     QueryPerformanceFrequency(&N.freq);
     return TRUE;
@@ -1490,7 +1490,7 @@ static void ToggleMute(void)
 /* ───────────────────────── Respuesta rápida ─────────────────────────
  * Una caja de texto real (EDIT) que aparece sobre la tarjeta: Enter envía la respuesta a la
  * app por su activador, Esc la cierra. Al enviar, el aviso se retira como en Windows. */
-#define REPLY_CLASS L"CornerRadius.Reply"
+#define REPLY_CLASS L"OpenDock.Reply"
 static WNDPROC s_editProc;
 
 static void CloseReply(BOOL refocus)

@@ -8,7 +8,7 @@
  *
  * Versiones anteriores ocultaban los banners poniendo ShowBanner=0 por app; Windows
  * no relee ese valor en vivo, así que se abandonó. Wn_RestoreBanners deshace esos
- * cambios (solo los que hizo CornerRadius) en equipos que los tengan.
+ * cambios (solo los que hizo OpenDock) en equipos que los tengan.
  */
 #define COBJMACROS
 #include "app.h"

@@ -2,7 +2,7 @@
  * tray.c — los iconos de la bandeja de Windows (Tailscale, OneDrive…) para la barra.
  *
  * Cada Shell_NotifyIcon de una app va a la primera ventana de clase "Shell_TrayWnd" que
- * encuentra Windows (FindWindow, por orden Z). CornerRadius crea una propia, invisible y
+ * encuentra Windows (FindWindow, por orden Z). OpenDock crea una propia, invisible y
  * siempre por encima de la de Explorer, en un hilo aparte: guarda una copia de cada icono
  * y le reenvía todo a Explorer, que sigue funcionando exactamente igual. Así la barra
  * puede pintar los iconos con su propio estilo y mandarles los clics como haría la barra

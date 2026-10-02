@@ -1,5 +1,5 @@
 <#
-  Firma CornerRadius.exe con Authenticode y publica su SHA-256.
+  Firma OpenDock.exe con Authenticode y publica su SHA-256.
 
   Solo una firma con certificado de confianza pública quita el aviso de SmartScreen
   ("Windows protegió su PC") y reduce los falsos positivos de antivirus:
@@ -17,7 +17,7 @@ param(
   [string]$Pfx,
   [string]$AzureMetadata,
   [string]$AzureDlib,
-  [string]$File = "CornerRadius.exe",
+  [string]$File = "OpenDock.exe",
   [string]$Timestamp = "http://timestamp.acs.microsoft.com"
 )
 $ErrorActionPreference = "Stop"
@@ -26,7 +26,7 @@ $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\si
             Sort-Object FullName -Descending | Select-Object -First 1
 if (-not $signtool) { throw "No se encontró signtool.exe: instala el Windows SDK (componente 'Signing Tools')." }
 
-$common = @("sign", "/fd", "SHA256", "/tr", $Timestamp, "/td", "SHA256", "/d", "CornerRadius")
+$common = @("sign", "/fd", "SHA256", "/tr", $Timestamp, "/td", "SHA256", "/d", "OpenDock")
 if ($AzureMetadata) {
   & $signtool.FullName @common /dlib $AzureDlib /dmdf $AzureMetadata $File
 } elseif ($Pfx) {

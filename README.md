@@ -1,17 +1,22 @@
-# CornerRadius
+# OpenDock
 
-Esquinas redondeadas por software para la pantalla de tu laptop (Windows 10/11).
+*(antes CornerRadius)* Notch con tus notificaciones, barra superior, centro de control, dock
+y esquinas redondeadas para Windows 10/11. Si tenías CornerRadius instalada, al abrir
+OpenDock la cierra, conserva tus ajustes y ocupa su lugar.
+
+## Esquinas redondeadas
+Esquinas redondeadas por software para la pantalla de tu laptop.
 Dibuja una máscara negra antialiasada en cada esquina de cada monitor. En pantallas
 OLED el negro equivale a píxel apagado; en LCD se ve igual de negro que el bisel.
 
 ## Uso
-Ejecuta `CornerRadius.exe`. La primera vez se abre la **configuración**; pulsa
-**Instalar en este equipo** y queda fija: se copia a `%LOCALAPPDATA%\Programs\CornerRadius`,
+Ejecuta `OpenDock.exe`. La primera vez se abre la **configuración**; pulsa
+**Instalar en este equipo** y queda fija: se copia a `%LOCALAPPDATA%\Programs\OpenDock`,
 arranca con Windows, aparece en el menú Inicio y se desinstala desde
 Configuración → Aplicaciones. No necesita permisos de administrador.
 
 - Clic en el icono de la bandeja → configuración · clic derecho → menú.
-- Volver a abrir el .exe (o buscar "CornerRadius" en Inicio) también abre la configuración.
+- Volver a abrir el .exe (o buscar "OpenDock" en Inicio) también abre la configuración.
 
 | Atajo | Acción |
 |---|---|
@@ -41,7 +46,7 @@ abre la vista rápida con el contador; clic = centro de notificaciones.
 **Notificaciones ofuscadas**: en vez del contenido, llega un notch pequeñito con una
 campanita que se balancea y un contador; clic = abrir el centro con el detalle.
 Para que Windows no muestre además su banner de la esquina, activa su **No molestar**
-(las notificaciones siguen llegando al centro de Windows y al notch). CornerRadius ya no
+(las notificaciones siguen llegando al centro de Windows y al notch). OpenDock ya no
 toca `ShowBanner` en el registro: Windows no lo relee en vivo. Al arrancar deshace los
 cambios que hicieron versiones anteriores.
 
@@ -108,7 +113,7 @@ desinstalar. Se oculta solo a pantalla completa.
 Solo se consigue **firmando** el exe con un certificado de confianza pública
 (ver `sign.ps1`; lo más barato es Azure Artifact Signing, ~10 USD/mes). Además conviene:
 1. Enviar el exe a Microsoft como falso positivo: https://www.microsoft.com/wdsi/filesubmission
-2. Publicar el SHA-256 junto a cada descarga (`sign.ps1` genera `CornerRadius.exe.sha256`).
+2. Publicar el SHA-256 junto a cada descarga (`sign.ps1` genera `OpenDock.exe.sha256`).
 3. No empaquetar con UPX ni similares (dispara heurísticas de antivirus).
 
 ## Detalles técnicos
@@ -121,8 +126,8 @@ Solo se consigue **firmando** el exe con un certificado de confianza pública
 ## Limitaciones conocidas
 - Juegos en pantalla completa *exclusiva* pueden taparlo (borderless sí funciona).
 - Windows 11 esconde iconos nuevos de la bandeja en `^`; para fijarlo: Configuración →
-  Personalización → Barra de tareas → Otros iconos → CornerRadius.
-- Al desinstalar queda `%TEMP%\CornerRadius-uninstall.exe` (el ayudante que borra la carpeta).
+  Personalización → Barra de tareas → Otros iconos → OpenDock.
+- Al desinstalar queda `%TEMP%\OpenDock-uninstall.exe` (el ayudante que borra la carpeta).
 
 ## Compilar
 - MSYS2 / Linux / WSL: `./build.sh` (mingw-w64)

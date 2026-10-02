@@ -25,8 +25,8 @@
 #include <math.h>
 #include "resource.h"
 
-#define BAR_CLASS       L"CornerRadius.MenuBar"
-#define CC_CLASS        L"CornerRadius.ControlCenter"
+#define BAR_CLASS       L"OpenDock.MenuBar"
+#define CC_CLASS        L"OpenDock.ControlCenter"
 #define WM_BAR_APPBAR   (WM_APP + 60)
 #define TIMER_CLOCK     1
 #define TIMER_STATUS    2
@@ -843,7 +843,7 @@ static struct {
     Pop    pop;                 /* abre/cierra con el rebote del notch */
     PopGlass glass;
     int    ox, oy;              /* origen del contenido en pantalla */
-    /* dos secciones: 0 controles · 1 ajustes de CornerRadius (panel.c alojado) */
+    /* dos secciones: 0 controles · 1 ajustes de OpenDock (panel.c alojado) */
     int    section, setH;
     float  secT, secV;          /* transición entre secciones (0..1) */
     float  hcur, hv;            /* alto animado del contenido */
@@ -1874,7 +1874,7 @@ static void CC_Toggle(void)
     CC_Open(0, 0);
 }
 
-/* Ajustes de CornerRadius: una sección del centro de control, no otra ventana. */
+/* Ajustes de OpenDock: una sección del centro de control, no otra ventana. */
 void CC_OpenSettings(int tab)
 {
     if (C.hwnd && !C.pop.closing) { CC_GoSettings(tab); SetForegroundWindow(C.hwnd); return; }
@@ -1885,7 +1885,7 @@ void CC_OpenSettings(int tab)
  * Los iconos de la bandeja de Windows (Tailscale, OneDrive…) en un panel propio bajo el
  * chevrón, con el material de la barra y el muelle del centro de control. Los iconos los
  * recoge tray.c; un clic aquí es un clic en el icono (izquierdo o derecho, con su menú). */
-#define TP_CLASS L"CornerRadius.TrayMenu"
+#define TP_CLASS L"OpenDock.TrayMenu"
 #define TP_MAX   32
 #define TP_COLS  6
 
@@ -2559,7 +2559,7 @@ void Bar_Apply(void)
     if (!B.hwnd) {
         BarMeasure();
         RefreshStatus();
-        B.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, BAR_CLASS, L"CornerRadius", WS_POPUP,
+        B.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, BAR_CLASS, L"OpenDock", WS_POPUP,
                                  B.mon.left, B.mon.top, B.mon.right - B.mon.left, B.h, NULL, NULL, g_inst, NULL);
         if (!B.hwnd) return;
         APPBARDATA abd = { sizeof(abd) };

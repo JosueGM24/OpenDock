@@ -1,5 +1,5 @@
 /*
- * CornerRadius — esquinas redondeadas por software para cualquier pantalla de Windows.
+ * OpenDock (antes OpenDock) — esquinas redondeadas, notch, barra superior y dock para Windows.
  *
  * Cómo funciona:
  *   Por cada monitor crea 4 ventanas diminutas (una por esquina) que son:
@@ -15,10 +15,10 @@
  *   Ctrl+Alt+RePág/AvPág  radio +2 / -2 px
  *
  * CLI:
- *   CornerRadius.exe --radius 16   (si ya está abierto, actualiza la instancia viva)
- *   CornerRadius.exe --settings    (abre la configuración)
- *   CornerRadius.exe --exit        (cierra la instancia en ejecución)
- *   CornerRadius.exe --uninstall   (lo usa Configuración → Aplicaciones)
+ *   OpenDock.exe --radius 16   (si ya está abierto, actualiza la instancia viva)
+ *   OpenDock.exe --settings    (abre la configuración)
+ *   OpenDock.exe --exit        (cierra la instancia en ejecución)
+ *   OpenDock.exe --uninstall   (lo usa Configuración → Aplicaciones)
  */
 #include "app.h"
 #include <shellapi.h>
@@ -28,8 +28,8 @@
 #include <math.h>
 #include "resource.h"
 
-#define CTRL_CLASS      L"CornerRadius.Controller"
-#define CORNER_CLASS    L"CornerRadius.Corner"
+#define CTRL_CLASS      L"OpenDock.Controller"
+#define CORNER_CLASS    L"OpenDock.Corner"
 
 #define IDM_TOGGLE      100
 #define IDM_CAPTURE     101
@@ -410,7 +410,7 @@ static void CALLBACK ForegroundHook(HWINEVENTHOOK h, DWORD ev, HWND w, LONG o, L
 static void UpdateTrayTip(void)
 {
     if (!g_nid.hWnd) return;
-    wsprintfW(g_nid.szTip, L"CornerRadius \x2014 %d px%s", g_cfg.radius, g_cfg.enabled ? L"" : L" (pausado)");
+    wsprintfW(g_nid.szTip, L"OpenDock \x2014 %d px%s", g_cfg.radius, g_cfg.enabled ? L"" : L" (pausado)");
     g_nid.uFlags = NIF_TIP;
     Shell_NotifyIconW(NIM_MODIFY, &g_nid);
 }
@@ -426,7 +426,7 @@ static void AddTrayIcon(void)
     g_nid.uCallbackMessage = WM_TRAY;
     g_nid.hIcon = (HICON)LoadImageW(g_inst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON,
                                     GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
-    wsprintfW(g_nid.szTip, L"CornerRadius \x2014 %d px", g_cfg.radius);
+    wsprintfW(g_nid.szTip, L"OpenDock \x2014 %d px", g_cfg.radius);
     Shell_NotifyIconW(NIM_ADD, &g_nid);
     UpdateTrayTip();
 }
@@ -768,7 +768,7 @@ void App_Uninstall(void)
     Panel_Close();
     DestroyCornersFrom(0);
     RemoveTrayIcon();
-    if (Notch_Show(NI_CHECK, L"CornerRadius desinstalada", L"Hasta pronto", -1, TRUE)) Notch_QuitOnHide();
+    if (Notch_Show(NI_CHECK, L"OpenDock desinstalado", L"Hasta pronto", -1, TRUE)) Notch_QuitOnHide();
     else DestroyWindow(g_ctrl);
 }
 
@@ -896,7 +896,7 @@ static LRESULT CALLBACK CtrlProc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (g_locHook) UnhookWinEvent(g_locHook);
         RemoveClipboardFormatListener(h);
         Bar_Destroy();
-        Bar_ApplyClock(FALSE);      /* sin CornerRadius, el reloj de Windows vuelve */
+        Bar_ApplyClock(FALSE);      /* sin OpenDock, el reloj de Windows vuelve */
         Dock_Destroy();
         Dock_RestoreTaskbar();
         Wn_Stop();
@@ -994,7 +994,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
         Inst_RemoveFiles();
         g_noSave = TRUE;
         RegisterClasses(hInst);
-        if (Notch_Show(NI_CHECK, L"CornerRadius desinstalada", L"Hasta pronto", -1, TRUE)) {
+        if (Notch_Show(NI_CHECK, L"OpenDock desinstalado", L"Hasta pronto", -1, TRUE)) {
             Notch_QuitOnHide();
             MessageLoop();
         }
@@ -1002,7 +1002,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
         return 0;
     }
 
-    HANDLE mutex = CreateMutexW(NULL, TRUE, L"Local\\CornerRadius.SingleInstance");
+    HANDLE mutex = CreateMutexW(NULL, TRUE, L"Local\\OpenDock.SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         HWND other = FindWindowW(CTRL_CLASS, NULL);
         if (other) {
@@ -1021,6 +1021,21 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
         return 0;
     }
     if (wantExit) { CoUninitialize(); return 0; }
+
+    /* Venimos de CornerRadius instalada: OpenDock ocupa su lugar y arranca la copia instalada. */
+    if (Inst_MigrateLegacy() && !Inst_IsRunningInstalled() && Inst_Install(g_relaunch)) {
+        if (mutex) { ReleaseMutex(mutex); CloseHandle(mutex); }
+        wchar_t cmd[MAX_PATH + 16];
+        wsprintfW(cmd, L"\"%s\" --installed", g_relaunch);
+        STARTUPINFOW si = { sizeof(si) };
+        PROCESS_INFORMATION pi;
+        if (CreateProcessW(g_relaunch, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+        }
+        CoUninitialize();
+        return 0;
+    }
 
     LoadConfig();
     if (cliRadius) {

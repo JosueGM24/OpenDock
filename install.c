@@ -1,7 +1,7 @@
 /*
  * install.c — instalación por usuario, sin permisos de administrador.
  *
- *   %LOCALAPPDATA%\Programs\CornerRadius\CornerRadius.exe
+ *   %LOCALAPPDATA%\Programs\OpenDock\OpenDock.exe
  *   + inicio con Windows (HKCU\...\Run)
  *   + acceso directo en el menú Inicio (abre la configuración)
  *   + entrada en Configuración → Aplicaciones (desinstalación limpia)
@@ -15,8 +15,8 @@
 #include <knownfolders.h>
 
 #define RUN_KEY       L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-#define UNINSTALL_KEY L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CornerRadius"
-#define EXE_NAME      L"CornerRadius.exe"
+#define UNINSTALL_KEY L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" APP_NAME
+#define EXE_NAME      L"OpenDock.exe"
 
 static BOOL KnownPath(REFKNOWNFOLDERID id, LPCWSTR tail, wchar_t *out)
 {
@@ -140,7 +140,7 @@ static void CreateShortcut(LPCWSTR exe)
         return;
     IShellLinkW_SetPath(sl, exe);
     IShellLinkW_SetArguments(sl, L"--settings");
-    IShellLinkW_SetDescription(sl, L"Esquinas redondeadas de pantalla \x2014 configuración");
+    IShellLinkW_SetDescription(sl, L"Notch, barra superior y dock para Windows \x2014 configuración");
     IShellLinkW_SetIconLocation(sl, exe, 0);
 
     IPersistFile *pf = NULL;
@@ -170,6 +170,59 @@ void Inst_SetStartup(BOOL on, LPCWSTR exe)
         RegDeleteValueW(k, APP_NAME);
     }
     RegCloseKey(k);
+}
+
+/* ───────────────────────── El nombre anterior ─────────────────────────
+ * La app se llamaba CornerRadius. Al arrancar OpenDock: se cierra la versión vieja si está
+ * abierta (al salir devuelve la barra de tareas y el reloj de Windows), sus ajustes pasan a
+ * la clave nueva y su instalación (inicio con Windows, menú Inicio, Aplicaciones, carpeta)
+ * se quita. Devuelve TRUE si estaba instalada, para instalar OpenDock en su lugar. */
+#define LEGACY_NAME L"CornerRadius"
+BOOL Inst_MigrateLegacy(void)
+{
+    HWND old = FindWindowW(LEGACY_NAME L".Controller", NULL);
+    if (old) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(old, &pid);
+        HANDLE p = OpenProcess(SYNCHRONIZE, FALSE, pid);
+        PostMessageW(old, WM_CLOSE, 0, 0);
+        if (p) { WaitForSingleObject(p, 8000); CloseHandle(p); }
+    }
+
+    HKEY k;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\" LEGACY_NAME, 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        HKEY n;
+        DWORD disp = 0;
+        BOOL done = FALSE;
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_KEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &n, &disp) == ERROR_SUCCESS) {
+            done = disp != REG_CREATED_NEW_KEY || RegCopyTreeW(k, NULL, n) == ERROR_SUCCESS;
+            RegCloseKey(n);
+        }
+        RegCloseKey(k);
+        if (done) RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\" LEGACY_NAME);
+    }
+
+    static const wchar_t kUninst[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" LEGACY_NAME;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kUninst, 0, KEY_READ, &k) != ERROR_SUCCESS) return FALSE;
+    RegCloseKey(k);
+    RegDeleteTreeW(HKEY_CURRENT_USER, kUninst);
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+        RegDeleteValueW(k, LEGACY_NAME);
+        RegCloseKey(k);
+    }
+    wchar_t path[MAX_PATH], dir[MAX_PATH], self[MAX_PATH];
+    if (KnownPath(&FOLDERID_Programs, LEGACY_NAME L".lnk", path)) DeleteFileW(path);
+    SelfPath(self);
+    if (KnownPath(&FOLDERID_UserProgramFiles, LEGACY_NAME, dir) && lstrlenW(dir) + 20 < MAX_PATH
+        && CompareStringOrdinal(self, lstrlenW(dir), dir, -1, TRUE) != CSTR_EQUAL) {   /* no si corremos desde ahí */
+        wsprintfW(path, L"%s\\" LEGACY_NAME L".exe", dir);
+        for (int i = 0; i < 20; ++i) {     /* la versión vieja puede estar terminando de salir */
+            if (DeleteFileW(path) || GetLastError() == ERROR_FILE_NOT_FOUND) break;
+            Sleep(250);
+        }
+        RemoveDirectoryW(dir);
+    }
+    return TRUE;
 }
 
 /* ───────────────────────── Instalar / desinstalar ───────────────────────── */
@@ -221,7 +274,7 @@ void Inst_RemoveFiles(void)
     wchar_t tmp[MAX_PATH], helper[MAX_PATH], cmd[MAX_PATH + 48];
     const DWORD n = GetTempPathW(MAX_PATH, tmp);
     if (!n || n + 32 >= MAX_PATH) return;
-    wsprintfW(helper, L"%sCornerRadius-uninstall.exe", tmp);
+    wsprintfW(helper, L"%sOpenDock-uninstall.exe", tmp);
     if (!CopySelf(helper)) return;
     wsprintfW(cmd, L"\"%s\" --cleanup %lu", helper, GetCurrentProcessId());
 
