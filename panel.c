@@ -33,7 +33,7 @@ enum {
     K_SOUND, K_STYLE, K_MATERIAL, K_SIZE, K_BOUNCE, K_ACCENT, K_TEST,
     K_COUNT
 };
-enum { IT_RADIUS, IT_DIVIDER, IT_TOGGLE, IT_SEGMENT, IT_SWATCH, IT_BUTTON };
+enum { IT_RADIUS, IT_DIVIDER, IT_TOGGLE, IT_SEGMENT, IT_SWATCH, IT_BUTTON, IT_PICKER };
 
 typedef struct {
     int     type, key;
@@ -73,7 +73,7 @@ static const ItemDef kNotch[] = {
     { IT_TOGGLE,  K_EDGE,    L"Mini notch al pasar por arriba" },
     { IT_TOGGLE,  K_SHOTS,   L"Capturas en el notch" },
     { IT_DIVIDER, -1 },
-    { IT_SEGMENT, K_SOUND,    L"Sonido de notificación", NULL, { L"Silencio", L"Windows", L"Suave" } },
+    { IT_PICKER,  K_SOUND,    L"Sonido de notificación" },
     { IT_SEGMENT, K_STYLE,    L"Estilo",   NULL, { L"Notch", L"Flotante" } },
     { IT_SEGMENT, K_SIZE,     L"Tamaño",   NULL, { L"Compacto", L"Normal", L"Grande" } },
     { IT_SEGMENT, K_BOUNCE,   L"Rebote",   NULL, { L"Suave", L"Normal", L"Bouncy" } },
@@ -196,6 +196,7 @@ static int ItemHeight(const ItemDef *d)
     case IT_SEGMENT: return 60;
     case IT_SWATCH:  return 50;
     case IT_BUTTON:  return 48;
+    case IT_PICKER:  return 60;
     }
     return 0;
 }
@@ -235,6 +236,13 @@ static RECT SwatchRect(const Item *it, int i)
     return r;
 }
 static RECT ButtonRect(const Item *it) { RECT r = { 16, it->y + 8, PW - 16, it->y + 40 }; return r; }
+/* selector ‹ nombre ›: 0 anterior · 1 el nombre (vuelve a sonar) · 2 siguiente */
+static RECT PickRect(const Item *it, int i)
+{
+    const int l = i == 0 ? 16 : i == 1 ? 58 : PW - 58, r = i == 0 ? 58 : i == 1 ? PW - 58 : PW - 16;
+    RECT x = { l, it->y + 24, r, it->y + 54 };
+    return x;
+}
 static RECT Rc(int l, int t, int r, int b) { RECT x = { l, t, r, b }; return x; }
 static RECT TabRect(int i) { const int w = (PW - 32) / NTABS; return Rc(16 + i * w, 70, i == NTABS - 1 ? PW - 16 : 16 + (i + 1) * w, 102); }
 
@@ -273,6 +281,10 @@ static int HitTest(int x, int y)
             return H_NONE;
         case IT_BUTTON:
             return InLogical(ButtonRect(it), x, y) ? HIT(i, 0) : H_NONE;
+        case IT_PICKER:
+            if (!ItemEnabled(it->def->key)) return H_NONE;
+            for (int s = 0; s < 3; ++s) if (InLogical(PickRect(it, s), x, y)) return HIT(i, s);
+            return H_NONE;
         }
     }
     return H_NONE;
@@ -421,6 +433,21 @@ static void DrawItem(Canvas *c, const Item *it, int idx)
     case IT_BUTTON:
         DrawButton(c, ButtonRect(it), HIT(idx, 0), d->title, FALSE, FALSE);
         break;
+
+    case IT_PICKER: {           /* la librería de sonidos: se recorre con ‹ › y suena al elegir */
+        TextR(c, P.fBody, d->title, Rc(16, it->y + 2, PW - 16, it->y + 22), fg, 0);
+        FillR(c, Rc(16, it->y + 24, PW - 16, it->y + 54), 8, t->ctrl, 1.0f);
+        for (int s = 0; s < 3; ++s) {
+            const RECT r = PickRect(it, s), in = Rc(r.left + 2, r.top + 2, r.right - 2, r.bottom - 2);
+            if (P.hover == HIT(idx, s)) FillR(c, in, 6, t->ctrlHover, 1.0f);
+        }
+        TextR(c, P.fStrong, L"\x2039", PickRect(it, 0), fg, DT_CENTER);
+        TextR(c, P.fStrong, L"\x203A", PickRect(it, 2), fg, DT_CENTER);
+        wchar_t label[64];
+        wsprintfW(label, L"%s   %d/%d", Notch_SoundName(g_cfg.sound), g_cfg.sound + 1, SOUND_COUNT);
+        TextR(c, P.fStrong, label, PickRect(it, 1), fg, DT_CENTER);
+        break;
+    }
     }
 }
 
@@ -580,7 +607,10 @@ static void Activate(int hit)
     case K_BANNERS:  g_cfg.hideBanners = !g_cfg.hideBanners; break;
     case K_SITEICON: g_cfg.siteIcons = !g_cfg.siteIcons; break;
     case K_EDGE:     g_cfg.edgeHover = !g_cfg.edgeHover; break;
-    case K_SOUND:    g_cfg.sound = sub; Cfg_Save(); Notch_PlaySound(); Panel_Refresh(); return;
+    case K_SOUND:                       /* ‹ anterior · nombre: otra vez · siguiente › */
+        if (sub == 0) g_cfg.sound = (g_cfg.sound + SOUND_COUNT - 1) % SOUND_COUNT;
+        else if (sub == 2) g_cfg.sound = (g_cfg.sound + 1) % SOUND_COUNT;
+        Cfg_Save(); Notch_PlaySound(); Panel_Refresh(); return;
     case K_STYLE:    g_cfg.floating = sub; break;
     case K_MATERIAL:
         g_cfg.material = sub;

@@ -1007,13 +1007,127 @@ static void BuildChime(void)
     }
 }
 
+/* ── Librería de sonidos ──
+ * Todos se sintetizan aquí (nada de archivos): notas con envolvente suave y timbres de
+ * campana, marimba, gota, campana FM, pad o cuenco, con eco opcional. Se generan la primera
+ * vez que suenan y se guardan en memoria. */
+enum { T_BELL, T_MARIMBA, T_DROP, T_FM, T_PAD, T_BOWL };
+typedef struct { float at, f, decay, amp; int kind; float p1; } Tone;
+typedef struct { LPCWSTR name; float len, echo; const Tone *t; int n; } SoundDef;
+
+static const Tone kCristal[]   = { { 0.00f, 1318.5f, 7, .60f, T_BELL }, { 0.11f, 1975.5f, 6, .50f, T_BELL } };
+static const Tone kBurbuja[]   = { { 0.00f, 520, 13, .80f, T_DROP, 2.2f }, { 0.09f, 760, 15, .45f, T_DROP, 2.0f } };
+static const Tone kBrisa[]     = { { 0.00f, 1046.5f, 5, .40f, T_BELL }, { 0.07f, 1318.5f, 5, .38f, T_BELL }, { 0.14f, 1568.0f, 4.5f, .36f, T_BELL } };
+static const Tone kPulso[]     = { { 0.00f, 784.0f, 9, .70f, T_MARIMBA }, { 0.14f, 1046.5f, 9, .70f, T_MARIMBA } };
+static const Tone kAurora[]    = { { 0.00f, 523.25f, 0, .30f, T_PAD, 0.95f }, { 0.00f, 659.25f, 0, .26f, T_PAD, 0.95f },
+                                   { 0.00f, 783.99f, 0, .24f, T_PAD, 0.95f }, { 0.28f, 2093.0f, 6, .14f, T_BELL } };
+static const Tone kCampanita[] = { { 0.00f, 1046.5f, 4, .60f, T_FM, 3.5f } };
+static const Tone kGota[]      = { { 0.00f, 1800, 14, .80f, T_DROP, 0.5f } };
+static const Tone kMarimba[]   = { { 0.00f, 784.0f, 8, .60f, T_MARIMBA }, { 0.10f, 659.25f, 8, .60f, T_MARIMBA }, { 0.20f, 523.25f, 7, .62f, T_MARIMBA } };
+static const Tone kDestello[]  = { { 0.00f, 2093.0f, 10, .30f, T_BELL }, { 0.05f, 2349.3f, 10, .30f, T_BELL },
+                                   { 0.10f, 2637.0f, 10, .30f, T_BELL }, { 0.15f, 3136.0f, 9, .30f, T_BELL } };
+static const Tone kZen[]       = { { 0.00f, 432.0f, 2.2f, .70f, T_BOWL } };
+static const Tone kEco[]       = { { 0.00f, 1174.7f, 8, .60f, T_BELL } };
+
+#define SND(name, len, echo, arr) { name, len, echo, arr, (int)(sizeof(arr) / sizeof(arr[0])) }
+static const SoundDef kSounds[SOUND_COUNT - 3] = {
+    SND(L"Cristal", 0.80f, 0, kCristal),   SND(L"Burbuja", 0.40f, 0, kBurbuja), SND(L"Brisa", 0.95f, 0, kBrisa),
+    SND(L"Pulso", 0.60f, 0, kPulso),       SND(L"Aurora", 1.10f, 0, kAurora),   SND(L"Campanita", 1.00f, 0, kCampanita),
+    SND(L"Gota", 0.32f, 0, kGota),         SND(L"Marimba", 0.80f, 0, kMarimba), SND(L"Destello", 0.62f, 0, kDestello),
+    SND(L"Zen", 1.90f, 0, kZen),           SND(L"Eco", 0.95f, 0.38f, kEco),
+};
+
+LPCWSTR Notch_SoundName(int i)
+{
+    static const LPCWSTR kFixed[3] = { L"Silencio", L"Windows", L"Suave" };
+    if (i < 0 || i >= SOUND_COUNT) return L"";
+    return i < 3 ? kFixed[i] : kSounds[i - 3].name;
+}
+
+static float ToneAt(const Tone *n, float lt)
+{
+    const float tau = 6.2831853f, f = n->f, d = n->decay;
+    float v = 0;
+    switch (n->kind) {
+    case T_BELL:
+        v = sinf(tau * f * lt) * expf(-lt * d) + 0.35f * sinf(tau * 2.0f * f * lt) * expf(-lt * d * 1.6f)
+          + 0.12f * sinf(tau * 3.01f * f * lt) * expf(-lt * d * 2.5f);
+        break;
+    case T_MARIMBA:
+        v = sinf(tau * f * lt) * expf(-lt * d) + 0.25f * sinf(tau * 4.0f * f * lt) * expf(-lt * d * 4.0f)
+          + 0.08f * sinf(tau * 10.0f * f * lt) * expf(-lt * d * 10.0f);
+        break;
+    case T_DROP: {        /* la frecuencia va de f a f·p1 muy rápido (fase integrada) */
+        const float k = 28.0f, ph = tau * f * (n->p1 * lt + (1.0f - n->p1) * (1.0f - expf(-k * lt)) / k);
+        v = sinf(ph) * expf(-lt * d);
+        break;
+    }
+    case T_FM: {
+        const float idx = 2.4f * expf(-lt * d * 0.8f);
+        v = sinf(tau * f * lt + idx * sinf(tau * f * n->p1 * lt)) * expf(-lt * d);
+        break;
+    }
+    case T_PAD: {         /* entra y sale suave, con tres voces apenas desafinadas */
+        if (lt >= n->p1) return 0;
+        const float e = sinf(3.14159f * lt / n->p1);
+        v = (sinf(tau * f * lt) + sinf(tau * f * 1.003f * lt) + sinf(tau * f * 0.997f * lt)) * (e * e) / 3.0f;
+        break;
+    }
+    case T_BOWL:
+        v = sinf(tau * f * lt) * expf(-lt * d) * (1.0f + 0.25f * sinf(tau * 3.0f * lt))
+          + 0.45f * sinf(tau * 2.76f * f * lt) * expf(-lt * d * 1.8f) + 0.18f * sinf(tau * 5.4f * f * lt) * expf(-lt * d * 3.0f);
+        break;
+    }
+    const float attack = n->kind == T_PAD ? 1.0f : min(1.0f, lt / 0.003f);
+    return v * attack * n->amp;
+}
+
+static BYTE *BuildSound(const SoundDef *s)
+{
+    const int rate = 44100, n = (int)(rate * s->len);
+    const DWORD bytes = 44 + (DWORD)n * 2;
+    float *mix = (float *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (SIZE_T)n * sizeof(float));
+    BYTE *h = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
+    if (!mix || !h) { if (mix) HeapFree(GetProcessHeap(), 0, mix); if (h) HeapFree(GetProcessHeap(), 0, h); return NULL; }
+    for (int i = 0; i < n; ++i) {
+        const float t = (float)i / rate;
+        for (int k = 0; k < s->n; ++k) if (t >= s->t[k].at) mix[i] += ToneAt(&s->t[k], t - s->t[k].at);
+    }
+    if (s->echo > 0) {                 /* eco: repeticiones cada 130 ms que se apagan */
+        const int d = rate * 13 / 100;
+        for (int i = d; i < n; ++i) mix[i] += mix[i - d] * s->echo;
+    }
+    float peak = 0.0001f;
+    for (int i = 0; i < n; ++i) peak = max(peak, fabsf(mix[i]));
+    const int fade = rate / 50;        /* 20 ms de salida, sin chasquido */
+    const DWORD riff = bytes - 8, fmtLen = 16, rateB = rate * 2, dataLen = (DWORD)n * 2, srate = rate;
+    const WORD pcm = 1, ch = 1, align = 2, bits = 16;
+    CopyMemory(h, "RIFF", 4); CopyMemory(h + 4, &riff, 4); CopyMemory(h + 8, "WAVEfmt ", 8);
+    CopyMemory(h + 16, &fmtLen, 4); CopyMemory(h + 20, &pcm, 2); CopyMemory(h + 22, &ch, 2);
+    CopyMemory(h + 24, &srate, 4); CopyMemory(h + 28, &rateB, 4); CopyMemory(h + 32, &align, 2);
+    CopyMemory(h + 34, &bits, 2); CopyMemory(h + 36, "data", 4); CopyMemory(h + 40, &dataLen, 4);
+    short *out = (short *)(h + 44);
+    for (int i = 0; i < n; ++i) {
+        float v = mix[i] / peak * 0.40f;          /* el mismo volumen que "Suave" */
+        if (i > n - fade) v *= (float)(n - i) / fade;
+        out[i] = (short)(v * 32767.0f);
+    }
+    HeapFree(GetProcessHeap(), 0, mix);
+    return h;
+}
+
 void Notch_PlaySound(void)
 {
-    if (g_cfg.sound == 1) {
+    static BYTE *s_built[SOUND_COUNT];
+    const int i = g_cfg.sound;
+    if (i == 1) {
         PlaySoundW(L"Notification.Default", NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
-    } else if (g_cfg.sound == 2) {
+    } else if (i == 2) {
         if (!s_chime) BuildChime();
         if (s_chime) PlaySoundW((LPCWSTR)s_chime, NULL, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+    } else if (i >= 3 && i < SOUND_COUNT) {
+        if (!s_built[i]) s_built[i] = BuildSound(&kSounds[i - 3]);
+        if (s_built[i]) PlaySoundW((LPCWSTR)s_built[i], NULL, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
     }
 }
 
@@ -1193,7 +1307,7 @@ static void ModeLogic(void)
         N.tx = MagnetX(pt.x);
         ClampTarget();
         if (abs(pt.x - N.dwellPt.x) + abs(pt.y - N.dwellPt.y) > NS(4)) { N.dwellPt = pt; N.dwellSince = now; }
-        else if (now - N.dwellSince > 450 && pt.y <= N.mon.top + NS(10)) Enter(M_QUICK);
+        else if (now - N.dwellSince > 450 && pt.y <= TopEdge() + NS(10)) Enter(M_QUICK);   /* la barra es el borde */
         break;
     case M_QUICK:
         InflateRect(&body, NS(28), NS(28));

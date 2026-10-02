@@ -211,7 +211,7 @@ static void LoadConfig(void)
     g_cfg.accent      = (int)min(RegReadDword(L"NotchAccent", 0), ACCENT_COUNT - 1);
     g_cfg.bounce      = (int)min(RegReadDword(L"NotchBounce", 1), 2);
     g_cfg.floating    = RegReadDword(L"NotchFloating", 0) != 0;
-    g_cfg.sound       = (int)min(RegReadDword(L"NotchSound", 0), 2);
+    g_cfg.sound       = (int)min(RegReadDword(L"NotchSound", 0), SOUND_COUNT - 1);
     g_cfg.menubar     = RegReadDword(L"MenuBar", 0) != 0;
     g_cfg.hideClock   = RegReadDword(L"HideWindowsClock", 1) != 0;
     g_cfg.dock        = RegReadDword(L"Dock", 0) != 0;
