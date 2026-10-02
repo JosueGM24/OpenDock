@@ -29,7 +29,7 @@
 /* Opciones (claves de los elementos) */
 enum {
     K_RADIUS, K_HIDECAP, K_STARTUP, K_BAR, K_CLOCK, K_BATTPCT, K_DOCK, K_DOCKTB, K_DHIDE, K_DWINFULL, K_DBLUR, K_DOPAC, K_DICON,
-    K_NOTCH, K_MIRROR, K_BANNERS, K_EDGE, K_SHOTS,
+    K_NOTCH, K_MIRROR, K_BANNERS, K_SITEICON, K_EDGE, K_SHOTS,
     K_SOUND, K_STYLE, K_MATERIAL, K_SIZE, K_BOUNCE, K_ACCENT, K_TEST,
     K_COUNT
 };
@@ -69,6 +69,7 @@ static const ItemDef kNotch[] = {
     { IT_TOGGLE,  K_NOTCH,   L"Avisos tipo notch" },
     { IT_TOGGLE,  K_MIRROR,  L"Notificaciones de Windows en el notch" },
     { IT_TOGGLE,  K_BANNERS, L"Notificaciones ofuscadas" },
+    { IT_TOGGLE,  K_SITEICON, L"Icono de las apps web", L"En avisos del navegador, el del sitio si lo trae; si no, su inicial" },
     { IT_TOGGLE,  K_EDGE,    L"Mini notch al pasar por arriba" },
     { IT_TOGGLE,  K_SHOTS,   L"Capturas en el notch" },
     { IT_DIVIDER, -1 },
@@ -131,6 +132,7 @@ static BOOL ToggleValue(int key)
     case K_NOTCH:   return g_cfg.notch;
     case K_MIRROR:  return g_cfg.mirror;
     case K_BANNERS: return g_cfg.hideBanners;
+    case K_SITEICON: return g_cfg.siteIcons;
     case K_EDGE:    return g_cfg.edgeHover;
     case K_SHOTS:   return g_cfg.captures;
     }
@@ -576,6 +578,7 @@ static void Activate(int hit)
     case K_SHOTS:    App_SetCaptures(!g_cfg.captures); return;
     case K_MIRROR:   g_cfg.mirror = !g_cfg.mirror; break;
     case K_BANNERS:  g_cfg.hideBanners = !g_cfg.hideBanners; break;
+    case K_SITEICON: g_cfg.siteIcons = !g_cfg.siteIcons; break;
     case K_EDGE:     g_cfg.edgeHover = !g_cfg.edgeHover; break;
     case K_SOUND:    g_cfg.sound = sub; Cfg_Save(); Notch_PlaySound(); Panel_Refresh(); return;
     case K_STYLE:    g_cfg.floating = sub; break;

@@ -52,6 +52,7 @@ typedef struct {
     BOOL     isBell;            /* notificación ofuscada: solo campanita + contador */
     wchar_t  aumid[160];
     wchar_t  app[64];
+    wchar_t  logo[MAX_PATH];
     LONGLONG arrival;
 } Peek;
 
@@ -213,10 +214,13 @@ static void DrawCornerGlyph(Canvas *c, float x, float y, float g, DWORD rgb)
  * tamaño exacto y se compone píxel a píxel respetando la transparencia. */
 static int IconPx(void) { return NS(18); }
 
-static void DrawAppIcon(Canvas *c, int bx, int by, int box, LPCWSTR aumid, LPCWSTR app, float alpha)
+static void DrawAppIcon(Canvas *c, int bx, int by, int box, LPCWSTR aumid, LPCWSTR app, LPCWSTR logo, float alpha)
 {
     const int s = IconPx(), x = bx + (box - s) / 2, y = by + (box - s) / 2;
-    HBITMAP icon = aumid && aumid[0] ? Wn_AppIcon(aumid, s) : NULL;
+    /* aviso de una app web con su propio icono: ese, con esquinas suaves como una app */
+    HBITMAP icon = g_cfg.siteIcons && logo && logo[0] ? Wn_LogoIcon(logo, s) : NULL;
+    const BOOL rounded = icon != NULL;
+    if (!icon) icon = aumid && aumid[0] ? Wn_AppIcon(aumid, s) : NULL;
     BITMAP bm;
     if (icon && GetObjectW(icon, sizeof(bm), &bm) && bm.bmWidth > 0 && bm.bmWidth <= 512 && abs(bm.bmHeight) <= 512) {
         const int w = bm.bmWidth, h = abs(bm.bmHeight);
@@ -249,7 +253,9 @@ static void DrawAppIcon(Canvas *c, int bx, int by, int box, LPCWSTR aumid, LPCWS
                             | (DWORD)min(255, (int)((v >> 8) & 255) * 255 / a) << 8
                             | (DWORD)min(255, (int)(v & 255) * 255 / a);
                     }
-                    Gfx_Blend(c, ox + xx, oy + yy, rgb, a / 255.0f * alpha);
+                    float k = a / 255.0f * alpha;
+                    if (rounded) k *= Gfx_Cov(Gfx_SdRRect(xx + 0.5f, yy + 0.5f, 0, 0, (float)w, (float)h, min(w, h) * 0.24f));
+                    Gfx_Blend(c, ox + xx, oy + yy, rgb, k);
                 }
             HeapFree(GetProcessHeap(), 0, px);
             return;
@@ -356,7 +362,7 @@ static void RenderPeekNote(void)
     Ago(p->arrival, ago);
     const int aw = Gfx_TextWidth(N.fSmall, ago);
 
-    DrawAppIcon(c, bx, (N.H - box) / 2, box, p->aumid, p->app, 1.0f);
+    DrawAppIcon(c, bx, (N.H - box) / 2, box, p->aumid, p->app, p->logo, 1.0f);
     Text(c, N.fTitle, p->title[0] ? p->title : p->app, tx, NS(8), right - aw - NS(8) - tx, NS(20), N.look.fg, 0);
     Text(c, N.fSmall, ago, right - aw, NS(8), aw + 1, NS(20), N.look.fg3, 0);
     Text(c, N.fSmall, p->detail[0] ? p->detail : p->app, tx, NS(28), right - tx, NS(18), N.look.fg2, 0);
@@ -530,7 +536,7 @@ static void DrawCard(Canvas *c, int x, int y, int cw, int h, int i, float alpha,
     const int cardH = N.cardH, box = NS(30), tx = x + NS(14) + box + NS(10), right = x + cw - NS(14);
     wchar_t ago[32];
     Gfx_FillRRect(c, (float)x, (float)y, (float)cw, (float)h, (float)NS(16), L->card, alpha);
-    DrawAppIcon(c, x + NS(14), y + (cardH - box) / 2, box, w->aumid, w->app, alpha);
+    DrawAppIcon(c, x + NS(14), y + (cardH - box) / 2, box, w->aumid, w->app, w->logo, alpha);
     Ago(w->arrival, ago);
     const int aw = Gfx_TextWidth(N.fSmall, ago);
     const DWORD cardBg = Gfx_Mix(L->bg, L->card, alpha);
@@ -1711,6 +1717,7 @@ BOOL Notch_ShowWin(const WinNote *n)
     lstrcpynW(N.peek.aumid, n->aumid, 160);
     N.peek.arrival = n->arrival;
     lstrcpynW(N.peek.app, n->app, 64);
+    lstrcpynW(N.peek.logo, n->logo, MAX_PATH);
     lstrcpynW(N.peek.title, n->title, 128);
     lstrcpynW(N.peek.detail, n->body, 256);
     N.isCapture = FALSE;

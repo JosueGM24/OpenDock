@@ -17,6 +17,7 @@
 #include <knownfolders.h>
 #include <sqlite3.h>
 #include <propsys.h>
+#include <wincodec.h>
 
 #define NOTIF_SETTINGS L"Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings"
 #define HIDDEN_KEY     REG_KEY L"\\HiddenBanners"
@@ -255,6 +256,41 @@ static void ParseActions(const wchar_t *xml, WinNote *w)
     }
 }
 
+/* El icono propio del aviso: <image placement="appLogoOverride" src="…">. Los navegadores
+ * guardan ahí el icono del sitio como archivo local; solo se aceptan archivos locales. */
+static void ParseLogo(const wchar_t *xml, WinNote *w)
+{
+    wchar_t v[48], src[MAX_PATH * 2];
+    w->logo[0] = 0;
+    for (const wchar_t *p = xml; (p = wcsstr(p, L"<image")) != NULL; ++p) {
+        const wchar_t *e = wcschr(p, L'>');
+        if (!e) break;
+        if (!Attr(p + 1, e, L"placement", v, 48) || lstrcmpiW(v, L"appLogoOverride")) continue;
+        if (!Attr(p + 1, e, L"src", src, MAX_PATH * 2)) continue;
+        const wchar_t *s = src;
+        if (CompareStringOrdinal(s, 8, L"file:///", 8, TRUE) == CSTR_EQUAL) s += 8;
+        else if (!(s[0] && s[1] == L':' && (s[2] == L'\\' || s[2] == L'/'))) continue;   /* nada de http ni ms-appx */
+        /* %XX (UTF-8) y barras de URL a ruta de Windows */
+        char u8[MAX_PATH * 3];
+        int k = 0;
+        for (; *s && k < (int)sizeof(u8) - 4; ++s) {
+            if (*s == L'%' && iswxdigit(s[1]) && iswxdigit(s[2])) {
+                const wchar_t hx[3] = { s[1], s[2], 0 };
+                u8[k++] = (char)wcstol(hx, NULL, 16);
+                s += 2;
+            } else if (*s == L'/') u8[k++] = '\\';
+            else k += WideCharToMultiByte(CP_UTF8, 0, s, 1, u8 + k, (int)sizeof(u8) - k - 1, NULL, NULL);
+        }
+        u8[k] = 0;
+        wchar_t path[MAX_PATH];
+        if (!MultiByteToWideChar(CP_UTF8, 0, u8, -1, path, MAX_PATH)) continue;
+        const DWORD at = GetFileAttributesW(path);
+        if (at == INVALID_FILE_ATTRIBUTES || (at & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        lstrcpynW(w->logo, path, MAX_PATH);
+        return;
+    }
+}
+
 /* Primer <text> = título; el resto se une como cuerpo. */
 static void ParsePayload(const void *blob, int bytes, WinNote *w)
 {
@@ -304,6 +340,7 @@ static void ParsePayload(const void *blob, int bytes, WinNote *w)
         p = end + 7;
     }
     ParseActions(xml, w);
+    if (IsSiteNote(w->aumid)) ParseLogo(xml, w);     /* el icono del sitio web, si lo trae */
     HeapFree(GetProcessHeap(), 0, xml);
 }
 
@@ -401,6 +438,67 @@ BOOL Wn_Changed(void)
 }
 
 int Wn_Count(void) { return s_count; }
+
+/* El icono propio de un aviso, decodificado con WIC (PNG, JPG, ICO, BMP…) y escalado a
+ * px (encajado, sin deformar). Se guarda en caché: el navegador puede borrar el archivo. */
+static const GUID kCLSID_WICFactory = { 0xcacaf262, 0x9370, 0x4615, { 0xa1, 0x3b, 0x9f, 0x55, 0x39, 0xda, 0x4c, 0x0a } };
+static const GUID kIID_WICFactory   = { 0xec5ec8a9, 0xc395, 0x4314, { 0x9c, 0x77, 0x54, 0xd7, 0xa9, 0x35, 0xff, 0x70 } };
+static const GUID kWICPBGRA         = { 0x6fddc324, 0x4e03, 0x4bfe, { 0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x10 } };
+
+static HBITMAP DecodeLogo(LPCWSTR path, int px)
+{
+    IWICImagingFactory *f = NULL;
+    if (FAILED(CoCreateInstance(&kCLSID_WICFactory, NULL, CLSCTX_INPROC_SERVER, &kIID_WICFactory, (void **)&f)) || !f) return NULL;
+    HBITMAP out = NULL;
+    IWICBitmapDecoder *dec = NULL;
+    IWICBitmapFrameDecode *fr = NULL;
+    IWICFormatConverter *cv = NULL;
+    IWICBitmapScaler *sc = NULL;
+    UINT w0 = 0, h0 = 0;
+    if (SUCCEEDED(IWICImagingFactory_CreateDecoderFromFilename(f, path, NULL, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &dec)) &&
+        SUCCEEDED(IWICBitmapDecoder_GetFrame(dec, 0, &fr)) &&
+        SUCCEEDED(IWICBitmapFrameDecode_GetSize(fr, &w0, &h0)) && w0 && h0 && w0 <= 4096 && h0 <= 4096 &&
+        SUCCEEDED(IWICImagingFactory_CreateFormatConverter(f, &cv)) &&
+        SUCCEEDED(IWICFormatConverter_Initialize(cv, (IWICBitmapSource *)fr, &kWICPBGRA, WICBitmapDitherTypeNone, NULL, 0,
+                                                 WICBitmapPaletteTypeCustom)) &&
+        SUCCEEDED(IWICImagingFactory_CreateBitmapScaler(f, &sc))) {
+        const UINT w = w0 >= h0 ? (UINT)px : max(1u, (UINT)px * w0 / h0), h = h0 >= w0 ? (UINT)px : max(1u, (UINT)px * h0 / w0);
+        if (SUCCEEDED(IWICBitmapScaler_Initialize(sc, (IWICBitmapSource *)cv, w, h, WICBitmapInterpolationModeFant))) {
+            BITMAPINFO bi;
+            ZeroMemory(&bi, sizeof(bi));
+            bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bi.bmiHeader.biWidth = (LONG)w;
+            bi.bmiHeader.biHeight = -(LONG)h;
+            bi.bmiHeader.biPlanes = 1;
+            bi.bmiHeader.biBitCount = 32;
+            void *bits = NULL;
+            out = CreateDIBSection(NULL, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+            if (out && FAILED(IWICBitmapScaler_CopyPixels(sc, NULL, w * 4, w * h * 4, (BYTE *)bits))) { DeleteObject(out); out = NULL; }
+        }
+    }
+    if (sc) IWICBitmapScaler_Release(sc);
+    if (cv) IWICFormatConverter_Release(cv);
+    if (fr) IWICBitmapFrameDecode_Release(fr);
+    if (dec) IWICBitmapDecoder_Release(dec);
+    IWICImagingFactory_Release(f);
+    return out;
+}
+
+HBITMAP Wn_LogoIcon(LPCWSTR path, int px)
+{
+    static struct { wchar_t path[MAX_PATH]; int px; HBITMAP bmp; } cache[24];
+    static int next;
+    if (!path || !path[0]) return NULL;
+    for (int i = 0; i < 24; ++i)
+        if (cache[i].px == px && !lstrcmpiW(cache[i].path, path)) return cache[i].bmp;
+    HBITMAP b = DecodeLogo(path, px);
+    const int slot = next++ % 24;
+    if (cache[slot].bmp) DeleteObject(cache[slot].bmp);
+    lstrcpynW(cache[slot].path, path, MAX_PATH);
+    cache[slot].px = px;
+    cache[slot].bmp = b;                /* también los fallos, para no reintentar */
+    return b;
+}
 
 /* Pide el icono al sistema exactamente a px×px: se dibuja 1:1, sin escalar ni pixelar. */
 HBITMAP Wn_AppIcon(LPCWSTR aumid, int px)

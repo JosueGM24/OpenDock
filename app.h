@@ -60,6 +60,7 @@ typedef struct {
     BOOL battPct;       /* barra superior: porcentaje dentro de la batería */
     int  dockAutoHide;  /* ocultar dock sin el cursor: 0 no · 1 a la mitad · 2 del todo */
     BOOL dockWinFull;   /* con el dock oculto, las ventanas maximizadas llegan hasta abajo */
+    BOOL siteIcons;     /* avisos del navegador: el icono del sitio (si lo trae) en vez de su inicial */
 } Config;
 
 enum { MAT_OLED, MAT_GLASS, MAT_SYSTEM };
@@ -236,6 +237,7 @@ typedef struct WinNote {
     int      nact;
     wchar_t  inputId[24], inputHint[48];
     BOOL     hasInput;
+    wchar_t  logo[MAX_PATH];    /* icono propio del aviso (appLogoOverride), archivo local */
 } WinNote;
 void Wn_Start(void);
 void Wn_Stop(void);
@@ -250,6 +252,7 @@ void Wn_Activate(const WinNote *w, int action, LPCWSTR reply);   /* action -1 = 
 void Wn_RestoreBannersSync(void);
 void Wn_RestoreBanners(void);           /* deshace los ShowBanner=0 de versiones anteriores */
 HBITMAP Wn_AppIcon(LPCWSTR aumid, int px);  /* icono 32 bpp al tamaño exacto; lo posee la caché */
+HBITMAP Wn_LogoIcon(LPCWSTR path, int px);  /* el icono propio de un aviso (PNG, JPG, ICO…); ídem */
 
 /* ── menubar.c: barra superior estilo macOS + centro de control ── */
 void Bar_Register(void);

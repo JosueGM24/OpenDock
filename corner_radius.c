@@ -61,7 +61,7 @@ static const int kPresets[] = { 6, 8, 10, 12, 14, 16, 20, 24, 32, 40, 56 };
 
 HINSTANCE g_inst;
 HWND      g_ctrl;
-Config    g_cfg = { 12, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, MAT_OLED, 1, 0, 1, 5000, 0, FALSE, 0, FALSE, TRUE, FALSE, TRUE, 1, 2, 1, FALSE, 0, TRUE };
+Config    g_cfg = { 12, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, MAT_OLED, 1, 0, 1, 5000, 0, FALSE, 0, FALSE, TRUE, FALSE, TRUE, 1, 2, 1, FALSE, 0, TRUE, TRUE };
 
 static HWND      g_corners[MAX_CORNERS];
 static int       g_count;
@@ -190,6 +190,7 @@ void Cfg_Save(void)
     RegWriteDword(L"BarBatteryPercent", (DWORD)g_cfg.battPct);
     RegWriteDword(L"DockAutoHide", (DWORD)g_cfg.dockAutoHide);
     RegWriteDword(L"DockWindowsFull", (DWORD)g_cfg.dockWinFull);
+    RegWriteDword(L"NotchSiteIcons", (DWORD)g_cfg.siteIcons);
     RegWriteDword(L"NotchX", (DWORD)g_cfg.notchX);
     RegWriteDword(L"NotchY", (DWORD)g_cfg.notchY);
 }
@@ -221,6 +222,7 @@ static void LoadConfig(void)
     g_cfg.battPct     = RegReadDword(L"BarBatteryPercent", 0) != 0;
     g_cfg.dockAutoHide = (int)min(RegReadDword(L"DockAutoHide", 0), 2);
     g_cfg.dockWinFull  = RegReadDword(L"DockWindowsFull", 1) != 0;
+    g_cfg.siteIcons    = RegReadDword(L"NotchSiteIcons", 1) != 0;
     g_cfg.notchX      = (int)RegReadDword(L"NotchX", 5000);
     g_cfg.notchY      = (int)RegReadDword(L"NotchY", 0);
     g_cfg.radius = max(RADIUS_MIN, min(RADIUS_MAX, g_cfg.radius));
