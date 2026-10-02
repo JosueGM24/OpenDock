@@ -204,15 +204,35 @@ void Pop_Present(Pop *p, const Canvas *content)
         const float rb = max(0.5f, min(ah * 0.5f, p->radius)), fl = min(p->ear, ah * 0.5f);
         const int cox = M, coy = (int)lroundf(ah - ch);
         const DWORD bg = content->px[0] & 0xFFFFFF;
-        const int x0 = max(0, (int)floorf(left - fl) - 1), x1 = min(W, (int)ceilf(right + fl) + 1);
-        for (int y = 0; y < H; ++y) {
+        const int f8 = (int)(F * 256.0f + 0.5f), a8 = (int)(A * 255.0f + 0.5f);
+        /* solo se recorre la forma y su sombra; el interior se copia sin calcular nada */
+        const float ext = M * 1.3f;
+        const int sx0 = max(0, (int)floorf(left - fl - ext)), sx1 = min(W, (int)ceilf(right + fl + ext));
+        const int sy1 = min(H, (int)ceilf(ah + M * 0.28f + ext));
+        const int ix0 = (int)ceilf(left + 1.0f), ix1 = (int)floorf(right - 1.0f);
+        const DWORD shadowFull = (DWORD)(p->shadow * A * 255.0f + 0.5f) << 24;
+        for (int y = 0; y < sy1; ++y) {
             DWORD *drow = &out[y * W];
             const float py = y + 0.5f;
-            for (int x = 0; x < W; ++x) {
+            const int qy = y - coy;
+            const BOOL midRow = py >= fl && py < ah - rb;          /* sin esquinas ni hombros */
+            const DWORD *crow = qy >= 0 && qy < ch ? &content->px[qy * cw] : NULL;
+            for (int x = sx0; x < sx1; ++x) {
+                if (midRow && x >= ix0 && x < ix1) {
+                    const int qx = x - cox;
+                    DWORD c = crow && qx >= 0 && qx < cw ? crow[qx] & 0xFFFFFF : bg;
+                    if (f8 < 256) {                                /* aún apareciendo */
+                        const DWORD rb2 = (((bg & 0xFF00FF) * (256 - f8) + (c & 0xFF00FF) * f8) >> 8) & 0xFF00FF;
+                        const DWORD g2 = (((bg & 0x00FF00) * (256 - f8) + (c & 0x00FF00) * f8) >> 8) & 0x00FF00;
+                        c = rb2 | g2;
+                    }
+                    drow[x] = a8 >= 255 ? 0xFF000000 | c : Over(c, a8, shadowFull);
+                    continue;
+                }
                 const float px = x + 0.5f;
                 const float sa = ShadowA(p, px, py, left, -rb, aw, ah + rb, rb) * A;
                 float cov = 0;
-                if (x >= x0 && x < x1 && py < ah + 1.5f) {
+                if (py < ah + 1.5f && px > left - fl - 1 && px < right + fl + 1) {
                     cov = Gfx_Cov(Gfx_SdRRect(px, py, left, -rb, aw, ah + rb, rb));
                     if (fl > 0.5f && py < fl) {           /* hombros cóncavos junto a la barra */
                         float ccx = -1;
@@ -224,9 +244,9 @@ void Pop_Present(Pop *p, const Canvas *content)
                 cov *= A;
                 const DWORD under = (DWORD)(sa * 255.0f + 0.5f) << 24;
                 if (cov <= 0.002f) { if (sa > 0.002f) drow[x] = under; continue; }
-                const int qx = x - cox, qy = y - coy;
+                const int qx = x - cox;
                 DWORD c = bg;
-                if (F > 0 && qx >= 0 && qy >= 0 && qx < cw && qy < ch) c = Gfx_Mix(bg, content->px[qy * cw + qx] & 0xFFFFFF, F);
+                if (F > 0 && crow && qx >= 0 && qx < cw) c = Gfx_Mix(bg, crow[qx] & 0xFFFFFF, F);
                 drow[x] = Over(c, (int)(cov * 255.0f + 0.5f), under);
             }
         }
@@ -239,10 +259,12 @@ void Pop_Present(Pop *p, const Canvas *content)
     const float s = max(0.05f, p->s), A = max(0.0f, min(1.0f, p->a));
     const float axp = M + p->ax * cw, ayp = T + p->ay * ch;
     const float x0 = axp + (M - axp) * s, y0 = ayp + (T - ayp) * s, w = cw * s, h = ch * s, r = p->radius * s;
-    const float inv = 1.0f / s;
-    for (int y = 0; y < H; ++y) {
+    const float inv = 1.0f / s, ext = M * 1.3f;
+    const int bx0 = max(0, (int)floorf(x0 - ext)), bx1 = min(W, (int)ceilf(x0 + w + ext));
+    const int by0 = max(0, (int)floorf(y0 - ext)), by1 = min(H, (int)ceilf(y0 + h + M * 0.28f + ext));
+    for (int y = by0; y < by1; ++y) {
         DWORD *drow = &out[y * W];
-        for (int x = 0; x < W; ++x) {
+        for (int x = bx0; x < bx1; ++x) {
             const float px = x + 0.5f, py = y + 0.5f;
             const float sa = ShadowA(p, px, py, x0, y0, w, h, r) * A;
             const float cov = Gfx_Cov(Gfx_SdRRect(px, py, x0, y0, w, h, r)) * A;

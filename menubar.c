@@ -1367,7 +1367,7 @@ static void CCSpring(float *x, float *v, float target, float dt, float k, float 
 }
 
 /* Un paso de la transición entre secciones y del alto (con el rebote configurado). */
-static void CCAdvance(void)
+static BOOL CCAdvance(void)
 {
     LARGE_INTEGER t, f;
     QueryPerformanceCounter(&t);
@@ -1414,6 +1414,7 @@ static void CCAdvance(void)
         if (!C.section && Panel_IsEmbedded()) Panel_Unembed();     /* de vuelta en controles */
     }
     Pop_Hold(&C.pop, !done);
+    return moving || !done;      /* ¿cambió algo del contenido? */
 }
 
 static void CCKick(void)
@@ -1528,8 +1529,9 @@ static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_POPFRAME:
         Pop_Step(&C.pop);
         if (!C.hwnd) return 0;              /* se terminó de cerrar */
-        CCAdvance();
-        PaintCC();
+        /* si solo se anima la ventana (abrir, cerrar), el contenido es el mismo: no se repinta */
+        if (CCAdvance() || !C.cv.px) PaintCC();
+        else Pop_Present(&C.pop, &C.cv);
         return 0;
     case WM_ACTIVATE:
         if (LOWORD(w) == WA_INACTIVE) CC_Close();
@@ -1731,6 +1733,17 @@ static void RefreshStatus(void)
     ForegroundAppName(B.app, 64);
 }
 
+/* El reloj solo cambia una vez por minuto: se despierta justo al cambiar (con vidrio,
+ * cada 5 s como mucho, para recomponer el fondo si algo se movió detrás). */
+static void ArmClock(HWND h)
+{
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    UINT ms = (60 - st.wSecond) * 1000 - st.wMilliseconds + 30;
+    if (BarGlass()) ms = min(ms, 5000u);
+    SetTimer(h, TIMER_CLOCK, max(200u, ms), NULL);
+}
+
 static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
@@ -1814,6 +1827,7 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
             if (st.wMinute != B.lastMinute) { B.lastMinute = st.wMinute; InvalidateRect(h, NULL, FALSE); }
             /* vidrio: si cambió lo que hay detrás (ventana arrastrada, fondo nuevo), repintar */
             if (BarGlass() && CaptureBarBack()) InvalidateRect(h, NULL, FALSE);
+            ArmClock(h);
         } else if (w == TIMER_BANIM) {
             BarAnimate();
         } else if (w == TIMER_TRAY) {
@@ -1951,7 +1965,7 @@ void Bar_Apply(void)
         B.registered = SHAppBarMessage(ABM_NEW, &abd) != 0;
         BarApplyCapture();
         BarPosition();
-        SetTimer(B.hwnd, TIMER_CLOCK, 1000, NULL);
+        ArmClock(B.hwnd);
         SetTimer(B.hwnd, TIMER_STATUS, 10000, NULL);
         Brightness_Request(-1);
     } else {

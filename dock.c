@@ -26,6 +26,10 @@
 #define TIMER_DSTATUS 1
 #define TIMER_DBLUR   2
 #define TIMER_DTASK   3      /* vigilancia corta de la barra tras cerrar Inicio */
+#define TIMER_DRESCAN 4      /* repaso de apps tras un aviso de Windows (agrupa ráfagas) */
+#define TIMER_DBLURQ  5      /* recaptura del fondo tras mover una ventana */
+#define TIMER_DPEEK   6      /* fin de la visita a la bandeja */
+#define STATUS_MS     10000  /* repaso de seguridad: lo normal llega por avisos */
 #define MAX_ITEMS     48
 #define ICON_GAP      12
 #define DOCK_PADX     16
@@ -79,7 +83,7 @@ static struct {
     DWORD    backTick, backHash;
     LARGE_INTEGER last, freq;
     DWORD    lastScan;
-    HWINEVENTHOOK fgHook;
+    HWINEVENTHOOK fgHook, winHook, moveHook;
     BOOL     dirty;             /* hay que redibujar aunque nada se anime */
     BOOL     shellOpen;         /* Inicio / Buscar de Windows abierto */
     BOOL     peek;              /* la bandeja de Windows a la vista un momento */
@@ -307,7 +311,19 @@ static BOOL WindowExe(HWND w, wchar_t *path)
 }
 
 /* Nombre corto de la app (FileDescription del ejecutable), o el nombre del .exe. */
+static void AppNameRead(const wchar_t *exe, wchar_t *out, int cch);
 static void AppName(const wchar_t *exe, wchar_t *out, int cch)
+{
+    static struct { wchar_t exe[MAX_PATH], name[80]; } cache[32];
+    static int n, next;
+    for (int i = 0; i < n; ++i) if (!lstrcmpiW(cache[i].exe, exe)) { lstrcpynW(out, cache[i].name, cch); return; }
+    AppNameRead(exe, out, cch);
+    const int slot = n < 32 ? n++ : (next++ % 32);
+    lstrcpynW(cache[slot].exe, exe, MAX_PATH);
+    lstrcpynW(cache[slot].name, out, 80);
+}
+
+static void AppNameRead(const wchar_t *exe, wchar_t *out, int cch)
 {
     out[0] = 0;
     DWORD dummy = 0, sz = GetFileVersionInfoSizeW(exe, &dummy);
@@ -984,7 +1000,10 @@ void Dock_TrayPeek(BOOL on)
     if (!D.hwnd || !g_cfg.dockHideTaskbar) return;
     D.peek = on;
     D.peekAt = GetTickCount();
-    if (on) EnumWindows(ShowTrayProc, TRUE);
+    if (on) {
+        EnumWindows(ShowTrayProc, TRUE);
+        SetTimer(D.hwnd, TIMER_DPEEK, 700, NULL);
+    }
 }
 
 /* ───────────────────────── Ventana ───────────────────────── */
@@ -1015,14 +1034,23 @@ static void AppBarPos(void)
     SHAppBarMessage(ABM_SETPOS, &abd);
 }
 
+static void CALLBACK WinHook(HWINEVENTHOOK hk, DWORD ev, HWND w, LONG obj, LONG child, DWORD th, DWORD t);
+
 static void ApplyCapture(void)
 {
     /* con desenfoque el dock debe quedar fuera de captura: si no, se vería a sí mismo */
     const BOOL exclude = g_cfg.hideCapture || g_cfg.dockBlur;
     if (D.hwnd) SetWindowDisplayAffinity(D.hwnd, exclude ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
     if (D.hwnd) {
-        if (g_cfg.dockBlur) SetTimer(D.hwnd, TIMER_DBLUR, 350, NULL);
-        else KillTimer(D.hwnd, TIMER_DBLUR);
+        if (g_cfg.dockBlur) {
+            SetTimer(D.hwnd, TIMER_DBLUR, 3000, NULL);
+            if (!D.moveHook)
+                D.moveHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, NULL, WinHook, 0, 0,
+                                             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        } else {
+            KillTimer(D.hwnd, TIMER_DBLUR);
+            if (D.moveHook) { UnhookWinEvent(D.moveHook); D.moveHook = NULL; }
+        }
     }
 }
 
@@ -1047,6 +1075,39 @@ static void CALLBACK FgHook(HWINEVENTHOOK hk, DWORD ev, HWND w, LONG obj, LONG c
     Kick();
 }
 
+/* Avisos de Windows sobre ventanas. Solo se mira lo que importa al dock, y se agrupa:
+ * el repaso (o la recaptura del vidrio) va un instante después de la ráfaga. */
+static BOOL KnownWindow(HWND w)
+{
+    for (int i = 0; i < D.count; ++i)
+        for (int k = 0; k < D.items[i].nwin; ++k) if (D.items[i].wins[k] == w) return TRUE;
+    return FALSE;
+}
+
+static void CALLBACK WinHook(HWINEVENTHOOK hk, DWORD ev, HWND w, LONG obj, LONG child, DWORD th, DWORD t)
+{
+    (void)hk; (void)th; (void)t;
+    if (!D.hwnd || obj != OBJID_WINDOW || child != CHILDID_SELF || !w) return;
+    if (ev == EVENT_OBJECT_LOCATIONCHANGE) {               /* algo se movió: quizá detrás del dock */
+        if (GetAncestor(w, GA_ROOT) == w && IsWindowVisible(w)) SetTimer(D.hwnd, TIMER_DBLURQ, 160, NULL);
+        return;
+    }
+    if (ev == EVENT_OBJECT_SHOW) {
+        wchar_t cls[32];
+        if (GetClassNameW(w, cls, 32) && (!lstrcmpW(cls, L"Shell_TrayWnd") || !lstrcmpW(cls, L"Shell_SecondaryTrayWnd"))) {
+            /* Explorer volvió a mostrar su barra: fuera, salvo con Inicio o la bandeja abiertos */
+            if (g_cfg.dockHideTaskbar && !D.shellOpen && !D.peek) SetTimer(D.hwnd, TIMER_DTASK, 60, NULL), D.taskWatch = 3;
+            return;
+        }
+        if (IsAppWindow(w)) SetTimer(D.hwnd, TIMER_DRESCAN, 150, NULL);
+        if (g_cfg.dockBlur) SetTimer(D.hwnd, TIMER_DBLURQ, 200, NULL);
+        return;
+    }
+    /* se ocultó o se cerró: solo importa si era de una app del dock */
+    if (KnownWindow(w)) SetTimer(D.hwnd, TIMER_DRESCAN, 150, NULL);
+    if (g_cfg.dockBlur && ev == EVENT_OBJECT_HIDE) SetTimer(D.hwnd, TIMER_DBLURQ, 200, NULL);
+}
+
 static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
@@ -1064,6 +1125,11 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
     case WM_DOCK_APPBAR:
         if (w == ABN_POSCHANGED) AppBarPos();
+        else if (w == ABN_FULLSCREENAPP && (BOOL)l != D.fullscreen) {
+            D.fullscreen = (BOOL)l;
+            ShowWindow(h, D.fullscreen ? SW_HIDE : SW_SHOWNOACTIVATE);
+            if (!D.fullscreen) { Rescan(); Kick(); }
+        }
         return 0;
     case WM_WINDOWPOSCHANGED: {
         APPBARDATA abd = { sizeof(abd) };
@@ -1121,8 +1187,15 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 ShowWindow(h, fs ? SW_HIDE : SW_SHOWNOACTIVATE);
                 if (!fs) { Rescan(); Render(); }
             }
-            if (!fs && !D.inside) { Rescan(); Kick(); }   /* refresca indicadores de apps abiertas */
-            /* Explorer a veces vuelve a mostrar la barra (cambio de pantalla, reinicio) */
+            if (!fs && !D.inside) { Rescan(); Kick(); }   /* repaso de seguridad */
+            if (g_cfg.dockHideTaskbar && !D.shellOpen && !D.peek) SetTaskbarOff(TRUE);
+        } else if (w == TIMER_DRESCAN) {
+            KillTimer(h, TIMER_DRESCAN);
+            if (!D.fullscreen) { Rescan(); Kick(); }
+        } else if (w == TIMER_DBLURQ) {
+            KillTimer(h, TIMER_DBLURQ);
+            if (!D.fullscreen && WaitForSingleObject(s_dpOn, 0) != WAIT_OBJECT_0 && CaptureBackdrop()) Render();
+        } else if (w == TIMER_DPEEK) {
             if (D.peek && GetTickCount() - D.peekAt > 1500) {
                 /* fin de la visita a la bandeja: el foco ya no está en la barra ni en su panel */
                 HWND fg = GetForegroundWindow();
@@ -1132,7 +1205,10 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
                                   !lstrcmpW(cls, L"NotifyIconOverflowWindow") || !lstrcmpW(cls, L"Xaml_WindowedPopupClass");
                 if (!tray || GetTickCount() - D.peekAt > 60000) D.peek = FALSE;
             }
-            if (g_cfg.dockHideTaskbar && !D.shellOpen && !D.peek) SetTaskbarOff(TRUE);
+            if (!D.peek) {
+                KillTimer(h, TIMER_DPEEK);
+                if (g_cfg.dockHideTaskbar && !D.shellOpen) SetTaskbarOff(TRUE);
+            }
         } else if (w == TIMER_DTASK) {
             if (!D.shellOpen && !D.peek && g_cfg.dockHideTaskbar) SetTaskbarOff(TRUE);
             if (--D.taskWatch <= 0 || D.shellOpen) KillTimer(h, TIMER_DTASK);
@@ -1145,6 +1221,11 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
         KillTimer(h, TIMER_DSTATUS);
         KillTimer(h, TIMER_DBLUR);
         KillTimer(h, TIMER_DTASK);
+        KillTimer(h, TIMER_DRESCAN);
+        KillTimer(h, TIMER_DBLURQ);
+        KillTimer(h, TIMER_DPEEK);
+        if (D.winHook) { UnhookWinEvent(D.winHook); D.winHook = NULL; }
+        if (D.moveHook) { UnhookWinEvent(D.moveHook); D.moveHook = NULL; }
         if (D.fgHook) { UnhookWinEvent(D.fgHook); D.fgHook = NULL; }
         if (D.appbar) {
             APPBARDATA abd = { sizeof(abd) };
@@ -1203,9 +1284,13 @@ void Dock_Apply(void)
         for (int i = 0; i < D.count; ++i) D.items[i].barW = BarTarget(&D.items[i]);
         Render();
         ShowWindow(D.hwnd, SW_SHOWNOACTIVATE);
-        SetTimer(D.hwnd, TIMER_DSTATUS, 1500, NULL);
+        SetTimer(D.hwnd, TIMER_DSTATUS, STATUS_MS, NULL);
         D.fgHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, NULL, FgHook, 0, 0,
                                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        /* ventanas que se abren, se cierran o se ocultan: el dock se entera al momento */
+        D.winHook = SetWinEventHook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, NULL, WinHook, 0, 0,
+                                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        ApplyCapture();
     } else {
         Rescan();
         Render();
