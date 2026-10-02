@@ -2,7 +2,8 @@
  * dock.c — dock estilo macOS: panel flotante abajo con las apps ancladas y abiertas,
  * magnificación al pasar el cursor (como el Dock de Apple) y clic para abrir/enfocar.
  *
- * - Apps ancladas: se leen los .lnk de la barra de tareas del usuario.
+ * - Apps ancladas: las de la barra de tareas, en su orden (la lista de Explorer): los .lnk
+ *   y también las apps empaquetadas (Store, PWA), que no tienen .lnk.
  * - Apps abiertas: se enumeran las ventanas; una barrita blanca marca las que corren
  *   (más larga y brillante la que está al frente).
  * - Iconos a alta resolución (IShellItemImageFactory), en caché y con alpha propio.
@@ -18,6 +19,7 @@
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <dwmapi.h>
+#include <propsys.h>
 #include <math.h>
 
 #define DOCK_CLASS    L"CornerRadius.Dock"
@@ -50,6 +52,7 @@ typedef struct {
     wchar_t launch[MAX_PATH];   /* .lnk o ruta a abrir con explorer */
     wchar_t exe[MAX_PATH];      /* ejecutable (para casar con ventanas) */
     wchar_t name[80];
+    wchar_t aumid[128];         /* app empaquetada (Store, PWA): su AppUserModelID */
     const DWORD *px;            /* RGBA del icono (straight alpha), de la caché */
     int     iw, ih;
     BOOL    pinned, running, minimized, active;
@@ -268,6 +271,116 @@ static void NewItem(DockItem *it)
     it->hopT = -1.0f;
 }
 
+static void AddLnk(const wchar_t *dir, const wchar_t *file)
+{
+    if (D.count >= MAX_ITEMS) return;
+    DockItem *it = &D.items[D.count];
+    NewItem(it);
+    it->pinned = TRUE;
+    wsprintfW(it->launch, L"%s\\%s", dir, file);
+    ResolveLnk(it->launch, it->exe);
+    lstrcpynW(it->name, file, 80);
+    wchar_t *dot = wcsrchr(it->name, L'.');
+    if (dot) *dot = 0;
+    if (GetIcon(it->launch, it)) D.count++;
+}
+
+/* Una app empaquetada anclada: se abre y se dibuja por shell:AppsFolder\<AUMID>. */
+static BOOL AddPackaged(const wchar_t *aumid)
+{
+    if (D.count >= MAX_ITEMS) return FALSE;
+    wchar_t path[MAX_PATH];
+    wsprintfW(path, L"shell:AppsFolder\\%s", aumid);
+    IShellItem *si = NULL;
+    if (FAILED(SHCreateItemFromParsingName(path, NULL, &IID_IShellItem, (void **)&si))) return FALSE;
+    DockItem *it = &D.items[D.count];
+    NewItem(it);
+    it->pinned = TRUE;
+    lstrcpynW(it->launch, path, MAX_PATH);
+    lstrcpynW(it->aumid, aumid, 128);
+    PWSTR dn = NULL;
+    if (SUCCEEDED(IShellItem_GetDisplayName(si, SIGDN_NORMALDISPLAY, &dn)) && dn) { lstrcpynW(it->name, dn, 80); CoTaskMemFree(dn); }
+    IShellItem_Release(si);
+    for (int i = 0; i < D.count; ++i)               /* ya está como .lnk */
+        if (D.items[i].pinned && !lstrcmpiW(D.items[i].name, it->name)) return TRUE;
+    if (GetIcon(path, it)) { D.count++; return TRUE; }
+    return FALSE;
+}
+
+/* ¿Parece un AppUserModelID de paquete? Familia (nombre_hash de 13) + "!" + aplicación. */
+static BOOL LooksAumid(const wchar_t *s)
+{
+    const wchar_t *bang = wcschr(s, L'!'), *us = NULL;
+    if (!bang || bang == s || !bang[1]) return FALSE;
+    for (const wchar_t *p = s; *p; ++p) if (*p <= L' ' || *p == L'\\' || *p == L'/' || *p == L':') return FALSE;
+    for (const wchar_t *p = s; p < bang; ++p) if (*p == L'_') us = p;
+    return us && bang - us - 1 == 13;
+}
+
+/* La lista de anclados de Explorer (Taskband\Favorites) guarda cada ancla como una lista de
+ * elementos del shell. Dentro van, en UTF-16, el nombre del .lnk o el AppUserModelID de la
+ * app empaquetada: se buscan a las dos alineaciones posibles y se ordenan por posición. */
+typedef struct { DWORD at; int lnk; wchar_t aumid[128]; } PinRef;
+
+static void PinNote(PinRef *refs, int *n, int max, DWORD at, int lnk, const wchar_t *aumid)
+{
+    for (int i = 0; i < *n; ++i)
+        if ((lnk >= 0 && refs[i].lnk == lnk) || (lnk < 0 && refs[i].lnk < 0 && !lstrcmpiW(refs[i].aumid, aumid))) {
+            if (at < refs[i].at) refs[i].at = at;
+            return;
+        }
+    if (*n >= max) return;
+    refs[*n].at = at; refs[*n].lnk = lnk;
+    lstrcpynW(refs[*n].aumid, aumid ? aumid : L"", 128);
+    ++*n;
+}
+
+static int ReadPinOrder(wchar_t (*lnks)[MAX_PATH], int nlnk, PinRef *refs, int max)
+{
+    static const wchar_t *kKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Taskband";
+    DWORD size = 0;
+    if (RegGetValueW(HKEY_CURRENT_USER, kKey, L"Favorites", RRF_RT_REG_BINARY, NULL, NULL, &size) != ERROR_SUCCESS ||
+        !size || size > 1024 * 1024) return -1;
+    BYTE *b = (BYTE *)HeapAlloc(GetProcessHeap(), 0, size);
+    if (!b) return -1;
+    if (RegGetValueW(HKEY_CURRENT_USER, kKey, L"Favorites", RRF_RT_REG_BINARY, NULL, b, &size) != ERROR_SUCCESS) {
+        HeapFree(GetProcessHeap(), 0, b);
+        return -1;
+    }
+    int n = 0;
+    wchar_t tok[260];
+    for (DWORD par = 0; par < 2; ++par) {
+        int len = 0;
+        DWORD start = 0;
+        for (DWORD i = par; i + 1 <= size; i += 2) {
+            const wchar_t ch = i + 1 < size ? (wchar_t)(b[i] | b[i + 1] << 8) : 0;
+            if (ch >= 0x20 && ch != 0x7F && (ch < 0xD800 || ch > 0xDFFF) && len < 259) {
+                if (!len) start = i;
+                tok[len++] = ch;
+                continue;
+            }
+            if (len >= 5) {
+                tok[len] = 0;
+                if (len > 4 && !lstrcmpiW(tok + len - 4, L".lnk")) {
+                    for (int k = 0; k < nlnk; ++k) {          /* puede llevar basura delante */
+                        const int ln = lstrlenW(lnks[k]);
+                        if (len >= ln && !lstrcmpiW(tok + len - ln, lnks[k])) { PinNote(refs, &n, max, start, k, NULL); break; }
+                    }
+                } else {
+                    for (int skip = 0; skip < 3 && skip < len; ++skip)
+                        if (LooksAumid(tok + skip)) { PinNote(refs, &n, max, start, -1, tok + skip); break; }
+                }
+            }
+            len = 0;
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, b);
+    for (int i = 0; i < n; ++i)
+        for (int j = i + 1; j < n; ++j)
+            if (refs[j].at < refs[i].at) { PinRef t = refs[i]; refs[i] = refs[j]; refs[j] = t; }
+    return n;
+}
+
 static void AddPinned(void)
 {
     PWSTR appdata = NULL;
@@ -277,22 +390,50 @@ static void AddPinned(void)
     CoTaskMemFree(appdata);
     wsprintfW(pat, L"%s\\*.lnk", dir);
 
+    static wchar_t lnks[MAX_ITEMS][MAX_PATH];
+    static PinRef refs[MAX_ITEMS];
+    BOOL used[MAX_ITEMS] = { 0 };
+    int nlnk = 0;
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW(pat, &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
-    do {
-        if (D.count >= MAX_ITEMS) break;
-        DockItem *it = &D.items[D.count];
-        NewItem(it);
-        it->pinned = TRUE;
-        wsprintfW(it->launch, L"%s\\%s", dir, fd.cFileName);
-        ResolveLnk(it->launch, it->exe);
-        lstrcpynW(it->name, fd.cFileName, 80);
-        wchar_t *dot = wcsrchr(it->name, L'.');
-        if (dot) *dot = 0;
-        if (GetIcon(it->launch, it)) D.count++;
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
+    if (h != INVALID_HANDLE_VALUE) {
+        do { if (nlnk < MAX_ITEMS) lstrcpynW(lnks[nlnk++], fd.cFileName, MAX_PATH); } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    /* en el orden de la barra de tareas; lo que no esté en su lista, al final */
+    const int n = ReadPinOrder(lnks, nlnk, refs, MAX_ITEMS);
+    for (int i = 0; i < n; ++i) {
+        if (refs[i].lnk >= 0) { AddLnk(dir, lnks[refs[i].lnk]); used[refs[i].lnk] = TRUE; }
+        else AddPackaged(refs[i].aumid);
+    }
+    for (int k = 0; k < nlnk; ++k) if (!used[k]) AddLnk(dir, lnks[k]);
+}
+
+/* El AppUserModelID de una ventana (las de apps empaquetadas y PWA lo llevan). */
+static const PROPERTYKEY kPKEY_AumId = { { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, 5 };
+static BOOL WindowAumid(HWND w, wchar_t *out, int cch)
+{
+    out[0] = 0;
+    IPropertyStore *ps = NULL;
+    if (FAILED(SHGetPropertyStoreForWindow(w, &IID_IPropertyStore, (void **)&ps)) || !ps) return FALSE;
+    PROPVARIANT v;
+    PropVariantInit(&v);
+    if (SUCCEEDED(IPropertyStore_GetValue(ps, &kPKEY_AumId, &v)) && v.vt == VT_LPWSTR && v.pwszVal) lstrcpynW(out, v.pwszVal, cch);
+    PropVariantClear(&v);
+    IPropertyStore_Release(ps);
+    return out[0] != 0;
+}
+
+static DockItem *FindByAumid(HWND w)
+{
+    BOOL any = FALSE;
+    for (int i = 0; i < D.count && !any; ++i) any = D.items[i].aumid[0] != 0;
+    if (!any) return NULL;
+    wchar_t id[128];
+    if (!WindowAumid(w, id, 128)) return NULL;
+    for (int i = 0; i < D.count; ++i)
+        if (D.items[i].aumid[0] && !lstrcmpiW(D.items[i].aumid, id)) return &D.items[i];
+    return NULL;
 }
 
 static BOOL IsAppWindow(HWND w)
@@ -365,7 +506,8 @@ static BOOL CALLBACK EnumProc(HWND w, LPARAM lp)
     if (!WindowExe(w, path)) return TRUE;
     if (!lstrcmpiW(BaseName(path), L"explorer.exe")) return TRUE;
 
-    DockItem *it = FindByExe(path);
+    DockItem *it = FindByAumid(w);           /* app empaquetada o PWA: antes que por el .exe */
+    if (!it) it = FindByExe(path);
     if (!it && D.count < MAX_ITEMS) {       /* app abierta no anclada: añadir al final */
         it = &D.items[D.count];
         NewItem(it);
@@ -389,9 +531,13 @@ static void UpdateActive(void)
     if (fg) fg = GetAncestor(fg, GA_ROOTOWNER);
     wchar_t path[MAX_PATH];
     const BOOL have = fg && WindowExe(fg, path);
+    int owner = -1;                         /* la app que tiene esa ventana, si alguna */
+    for (int i = 0; i < D.count && owner < 0; ++i)
+        for (int k = 0; k < D.items[i].nwin; ++k) if (D.items[i].wins[k] == fg) { owner = i; break; }
     for (int i = 0; i < D.count; ++i) {
         DockItem *it = &D.items[i];
-        it->active = have && it->running && it->exe[0] && !lstrcmpiW(BaseName(it->exe), BaseName(path));
+        it->active = owner >= 0 ? i == owner
+                   : have && it->running && it->exe[0] && !it->aumid[0] && !lstrcmpiW(BaseName(it->exe), BaseName(path));
         if (it->active && fg && !IsIconic(fg)) it->hwnd = fg;
         /* cada ventana conserva su segmento aunque cambie el orden z: se numeran por
          * identificador (estable mientras viva la ventana) */
@@ -405,7 +551,7 @@ static void UpdateActive(void)
     }
 }
 
-static const wchar_t *ItemKey(const DockItem *it) { return it->exe[0] ? it->exe : it->launch; }
+static const wchar_t *ItemKey(const DockItem *it) { return it->aumid[0] ? it->aumid : it->exe[0] ? it->exe : it->launch; }
 
 static void Rescan(void)
 {
