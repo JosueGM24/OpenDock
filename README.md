@@ -115,8 +115,14 @@ desinstalar. Se oculta solo a pantalla completa.
 - **Entradas ajenas acotadas**: XML de avisos con tope de etiquetas, logos solo de rutas locales
   (nunca \servidor, que filtraría credenciales NTLM), WAV con trozos validados, y ningún
   mensaje de ventana lleva punteros.
-- **Binario endurecido**: ASLR de alta entropía, DEP, stack protector
-  (MSVC además: CFG y CET shadow stack).
+- **Binario endurecido**: ASLR de alta entropía, DEP y stack protector. Las versiones
+  publicadas se compilan con MSVC en GitHub Actions y llevan además Control Flow Guard, CET
+  (shadow stack), CRT estática y DLL dependientes solo de System32; `tools/check_pe.py`
+  lo comprueba en cada compilación y la versión no se publica si falta algo.
+- **Bandeja propia acotada**: como mucho 8 iconos por proceso, solo de ventanas que existen,
+  y al pulsar un icono solo se envían mensajes de aplicación.
+- **Desinstalación limpia**: el ayudante corre en una carpeta propia de %TEMP% y la borra al
+  terminar.
 - Configuración validada al leerla; `--cleanup` nunca borra rutas recibidas por CLI.
 - La copia instalada se escribe byte a byte, sin el `Zone.Identifier` de la descarga.
 
@@ -141,8 +147,12 @@ Solo se consigue **firmando** el exe con un certificado de confianza pública
 - Al desinstalar queda `%TEMP%\OpenDock-uninstall.exe` (el ayudante que borra la carpeta).
 
 ## Compilar
-- MSYS2 / Linux / WSL: `./build.sh` (mingw-w64)
-- Windows: `build.bat` desde Developer Command Prompt (MSVC)
+- MSYS2 / Linux / WSL: `./build.sh` (mingw-w64).
+- Windows: `build.bat` desde Developer Command Prompt (MSVC), con `sqlite3.c` (amalgamación)
+  junto al código o `SQLITE_DIR` apuntando a vcpkg (`sqlite3:x64-windows-static`).
+- Versiones: `git tag v2.0.0 && git push --tags` → `.github/workflows/release.yml` compila con
+  MSVC, comprueba las protecciones y publica el .exe con su SHA-256 en GitHub Releases.
+- Comprobar un .exe: `py tools/check_pe.py OpenDock.exe --strict`.
 
 ## Código abierto
 OpenDock es software libre con licencia [MIT](LICENSE): puedes usarlo, estudiarlo,
