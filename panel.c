@@ -33,7 +33,7 @@ enum {
     K_SOUND, K_SOUNDVOL, K_STYLE, K_MATERIAL, K_SIZE, K_BOUNCE, K_ACCENT, K_TEST,
     K_COUNT
 };
-enum { IT_RADIUS, IT_DIVIDER, IT_TOGGLE, IT_SEGMENT, IT_SWATCH, IT_BUTTON, IT_PICKER };
+enum { IT_RADIUS, IT_DIVIDER, IT_TOGGLE, IT_SEGMENT, IT_SWATCH, IT_BUTTON, IT_PICKER, IT_VOLUME };
 
 typedef struct {
     int     type, key;
@@ -74,7 +74,7 @@ static const ItemDef kNotch[] = {
     { IT_TOGGLE,  K_SHOTS,   L"Capturas en el notch" },
     { IT_DIVIDER, -1 },
     { IT_PICKER,  K_SOUND,    L"Sonido de notificación" },
-    { IT_SEGMENT, K_SOUNDVOL, L"Volumen del sonido", NULL, { L"Bajo", L"Medio", L"Alto", L"Máximo" } },
+    { IT_VOLUME,  K_SOUNDVOL, L"Volumen" },
     { IT_SEGMENT, K_STYLE,    L"Estilo",   NULL, { L"Notch", L"Flotante" } },
     { IT_SEGMENT, K_SIZE,     L"Tamaño",   NULL, { L"Compacto", L"Normal", L"Grande" } },
     { IT_SEGMENT, K_BOUNCE,   L"Rebote",   NULL, { L"Suave", L"Normal", L"Bouncy" } },
@@ -155,7 +155,6 @@ static int SegmentValue(int key)
 {
     switch (key) {
     case K_SOUND:    return g_cfg.sound;
-    case K_SOUNDVOL: return g_cfg.soundVol;
     case K_STYLE:    return g_cfg.floating;
     case K_MATERIAL: return g_cfg.material;
     case K_SIZE:     return g_cfg.size;
@@ -200,6 +199,7 @@ static int ItemHeight(const ItemDef *d)
     case IT_SWATCH:  return 50;
     case IT_BUTTON:  return 48;
     case IT_PICKER:  return 60;
+    case IT_VOLUME:  return 58;
     }
     return 0;
 }
@@ -284,6 +284,8 @@ static int HitTest(int x, int y)
             return H_NONE;
         case IT_BUTTON:
             return InLogical(ButtonRect(it), x, y) ? HIT(i, 0) : H_NONE;
+        case IT_VOLUME:
+            return ItemEnabled(it->def->key) && InLogical(Rc(16, it->y + 22, PW - 16, it->y + 56), x, y) ? HIT(i, 0) : H_NONE;
         case IT_PICKER:
             if (!ItemEnabled(it->def->key)) return H_NONE;
             for (int s = 0; s < 3; ++s) if (InLogical(PickRect(it, s), x, y)) return HIT(i, s);
@@ -437,8 +439,30 @@ static void DrawItem(Canvas *c, const Item *it, int idx)
         DrawButton(c, ButtonRect(it), HIT(idx, 0), d->title, FALSE, FALSE);
         break;
 
+    case IT_VOLUME: {           /* deslizador con altavoz que cambia y el porcentaje; suena al soltar */
+        const BOOL on = ItemEnabled(d->key);
+        const int v = g_cfg.soundVol;
+        wchar_t pct[16];
+        wsprintfW(pct, v ? L"%d %%" : L"Sin sonido", v);
+        TextR(c, P.fBody, d->title, Rc(16, it->y + 2, PW - 16, it->y + 22), fg, 0);
+        TextR(c, P.fStrong, pct, Rc(16, it->y + 2, PW - 16, it->y + 22), on ? t->fg : t->fg2, DT_RIGHT);
+        const float sl = (float)S(46), sr = (float)S(PW - 46), cy = (float)S(it->y + 40);
+        const float tx = sl + (sr - sl) * v / 100.0f, a = on ? 1.0f : 0.4f;
+        const BOOL hot = P.hover == HIT(idx, 0);
+        LPCWSTR lo = v == 0 ? L"\xE74F" : v < 34 ? L"\xE993" : v < 67 ? L"\xE994" : L"\xE995";
+        Gfx_Text(c, P.fIcon, lo, S(16), (int)cy - S(10), S(24), S(20), on ? t->fg2 : t->fg3, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        Gfx_Text(c, P.fIcon, L"\xE995", S(PW - 40), (int)cy - S(10), S(24), S(20), on ? t->fg2 : t->fg3, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        const float th = (float)S(hot || P.dragging ? 8 : 6);
+        Gfx_FillRRect(c, sl, cy - th * 0.5f, sr - sl, th, th * 0.5f, t->track, a);
+        Gfx_FillRRect(c, sl, cy - th * 0.5f, max(th, tx - sl), th, th * 0.5f, t->accent, a);
+        Gfx_FillCircle(c, tx, cy, (float)S(9), t->thumb, a);
+        if (!t->dark) Gfx_StrokeRRect(c, tx - S(9), cy - S(9), (float)S(18), (float)S(18), (float)S(9), 1.0f, t->line, a);
+        break;
+    }
+
     case IT_PICKER: {           /* la librería de sonidos: se recorre con ‹ › y suena al elegir */
         TextR(c, P.fBody, d->title, Rc(16, it->y + 2, PW - 16, it->y + 22), fg, 0);
+        TextR(c, P.fSmall, Notch_SoundFamily(g_cfg.sound), Rc(16, it->y + 2, PW - 16, it->y + 22), t->fg2, DT_RIGHT);
         FillR(c, Rc(16, it->y + 24, PW - 16, it->y + 54), 8, t->ctrl, 1.0f);
         for (int s = 0; s < 3; ++s) {
             const RECT r = PickRect(it, s), in = Rc(r.left + 2, r.top + 2, r.right - 2, r.bottom - 2);
@@ -447,7 +471,7 @@ static void DrawItem(Canvas *c, const Item *it, int idx)
         TextR(c, P.fStrong, L"\x2039", PickRect(it, 0), fg, DT_CENTER);
         TextR(c, P.fStrong, L"\x203A", PickRect(it, 2), fg, DT_CENTER);
         wchar_t label[64];
-        wsprintfW(label, L"%s   %d/%d", Notch_SoundName(g_cfg.sound), g_cfg.sound + 1, SOUND_COUNT);
+        wsprintfW(label, L"%s", Notch_SoundName(g_cfg.sound));
         TextR(c, P.fStrong, label, PickRect(it, 1), fg, DT_CENTER);
         break;
     }
@@ -557,8 +581,16 @@ static void SetTab(int tab)
     Resize();
 }
 
+static BOOL s_dragVol;          /* el arrastre es el del volumen, no el del radio */
+
 static void SliderTo(int x)
 {
+    if (s_dragVol) {
+        const float sl = (float)S(46), sr = (float)S(PW - 46);
+        const int v = (int)(max(0.0f, min(1.0f, ((float)x - sl) / (sr - sl))) * 100.0f + 0.5f);
+        if (v != g_cfg.soundVol) { g_cfg.soundVol = v; Panel_Refresh(); }
+        return;
+    }
     const float sl = (float)S(26), sr = (float)S(PW - 26);
     float t = ((float)x - sl) / (sr - sl);
     if (t < 0) t = 0;
@@ -614,7 +646,6 @@ static void Activate(int hit)
         if (sub == 0) g_cfg.sound = (g_cfg.sound + SOUND_COUNT - 1) % SOUND_COUNT;
         else if (sub == 2) g_cfg.sound = (g_cfg.sound + 1) % SOUND_COUNT;
         Cfg_Save(); Notch_PlaySound(); Panel_Refresh(); return;
-    case K_SOUNDVOL: g_cfg.soundVol = sub; Cfg_Save(); Notch_PlaySound(); Panel_Refresh(); return;
     case K_STYLE:    g_cfg.floating = sub; break;
     case K_MATERIAL:
         g_cfg.material = sub;
@@ -655,8 +686,10 @@ static void SnapSwitches(void)
 
 static BOOL IsSliderHit(int hit)
 {
-    return hit > 0 && hit < H_MASTER && HIT_ITEM(hit) < P.nitems &&
-           P.items[HIT_ITEM(hit)].def->type == IT_RADIUS && HIT_SUB(hit) == 0;
+    if (hit <= 0 || hit >= H_MASTER || HIT_ITEM(hit) >= P.nitems || HIT_SUB(hit) != 0) return FALSE;
+    const int type = P.items[HIT_ITEM(hit)].def->type;
+    s_dragVol = type == IT_VOLUME;
+    return type == IT_RADIUS || type == IT_VOLUME;
 }
 
 static LRESULT PanelInput(HWND h, UINT m, WPARAM w, LPARAM l);
@@ -754,6 +787,7 @@ static LRESULT PanelInput(HWND h, UINT m, WPARAM w, LPARAM l)
             P.dragging = FALSE;
             ReleaseCapture();
             Cfg_Save();
+            if (s_dragVol) Notch_PlaySound();       /* así suena con el volumen elegido */
         } else if (pressed != H_NONE && pressed == hit) {
             Activate(hit);
         }
@@ -765,9 +799,15 @@ static LRESULT PanelInput(HWND h, UINT m, WPARAM w, LPARAM l)
         if (P.dragging) { P.dragging = FALSE; Cfg_Save(); InvalidateRect(h, NULL, FALSE); }
         return 0;
 
-    case WM_MOUSEWHEEL:
-        if (P.tab == 0) App_SetRadius(g_cfg.radius + (GET_WHEEL_DELTA_WPARAM(w) > 0 ? 1 : -1), 0);
+    case WM_MOUSEWHEEL: {
+        const BOOL up = GET_WHEEL_DELTA_WPARAM(w) > 0;
+        if (P.hover > 0 && P.hover < H_MASTER && HIT_ITEM(P.hover) < P.nitems &&
+            P.items[HIT_ITEM(P.hover)].def->type == IT_VOLUME) {      /* rueda sobre el volumen: de 5 en 5 */
+            g_cfg.soundVol = max(0, min(100, g_cfg.soundVol + (up ? 5 : -5)));
+            Cfg_Save(); Panel_Refresh(); Notch_PlaySound();
+        } else if (P.tab == 0) App_SetRadius(g_cfg.radius + (up ? 1 : -1), 0);
         return 0;
+    }
 
     case WM_KEYDOWN:
         switch (w) {

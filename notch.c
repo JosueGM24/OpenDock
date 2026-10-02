@@ -978,34 +978,69 @@ static void StopFrames(void)
 }
 
 /* ───────────────────────── Sonido ─────────────────────────
- * Familia "campanita": campanas de síntesis FM (portadora modulada por otra a una razón no
- * entera, con un índice que se apaga: el ataque brilla y la cola queda pura). Nada de
- * archivos: se generan la primera vez que suenan y se guardan en memoria. El volumen se
- * aplica al reproducir, también al sonido de Windows. */
-typedef struct { float at, f, decay, amp, ratio, index; } Bell;
-typedef struct { LPCWSTR name; float len, echo; const Bell *b; int n; } SoundDef;
+ * Librería propia, sintetizada aquí (nada de archivos) y agrupada por familias: campanas
+ * FM (la de "Campanita"), teclas (Rhodes, kalimba, vibráfono, marimba), cuerdas pulsadas
+ * (Karplus-Strong), sonidos de interfaz modernos y ambientes. Algunos llevan una sala
+ * pequeña (reverberación Schroeder) para que no suenen secos. Se generan la primera vez
+ * que suenan y se guardan en memoria; el volumen se aplica al reproducir. */
+enum { S_FM, S_VIB, S_PLUCK, S_NOISE, S_DROP, S_PAD, S_BOWL, S_SOFT };
+typedef struct { float at, f, decay, amp; int kind; float p1, p2; } Note;
+typedef struct { LPCWSTR name; int cat; float len, echo, verb; const Note *n; int count; } SoundDef;
+enum { CAT_BELL, CAT_KEYS, CAT_STRINGS, CAT_MODERN, CAT_AMBIENT };
 
-/*                                 inicio  frec     caída amp   razón índice */
-static const Bell kCampanita[] = { { 0.00f, 1046.5f, 4.0f, .60f, 3.5f, 2.4f } };
-static const Bell kDoble[]     = { { 0.00f, 1046.5f, 5.0f, .55f, 3.5f, 2.4f }, { 0.16f, 1568.0f, 4.5f, .50f, 3.5f, 2.2f } };
-static const Bell kCarillon[]  = { { 0.00f, 1318.5f, 4.5f, .50f, 3.5f, 2.2f }, { 0.14f, 1046.5f, 4.5f, .50f, 3.5f, 2.2f },
-                                   { 0.28f,  784.0f, 3.5f, .55f, 3.5f, 2.4f } };
-static const Bell kCristalina[]= { { 0.00f, 2637.0f, 6.5f, .45f, 2.0f, 1.6f } };
-static const Bell kTubular[]   = { { 0.00f,  784.0f, 2.6f, .65f, 1.4f, 3.0f } };
-static const Bell kCelesta[]   = { { 0.00f, 1046.5f, 7.0f, .50f, 4.0f, 1.8f }, { 0.09f, 1318.5f, 7.0f, .50f, 4.0f, 1.8f } };
-static const Bell kGlock[]     = { { 0.00f, 2093.0f, 6.0f, .40f, 3.5f, 1.4f }, { 0.07f, 2637.0f, 6.0f, .40f, 3.5f, 1.4f },
-                                   { 0.14f, 3136.0f, 5.5f, .40f, 3.5f, 1.4f } };
-static const Bell kTemplo[]    = { { 0.00f,  523.3f, 1.8f, .65f, 1.4f, 2.6f }, { 0.00f, 1046.5f, 3.0f, .20f, 3.5f, 1.2f } };
-static const Bell kBrillo[]    = { { 0.00f, 1568.0f, 5.0f, .55f, 3.5f, 2.0f } };
-static const Bell kAscenso[]   = { { 0.00f, 1568.0f, 6.0f, .50f, 3.5f, 2.2f }, { 0.10f, 2093.0f, 4.5f, .50f, 3.5f, 2.2f } };
-static const Bell kSerena[]    = { { 0.00f,  880.0f, 3.5f, .60f, 3.5f, 1.2f } };
+/* campanas FM: p1 = razón del modulador, p2 = índice                     */
+static const Note kCampanita[] = { { 0.00f, 1046.5f, 4.0f, .60f, S_FM, 3.5f, 2.4f } };
+static const Note kDoble[]     = { { 0.00f, 1046.5f, 5.0f, .55f, S_FM, 3.5f, 2.4f }, { 0.16f, 1568.0f, 4.5f, .50f, S_FM, 3.5f, 2.2f } };
+static const Note kCarillon[]  = { { 0.00f, 1318.5f, 4.5f, .50f, S_FM, 3.5f, 2.2f }, { 0.14f, 1046.5f, 4.5f, .50f, S_FM, 3.5f, 2.2f },
+                                   { 0.28f,  784.0f, 3.5f, .55f, S_FM, 3.5f, 2.4f } };
+static const Note kCristalina[]= { { 0.00f, 2637.0f, 6.5f, .45f, S_FM, 2.0f, 1.6f } };
+static const Note kTubular[]   = { { 0.00f,  784.0f, 2.6f, .65f, S_FM, 1.4f, 3.0f } };
+static const Note kCelesta[]   = { { 0.00f, 1046.5f, 7.0f, .50f, S_FM, 4.0f, 1.8f }, { 0.09f, 1318.5f, 7.0f, .50f, S_FM, 4.0f, 1.8f } };
+static const Note kGlock[]     = { { 0.00f, 2093.0f, 6.0f, .40f, S_FM, 3.5f, 1.4f }, { 0.07f, 2637.0f, 6.0f, .40f, S_FM, 3.5f, 1.4f },
+                                   { 0.14f, 3136.0f, 5.5f, .40f, S_FM, 3.5f, 1.4f } };
+static const Note kTemplo[]    = { { 0.00f,  523.3f, 1.8f, .65f, S_FM, 1.4f, 2.6f }, { 0.00f, 1046.5f, 3.0f, .20f, S_FM, 3.5f, 1.2f } };
+static const Note kBrillo[]    = { { 0.00f, 1568.0f, 5.0f, .55f, S_FM, 3.5f, 2.0f } };
+static const Note kAscenso[]   = { { 0.00f, 1568.0f, 6.0f, .50f, S_FM, 3.5f, 2.2f }, { 0.10f, 2093.0f, 4.5f, .50f, S_FM, 3.5f, 2.2f } };
+static const Note kSerena[]    = { { 0.00f,  880.0f, 3.5f, .60f, S_FM, 3.5f, 1.2f } };
+/* teclas */
+static const Note kRhodes[]    = { { 0.00f,  523.3f, 2.4f, .55f, S_FM, 1.0f, 1.8f }, { 0.00f,  659.3f, 2.4f, .42f, S_FM, 1.0f, 1.5f },
+                                   { 0.12f,  784.0f, 2.2f, .50f, S_FM, 1.0f, 1.8f } };
+static const Note kKalimba[]   = { { 0.00f, 1046.5f, 6.5f, .60f, S_FM, 6.9f, 1.1f }, { 0.12f, 1318.5f, 6.5f, .55f, S_FM, 6.9f, 1.1f } };
+static const Note kVibra[]     = { { 0.00f,  880.0f, 1.8f, .55f, S_VIB, 5.5f }, { 0.15f, 1108.7f, 1.8f, .45f, S_VIB, 5.5f } };
+static const Note kMarimba[]   = { { 0.00f,  523.3f, 8.0f, .55f, S_FM, 4.0f, 0.9f }, { 0.09f,  659.3f, 8.0f, .55f, S_FM, 4.0f, 0.9f },
+                                   { 0.18f,  784.0f, 7.0f, .58f, S_FM, 4.0f, 0.9f } };
+/* cuerdas pulsadas: p1 = brillo */
+static const Note kArpa[]      = { { 0.00f,  523.3f, 0, .50f, S_PLUCK, 0.70f }, { 0.06f,  659.3f, 0, .48f, S_PLUCK, 0.70f },
+                                   { 0.12f,  784.0f, 0, .46f, S_PLUCK, 0.70f }, { 0.18f, 1046.5f, 0, .44f, S_PLUCK, 0.70f } };
+static const Note kPizz[]      = { { 0.00f,  784.0f, 0, .60f, S_PLUCK, 0.25f }, { 0.11f, 1174.7f, 0, .55f, S_PLUCK, 0.25f } };
+/* modernos */
+static const Note kTritono[]   = { { 0.00f, 1174.7f, 9.0f, .50f, S_FM, 2.0f, 0.6f }, { 0.08f, 1568.0f, 9.0f, .50f, S_FM, 2.0f, 0.6f },
+                                   { 0.16f, 2349.3f, 8.0f, .50f, S_FM, 2.0f, 0.6f } };
+static const Note kBurbuja[]   = { { 0.00f,  600.0f, 16, .70f, S_DROP, 2.0f }, { 0.08f,  820.0f, 18, .45f, S_DROP, 1.8f } };
+static const Note kToque[]     = { { 0.00f, 1400.0f, 32, .70f, S_FM, 1.0f, 0.4f }, { 0.00f, 3500.0f, 0, .22f, S_NOISE, 3500, 0.012f } };
+static const Note kNeon[]      = { { 0.00f,  659.3f, 5.0f, .50f, S_SOFT }, { 0.10f,  987.8f, 4.5f, .45f, S_SOFT } };
+/* ambientes */
+static const Note kAire[]      = { { 0.00f, 2500.0f, 0, .45f, S_NOISE, 2500, 0.45f }, { 0.25f, 1568.0f, 4.0f, .35f, S_FM, 3.5f, 1.6f } };
+static const Note kCuenco[]    = { { 0.00f,  432.0f, 1.6f, .70f, S_BOWL } };
+static const Note kAurora[]    = { { 0.00f,  523.3f, 0, .30f, S_PAD, 1.1f }, { 0.00f, 659.3f, 0, .26f, S_PAD, 1.1f },
+                                   { 0.00f,  784.0f, 0, .24f, S_PAD, 1.1f }, { 0.35f, 2093.0f, 6.0f, .14f, S_FM, 3.5f, 1.4f } };
 
-#define SND(name, len, echo, arr) { name, len, echo, arr, (int)(sizeof(arr) / sizeof(arr[0])) }
+#define SND(name, cat, len, echo, verb, arr) { name, cat, len, echo, verb, arr, (int)(sizeof(arr) / sizeof(arr[0])) }
+/* el orden de las campanas no cambia (los índices guardados siguen valiendo) */
 static const SoundDef kSounds[SOUND_COUNT - 2] = {
-    SND(L"Campanita", 1.00f, 0, kCampanita),  SND(L"Doble", 1.05f, 0, kDoble),       SND(L"Carillón", 1.25f, 0, kCarillon),
-    SND(L"Cristalina", 0.75f, 0, kCristalina), SND(L"Tubular", 1.60f, 0, kTubular),  SND(L"Celesta", 0.80f, 0, kCelesta),
-    SND(L"Glockenspiel", 0.85f, 0, kGlock),    SND(L"Templo", 2.00f, 0, kTemplo),    SND(L"Brillo", 1.10f, 0.28f, kBrillo),
-    SND(L"Ascenso", 0.95f, 0, kAscenso),       SND(L"Serena", 1.20f, 0, kSerena),
+    SND(L"Campanita", CAT_BELL, 1.00f, 0, 0, kCampanita),   SND(L"Doble", CAT_BELL, 1.05f, 0, 0, kDoble),
+    SND(L"Carillón", CAT_BELL, 1.25f, 0, 0, kCarillon),     SND(L"Cristalina", CAT_BELL, 0.75f, 0, 0, kCristalina),
+    SND(L"Tubular", CAT_BELL, 1.60f, 0, 0, kTubular),       SND(L"Celesta", CAT_BELL, 0.80f, 0, 0, kCelesta),
+    SND(L"Glockenspiel", CAT_BELL, 0.85f, 0, 0, kGlock),    SND(L"Templo", CAT_BELL, 2.00f, 0, 0, kTemplo),
+    SND(L"Brillo", CAT_BELL, 1.10f, 0.28f, 0, kBrillo),     SND(L"Ascenso", CAT_BELL, 0.95f, 0, 0, kAscenso),
+    SND(L"Serena", CAT_BELL, 1.20f, 0, 0, kSerena),
+    SND(L"Rhodes", CAT_KEYS, 1.50f, 0, 0.22f, kRhodes),     SND(L"Kalimba", CAT_KEYS, 1.00f, 0, 0.20f, kKalimba),
+    SND(L"Vibráfono", CAT_KEYS, 1.70f, 0, 0.25f, kVibra),   SND(L"Marimba", CAT_KEYS, 1.00f, 0, 0.18f, kMarimba),
+    SND(L"Arpa", CAT_STRINGS, 1.60f, 0, 0.25f, kArpa),      SND(L"Pizzicato", CAT_STRINGS, 0.85f, 0, 0.20f, kPizz),
+    SND(L"Tritono", CAT_MODERN, 0.85f, 0, 0.15f, kTritono), SND(L"Burbuja", CAT_MODERN, 0.60f, 0, 0.20f, kBurbuja),
+    SND(L"Toque", CAT_MODERN, 0.45f, 0, 0.12f, kToque),     SND(L"Neón", CAT_MODERN, 1.00f, 0, 0.22f, kNeon),
+    SND(L"Aire", CAT_AMBIENT, 1.40f, 0, 0.30f, kAire),      SND(L"Cuenco", CAT_AMBIENT, 2.40f, 0, 0.20f, kCuenco),
+    SND(L"Aurora", CAT_AMBIENT, 1.70f, 0, 0.30f, kAurora),
 };
 
 LPCWSTR Notch_SoundName(int i)
@@ -1015,12 +1050,120 @@ LPCWSTR Notch_SoundName(int i)
     return i > 1 && i < SOUND_COUNT ? kSounds[i - 2].name : L"";
 }
 
-static float BellAt(const Bell *n, float lt)
+LPCWSTR Notch_SoundFamily(int i)
 {
-    const float tau = 6.2831853f;
-    const float idx = n->index * expf(-lt * n->decay * 0.8f);
-    const float v = sinf(tau * n->f * lt + idx * sinf(tau * n->f * n->ratio * lt)) * expf(-lt * n->decay);
-    return v * min(1.0f, lt / 0.003f) * n->amp;
+    static const LPCWSTR kCat[] = { L"Campanas", L"Teclas", L"Cuerdas", L"Modernos", L"Ambiente" };
+    if (i <= 1) return L"Sistema";
+    return i < SOUND_COUNT ? kCat[kSounds[i - 2].cat] : L"";
+}
+
+/* ruido reproducible (el mismo sonido cada vez) */
+static float Noise(unsigned *seed) { *seed = *seed * 1664525u + 1013904223u; return (float)(int)(*seed >> 8) / 8388608.0f - 1.0f; }
+
+static void RenderNote(const Note *n, float *mix, int count, int rate)
+{
+    const float tau = 6.2831853f, f = n->f, d = n->decay;
+    const int start = (int)(n->at * rate);
+    unsigned seed = 0x9E3779B9u ^ (unsigned)(f * 7.0f);
+    if (n->kind == S_PLUCK) {              /* Karplus-Strong: un pulso de ruido que se filtra en un bucle */
+        const int P = max(2, (int)(rate / f + 0.5f));
+        float *buf = (float *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)P * sizeof(float));
+        if (!buf) return;
+        float prev = 0;
+        for (int k = 0; k < P; ++k) { const float r = Noise(&seed); prev = prev + (r - prev) * (0.35f + 0.6f * n->p1); buf[k] = prev; }
+        const float damp = 0.994f + 0.0045f * n->p1;
+        int idx = 0;
+        for (int i = start; i < count; ++i) {
+            const int nx = (idx + 1) % P;
+            const float out = buf[idx];
+            buf[idx] = (buf[idx] + buf[nx]) * 0.5f * damp;
+            idx = nx;
+            mix[i] += out * n->amp;
+        }
+        HeapFree(GetProcessHeap(), 0, buf);
+        return;
+    }
+    float bp = 0, lp = 0;                  /* filtro de estado para el ruido (paso banda) */
+    const float fc = 2.0f * sinf(3.14159f * min(0.45f, n->p1 / rate)), q = 0.5f;
+    for (int i = start; i < count; ++i) {
+        const float lt = (float)(i - start) / rate;
+        float v = 0;
+        switch (n->kind) {
+        case S_FM: {
+            const float idx = n->p2 * expf(-lt * d * 0.8f);
+            v = sinf(tau * f * lt + idx * sinf(tau * f * n->p1 * lt)) * expf(-lt * d);
+            break;
+        }
+        case S_VIB:                        /* barra metálica con su parcial a 4× y trémolo */
+            v = (sinf(tau * f * lt) + 0.28f * sinf(tau * 4.0f * f * lt) * expf(-lt * d * 3.0f)) * expf(-lt * d)
+              * (1.0f - 0.3f * (0.5f + 0.5f * sinf(tau * n->p1 * lt)));
+            break;
+        case S_NOISE: {                    /* soplo: ruido filtrado que entra y sale */
+            if (lt >= n->p2) return;
+            const float x = Noise(&seed);
+            lp += fc * bp; const float hp = x - lp - q * bp; bp += fc * hp;
+            const float e = sinf(3.14159f * lt / n->p2);
+            v = bp * e * e * 1.6f;
+            break;
+        }
+        case S_DROP: {
+            const float k = 28.0f, ph = tau * f * (n->p1 * lt + (1.0f - n->p1) * (1.0f - expf(-k * lt)) / k);
+            v = sinf(ph) * expf(-lt * d);
+            break;
+        }
+        case S_PAD: {
+            if (lt >= n->p1) return;
+            const float e = sinf(3.14159f * lt / n->p1);
+            v = (sinf(tau * f * lt) + sinf(tau * f * 1.003f * lt) + sinf(tau * f * 0.997f * lt)) * (e * e) / 3.0f;
+            break;
+        }
+        case S_BOWL:
+            v = sinf(tau * f * lt) * expf(-lt * d) * (1.0f + 0.25f * sinf(tau * 3.0f * lt))
+              + 0.45f * sinf(tau * 2.76f * f * lt) * expf(-lt * d * 1.8f) + 0.18f * sinf(tau * 5.4f * f * lt) * expf(-lt * d * 3.0f);
+            break;
+        case S_SOFT:                       /* sintetizador suave: armónicos que se apagan antes que la fundamental */
+            for (int h = 1; h <= 6; ++h) v += sinf(tau * h * f * lt) / h * expf(-lt * d * (1.0f + 0.7f * (h - 1)));
+            v *= 0.6f;
+            break;
+        }
+        const float attack = n->kind == S_PAD || n->kind == S_NOISE ? 1.0f : min(1.0f, lt / 0.003f);
+        mix[i] += v * attack * n->amp;
+    }
+}
+
+/* Sala pequeña: cuatro peines con amortiguación y dos pasatodo (Schroeder / Freeverb). */
+static void Reverb(float *x, int n, float wet)
+{
+    static const int kComb[4] = { 1557, 1617, 1491, 1422 }, kAll[2] = { 556, 441 };
+    float *buf = (float *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (SIZE_T)(1617 + 1557 + 1491 + 1422 + 556 + 441) * sizeof(float));
+    float *out = (float *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (SIZE_T)n * sizeof(float));
+    if (!buf || !out) { if (buf) HeapFree(GetProcessHeap(), 0, buf); if (out) HeapFree(GetProcessHeap(), 0, out); return; }
+    float *cb[4], *ab[2], store[4] = { 0 };
+    int ci[4] = { 0 }, ai[2] = { 0 };
+    float *p = buf;
+    for (int k = 0; k < 4; ++k) { cb[k] = p; p += kComb[k]; }
+    for (int k = 0; k < 2; ++k) { ab[k] = p; p += kAll[k]; }
+    for (int i = 0; i < n; ++i) {
+        const float in = x[i] * 0.25f;
+        float s = 0;
+        for (int k = 0; k < 4; ++k) {
+            const float y = cb[k][ci[k]];
+            store[k] = y * 0.75f + store[k] * 0.25f;            /* amortiguación de agudos */
+            cb[k][ci[k]] = in + store[k] * 0.80f;
+            if (++ci[k] >= kComb[k]) ci[k] = 0;
+            s += y;
+        }
+        for (int k = 0; k < 2; ++k) {
+            const float b = ab[k][ai[k]];
+            ab[k][ai[k]] = s + b * 0.5f;
+            s = b - s * 0.5f;
+            if (++ai[k] >= kAll[k]) ai[k] = 0;
+        }
+        out[i] = s;
+    }
+    for (int i = 0; i < n; ++i) x[i] += out[i] * wet;
+    HeapFree(GetProcessHeap(), 0, out);
+    HeapFree(GetProcessHeap(), 0, buf);
 }
 
 static void WavHeader(BYTE *h, int rate, DWORD dataLen)
@@ -1040,14 +1183,12 @@ static BYTE *BuildSound(const SoundDef *s, DWORD *size)
     float *mix = (float *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (SIZE_T)n * sizeof(float));
     BYTE *h = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 44 + (SIZE_T)n * 2);
     if (!mix || !h) { if (mix) HeapFree(GetProcessHeap(), 0, mix); if (h) HeapFree(GetProcessHeap(), 0, h); return NULL; }
-    for (int i = 0; i < n; ++i) {
-        const float t = (float)i / rate;
-        for (int k = 0; k < s->n; ++k) if (t >= s->b[k].at) mix[i] += BellAt(&s->b[k], t - s->b[k].at);
-    }
+    for (int k = 0; k < s->count; ++k) RenderNote(&s->n[k], mix, n, rate);
     if (s->echo > 0) {                 /* eco: repeticiones cada 130 ms que se apagan */
         const int d = rate * 13 / 100;
         for (int i = d; i < n; ++i) mix[i] += mix[i - d] * s->echo;
     }
+    if (s->verb > 0) Reverb(mix, n, s->verb);
     float peak = 0.0001f;
     for (int i = 0; i < n; ++i) peak = max(peak, fabsf(mix[i]));
     const int fade = rate / 25;        /* 40 ms de salida, sin chasquido */
@@ -1121,7 +1262,7 @@ void Notch_PlaySound(void)
 {
     static BYTE *s_built[SOUND_COUNT];
     static DWORD s_size[SOUND_COUNT];
-    static const float kGain[4] = { 0.30f, 0.55f, 0.80f, 1.0f };     /* bajo · medio · alto · máximo */
+    const float gain = powf(max(0, min(100, g_cfg.soundVol)) / 100.0f, 1.2f);   /* 0..100, curva de oído */
     const int i = g_cfg.sound;
     if (i <= 0 || i >= SOUND_COUNT) return;
     if (!s_built[i]) s_built[i] = i == 1 ? LoadWindowsSound(&s_size[i]) : BuildSound(&kSounds[i - 2], &s_size[i]);
@@ -1130,7 +1271,8 @@ void Notch_PlaySound(void)
         if (i == 1) PlaySoundW(L"Notification.Default", NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
         return;
     }
-    const BYTE *w = WithVolume(s_built[i], s_size[i], kGain[max(0, min(3, g_cfg.soundVol))]);
+    if (gain <= 0.001f) return;
+    const BYTE *w = WithVolume(s_built[i], s_size[i], gain);
     PlaySoundW((LPCWSTR)w, NULL, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
 }
 

@@ -61,7 +61,7 @@ typedef struct {
     int  dockAutoHide;  /* ocultar dock sin el cursor: 0 no · 1 a la mitad · 2 del todo */
     BOOL dockWinFull;   /* con el dock oculto, las ventanas maximizadas llegan hasta abajo */
     BOOL siteIcons;     /* avisos del navegador: el icono del sitio (si lo trae) en vez de su inicial */
-    int  soundVol;      /* volumen del sonido de notificación: 0 bajo · 1 medio · 2 alto · 3 máximo */
+    int  soundVol;      /* volumen del sonido de notificación, 0..100 */
 } Config;
 
 enum { MAT_OLED, MAT_GLASS, MAT_SYSTEM };
@@ -256,8 +256,9 @@ HBITMAP Wn_AppIcon(LPCWSTR aumid, int px);  /* icono 32 bpp al tamaño exacto; l
 HBITMAP Wn_LogoIcon(LPCWSTR path, int px);
 
 /* sonidos de notificación (notch.c): 0 silencio · 1 Windows · 2… los propios */
-#define SOUND_COUNT 13
-LPCWSTR Notch_SoundName(int i);  /* el icono propio de un aviso (PNG, JPG, ICO…); ídem */
+#define SOUND_COUNT 26
+LPCWSTR Notch_SoundName(int i);
+LPCWSTR Notch_SoundFamily(int i);  /* el icono propio de un aviso (PNG, JPG, ICO…); ídem */
 
 /* ── menubar.c: barra superior estilo macOS + centro de control ── */
 void Bar_Register(void);
