@@ -384,8 +384,8 @@ void Pop_Step(Pop *p)
         } else {
             /* contenido y forma ligados a la altura: nada se apaga de golpe */
             const float prog = max(0.0f, min(1.0f, p->ah / max(1.0f, (float)p->ch)));
-            const float f = max(0.0f, min(1.0f, (prog - 0.25f) / 0.5f));
-            p->fade = min(p->fade, f * f * (3 - 2 * f));
+            const float k = max(0.0f, min(1.0f, (prog - 0.25f) / 0.5f));
+            p->fade = min(p->fade, k * k * (3 - 2 * k));
             if (p->ah < 0.6f && fabsf(p->vah) < 40.0f) {
                 Live(p, FALSE);
                 DestroyWindow(p->hwnd);

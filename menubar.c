@@ -1039,8 +1039,7 @@ static DWORD WINAPI BrightnessWorker(LPVOID unused)
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
     IWbemServices *svc = NULL;
     if (WmiConnect(&svc)) s_brightCurrent = WmiReadBrightness(svc);
-    for (;;) {
-        WaitForSingleObject(s_brightEvent, INFINITE);
+    while (WaitForSingleObject(s_brightEvent, INFINITE) == WAIT_OBJECT_0) {
         const LONG target = InterlockedExchange(&s_brightTarget, -1);
         if (!svc && !WmiConnect(&svc)) continue;
         if (target >= 0) WmiSetBrightness(svc, target);
