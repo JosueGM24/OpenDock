@@ -3,7 +3,7 @@
  *
  * Barra: una franja fina en el borde superior del monitor principal, registrada como
  * AppBar (SHAppBarMessage): Windows le reserva el espacio y las ventanas maximizadas
- * quedan debajo, así nunca tapa sus botones. Izquierda: logo + app activa. Derecha:
+ * quedan debajo, así nunca tapa sus botones. Izquierda: icono y nombre de la app activa. Derecha:
  * volumen, Wi-Fi, batería, fecha/hora y el botón del centro de control. Se oculta sola
  * con apps a pantalla completa.
  *
@@ -23,6 +23,7 @@
 #include <wbemcli.h>
 #include <bluetoothapis.h>
 #include <math.h>
+#include <shobjidl.h>
 #include "resource.h"
 
 #define BAR_CLASS       L"OpenDock.MenuBar"
@@ -85,6 +86,9 @@ static struct {
     int     sBatt;
     HPOWERNOTIFY battNotify;
     wchar_t app[64];
+    HBITMAP appIcon;            /* icono de la app activa (NULL: el logo) */
+    int     appIconPx;
+    wchar_t appKey[MAX_PATH];   /* de qué es ese icono: AppUserModelID o ruta del ejecutable */
     int     lastMinute;
 
     /* estado del sistema */
@@ -116,6 +120,7 @@ static void LoadBarLook(void)
     const int a = max(0, min(ACCENT_COUNT - 1, g_cfg.accent));
     l->accent = a ? kAccentPresets[a] : (l->light ? th.accent : th.accentOnBlack);
     l->tileOn = l->accent;
+    if (B.hwnd) App_BarSurfaceChanged();   /* las esquinas de arriba llevan el color de la barra */
 }
 
 /* ───────────────────────── Vidrio ─────────────────────────
@@ -133,7 +138,8 @@ static BOOL CaptureBarBack(void)
     if (!B.hwnd || !BarGlass()) return FALSE;
     /* algo más que la barra: el desenfoque de su borde de abajo cuenta con lo que hay
      * debajo, igual que el del notch pegado cuenta con lo que hay detrás de la barra */
-    const int sw = max(1, (B.mon.right - B.mon.left) / BACK_SCALE), sh = max(1, (B.h + BS(24) + BACK_SCALE - 1) / BACK_SCALE);
+    const int below = max(BS(24), MulDiv(g_cfg.radius, (int)B.dpi, 96));      /* + las esquinas de arriba */
+    const int sw = max(1, (B.mon.right - B.mon.left) / BACK_SCALE), sh = max(1, (B.h + below + BACK_SCALE - 1) / BACK_SCALE);
     if (s_back.w != sw || s_back.h != sh) {
         Canvas_Free(&s_back);
         if (!Canvas_Init(&s_back, sw, sh)) return FALSE;
@@ -159,23 +165,36 @@ static BOOL CaptureBarBack(void)
     return changed;
 }
 
+/* El vidrio en (x, y) relativo a la esquina superior izquierda de la barra. */
+static DWORD GlassAt(int x, int y, DWORD tint)
+{
+    const float fy = (y + 0.5f) / BACK_SCALE - 0.5f, fx = (x + 0.5f) / BACK_SCALE - 0.5f;
+    const int y0 = max(0, min(s_back.h - 1, (int)floorf(fy))), y1 = min(s_back.h - 1, y0 + 1);
+    const int x0 = max(0, min(s_back.w - 1, (int)floorf(fx))), x1 = min(s_back.w - 1, x0 + 1);
+    const float ty = max(0.0f, min(1.0f, fy - y0)), tx = max(0.0f, min(1.0f, fx - x0));
+    const DWORD *p = s_back.px;
+    const DWORD b = Gfx_Mix(Gfx_Mix(p[y0 * s_back.w + x0], p[y0 * s_back.w + x1], tx),
+                            Gfx_Mix(p[y1 * s_back.w + x0], p[y1 * s_back.w + x1], tx), ty);
+    return Gfx_Mix(b, tint, 0.52f) & 0xFFFFFF;
+}
+
 static void PaintGlass(Canvas *c, DWORD tint)
 {
     GdiFlush();
-    for (int y = 0; y < c->h; ++y) {
-        const float fy = (y + 0.5f) / BACK_SCALE - 0.5f;
-        const int y0 = max(0, min(s_back.h - 1, (int)floorf(fy))), y1 = min(s_back.h - 1, y0 + 1);
-        const float ty = max(0.0f, min(1.0f, fy - y0));
-        for (int x = 0; x < c->w; ++x) {
-            const float fx = (x + 0.5f) / BACK_SCALE - 0.5f;
-            const int x0 = max(0, min(s_back.w - 1, (int)floorf(fx))), x1 = min(s_back.w - 1, x0 + 1);
-            const float tx = max(0.0f, min(1.0f, fx - x0));
-            const DWORD *p = s_back.px;
-            const DWORD b = Gfx_Mix(Gfx_Mix(p[y0 * s_back.w + x0], p[y0 * s_back.w + x1], tx),
-                                    Gfx_Mix(p[y1 * s_back.w + x0], p[y1 * s_back.w + x1], tx), ty);
-            c->px[y * c->w + x] = Gfx_Mix(b, tint, 0.52f) & 0xFFFFFF;
-        }
-    }
+    for (int y = 0; y < c->h; ++y)
+        for (int x = 0; x < c->w; ++x) c->px[y * c->w + x] = GlassAt(x, y, tint);
+}
+
+/* Las esquinas redondeadas de arriba empiezan bajo la barra. En vez de negro se pintan con
+ * la superficie de la barra (su vidrio, o su color), así la barra parece curvarse hacia
+ * abajo en las esquinas. FALSE si en ese monitor no hay barra. glass: si es vidrio (cambia
+ * con lo de detrás; esas esquinas quedan fuera de captura, como la barra). */
+BOOL Bar_Surface(const RECT *mon, int sx, int sy, DWORD *rgb, BOOL *glass)
+{
+    if (!Bar_HeightOn(mon)) return FALSE;
+    *glass = BarGlass() && (s_back.px || CaptureBarBack());
+    *rgb = *glass ? GlassAt(sx - B.mon.left, sy - B.mon.top, B.look.bg) : B.look.bg;
+    return TRUE;
 }
 
 static void BarApplyCapture(void)
@@ -364,6 +383,83 @@ static void ForegroundAppName(wchar_t *out, int cap)
         wchar_t *dot = wcsrchr(out, L'.');
         if (dot) *dot = 0;
     }
+}
+
+/* Icono de la app en primer plano: el de su AppUserModelID si lo tiene (apps de la Store,
+ * PWA, y el de las ventanas que lo declaran), si no el de su ejecutable. Solo se pide al
+ * sistema cuando cambia la app. TRUE si cambió. */
+static BOOL ForegroundAppIcon(int px)
+{
+    HWND w = GetForegroundWindow();
+    if (!w) return FALSE;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    if (pid == GetCurrentProcessId()) return FALSE;
+    wchar_t key[MAX_PATH], parse[MAX_PATH + 24];
+    if (Dock_WindowAumid(w, key, 128)) {
+        wsprintfW(parse, L"shell:AppsFolder\\%s", key);
+    } else {
+        HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (!p) return FALSE;
+        DWORD n = MAX_PATH;
+        const BOOL ok = QueryFullProcessImageNameW(p, 0, key, &n);
+        CloseHandle(p);
+        if (!ok) return FALSE;
+        lstrcpynW(parse, key, MAX_PATH);
+    }
+    if (B.appIconPx == px && !lstrcmpiW(key, B.appKey)) return FALSE;
+    lstrcpynW(B.appKey, key, MAX_PATH);
+    B.appIconPx = px;
+    if (B.appIcon) { DeleteObject(B.appIcon); B.appIcon = NULL; }
+    IShellItem *si = NULL;
+    if (SUCCEEDED(SHCreateItemFromParsingName(parse, NULL, &IID_IShellItem, (void **)&si))) {
+        IShellItemImageFactory *f = NULL;
+        if (SUCCEEDED(IShellItem_QueryInterface(si, &IID_IShellItemImageFactory, (void **)&f))) {
+            SIZE sz = { px, px };
+            IShellItemImageFactory_GetImage(f, sz, SIIGBF_RESIZETOFIT | SIIGBF_ICONONLY, &B.appIcon);
+            IShellItemImageFactory_Release(f);
+        }
+        IShellItem_Release(si);
+    }
+    return TRUE;
+}
+
+/* Compone un mapa de bits de 32 bpp (alfa premultiplicado o no) centrado en s×s. */
+static BOOL BlitAppIcon(Canvas *c, HBITMAP icon, int x, int y, int s)
+{
+    BITMAP bm;
+    if (!icon || !GetObjectW(icon, sizeof(bm), &bm) || bm.bmWidth <= 0 || bm.bmWidth > 256 || abs(bm.bmHeight) > 256) return FALSE;
+    const int w = bm.bmWidth, h = abs(bm.bmHeight);
+    DWORD *px = (DWORD *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)w * h * 4);
+    BITMAPINFO bi;
+    ZeroMemory(&bi, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    if (!px || GetDIBits(c->dc, icon, 0, h, px, &bi, DIB_RGB_COLORS) != h) { if (px) HeapFree(GetProcessHeap(), 0, px); return FALSE; }
+    BOOL premult = TRUE, anyAlpha = FALSE;
+    for (int i = 0; i < w * h; ++i) {
+        const DWORD v = px[i], a = v >> 24;
+        if (a) anyAlpha = TRUE;
+        if (((v >> 16) & 255) > a || ((v >> 8) & 255) > a || (v & 255) > a) premult = FALSE;
+    }
+    GdiFlush();
+    const int ox = x + (s - w) / 2, oy = y + (s - h) / 2;
+    for (int yy = 0; yy < h; ++yy)
+        for (int xx = 0; xx < w; ++xx) {
+            const DWORD v = px[yy * w + xx];
+            const int a = anyAlpha ? (int)(v >> 24) : 255;
+            if (!a) continue;
+            DWORD rgb = v & 0xFFFFFF;
+            if (premult && anyAlpha && a < 255)
+                rgb = (DWORD)min(255, (int)((v >> 16) & 255) * 255 / a) << 16 | (DWORD)min(255, (int)((v >> 8) & 255) * 255 / a) << 8
+                    | (DWORD)min(255, (int)(v & 255) * 255 / a);
+            Gfx_Blend(c, ox + xx, oy + yy, rgb, a / 255.0f);
+        }
+    HeapFree(GetProcessHeap(), 0, px);
+    return TRUE;
 }
 
 /* ───────────────────────── Iconos vectoriales ─────────────────────────
@@ -763,12 +859,15 @@ static void PaintBar(HDC target)
     else Canvas_Clear(c, L->bg);
     ZeroMemory(B.hit, sizeof(B.hit));
 
-    /* izquierda: logo + app activa */
+    /* izquierda: icono de la app activa (o el logo, si no tiene) + su nombre */
     int x = BS(16);
-    const float g = (float)BS(14);
-    DrawLogo(c, (float)x, cy - g * 0.5f, g, L->fg);
-    SetRect(&B.hit[BH_LOGO], 0, 0, x + (int)g + BS(8), H);
-    x += (int)g + BS(14);
+    const int is = BS(16);
+    if (!B.appIcon || !BlitAppIcon(c, B.appIcon, x, cy - is / 2, is)) {
+        const float g = (float)BS(14);
+        DrawLogo(c, (float)x + (is - g) * 0.5f, cy - g * 0.5f, g, L->fg);
+    }
+    SetRect(&B.hit[BH_LOGO], 0, 0, x + is + BS(6), H);
+    x += is + BS(9);
     if (B.app[0]) {
         const int w = min(Gfx_TextWidth(B.fBold, B.app), BS(320));
         Gfx_Text(c, B.fBold, B.app, x, 0, w + 2, H, L->fg, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
@@ -2218,6 +2317,7 @@ static void RefreshStatus(void)
     ReadWifi();
     ReadVolume();
     ForegroundAppName(B.app, 64);
+    ForegroundAppIcon(BS(16));
 }
 
 /* El reloj solo cambia una vez por minuto: se despierta justo al cambiar (con vidrio,
@@ -2390,7 +2490,7 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
             GetLocalTime(&st);
             if (st.wMinute != B.lastMinute) { B.lastMinute = st.wMinute; InvalidateRect(h, NULL, FALSE); }
             /* vidrio: si cambió lo que hay detrás (ventana arrastrada, fondo nuevo), repintar */
-            if (BarGlass() && CaptureBarBack()) InvalidateRect(h, NULL, FALSE);
+            if (BarGlass() && CaptureBarBack()) { InvalidateRect(h, NULL, FALSE); App_BarSurfaceChanged(); }
             ArmClock(h);
         } else if (w == TIMER_BANIM) {
             BarAnimate();
@@ -2610,10 +2710,10 @@ void Bar_ForegroundChanged(void)
     if (!B.hwnd) return;
     wchar_t name[64];
     ForegroundAppName(name, 64);
-    if (name[0] && lstrcmpW(name, B.app)) {
-        lstrcpynW(B.app, name, 64);
-        InvalidateRect(B.hwnd, NULL, FALSE);
-    }
+    const BOOL icon = ForegroundAppIcon(BS(16));
+    if (name[0] && lstrcmpW(name, B.app)) lstrcpynW(B.app, name, 64);
+    else if (!icon) return;
+    InvalidateRect(B.hwnd, NULL, FALSE);
 }
 
 /* Alto que ocupa la barra en el monitor indicado (0 si no está en él). */
@@ -2633,6 +2733,7 @@ void Bar_Destroy(void)
 {
     if (C.hwnd) DestroyWindow(C.hwnd);      /* al salir, sin animación */
     if (B.hwnd) DestroyWindow(B.hwnd);
+    if (B.appIcon) { DeleteObject(B.appIcon); B.appIcon = NULL; B.appKey[0] = 0; }
     CloseVolume();
     if (B.wlan) { WlanCloseHandle(B.wlan, NULL); B.wlan = NULL; }     /* también quita sus avisos */
     HFONT *all[] = { &B.fBold, &B.fText, &B.fIcon };

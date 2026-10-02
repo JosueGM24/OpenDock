@@ -268,7 +268,9 @@ void Bar_ApplyClock(BOOL hide);
 void Bar_Reposition(void);
 void Bar_ForegroundChanged(void);
 int  Bar_HeightOn(const RECT *mon);
-BOOL App_Covered(HWND h);                   /* ¿alguna ventana ajena (visible) está por encima? */
+BOOL App_Covered(HWND h);
+void App_BarSurfaceChanged(void);           /* la barra cambió de color o de vidrio: repintar las esquinas */
+BOOL Bar_Surface(const RECT *mon, int sx, int sy, DWORD *rgb, BOOL *glass);                   /* ¿alguna ventana ajena (visible) está por encima? */
 void Bar_Raise(void);
 void Bar_FullscreenFg(const RECT *mon);     /* monitor con una ventana a pantalla completa delante, o NULL */
 void Bar_StyleChanged(void);
@@ -285,6 +287,7 @@ void Dock_RestoreTaskbar(void);
 void Dock_ConfigChanged(void);
 void Dock_TrayPeek(BOOL on);
 void Dock_Destroy(void);
+BOOL Dock_WindowAumid(HWND w, wchar_t *out, int cch);   /* AppUserModelID de una ventana (Store, PWA…) */
 
 /* ── install.c: instalación por usuario (sin admin) ── */
 BOOL Inst_IsRunningInstalled(void);

@@ -424,6 +424,8 @@ static BOOL WindowAumid(HWND w, wchar_t *out, int cch)
     return out[0] != 0;
 }
 
+BOOL Dock_WindowAumid(HWND w, wchar_t *out, int cch) { return WindowAumid(w, out, cch); }
+
 static DockItem *FindByAumid(HWND w)
 {
     BOOL any = FALSE;

@@ -64,6 +64,7 @@ HWND      g_ctrl;
 Config    g_cfg = { 12, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, MAT_OLED, 1, 0, 1, 5000, 0, FALSE, 0, FALSE, TRUE, FALSE, TRUE, 1, 2, 1, FALSE, 0, TRUE, TRUE, 55 };
 
 static HWND      g_corners[MAX_CORNERS];
+static struct { int x, y, s, which; RECT mon; int affinity; } g_cinfo[MAX_CORNERS];   /* para repintar solo las de arriba */
 static int       g_count;
 static NOTIFYICONDATAW g_nid;
 static UINT      g_wmTaskbarCreated;
@@ -247,10 +248,14 @@ static void LoadConfig(void)
  * Alpha = cobertura analítica del exterior del círculo (≈1 px de antialias).
  * Formato: BGRA premultiplicado; negro puro → solo importa el alpha.
  * UpdateLayeredWindow también mueve/redimensiona la ventana.               */
-static void PaintCorner(HWND hwnd, int px, int py, int s, int which)
+static BOOL PaintCorner(HWND hwnd, int px, int py, int s, int which, const RECT *mon)
 {
     Canvas c;
-    if (!Canvas_Init(&c, s, s)) return;
+    if (!Canvas_Init(&c, s, s)) return FALSE;
+    /* arriba, con la barra superior: la superficie de la barra en vez de negro */
+    DWORD rgb = 0;
+    BOOL glass = FALSE;
+    const BOOL bar = !(which & 2) && Bar_Surface(mon, px, py, &rgb, &glass);
 
     const double cx = (which & 1) ? 0.0 : (double)s;
     const double cy = (which & 2) ? 0.0 : (double)s;
@@ -261,7 +266,10 @@ static void PaintCorner(HWND hwnd, int px, int py, int s, int which)
             const double dx = (x + 0.5) - cx;
             double a = sqrt(dx * dx + dy * dy) - r + 0.5;
             if (a < 0.0) a = 0.0; else if (a > 1.0) a = 1.0;
-            c.px[y * s + x] = (DWORD)(BYTE)(a * 255.0 + 0.5) << 24;
+            const DWORD A = (DWORD)(BYTE)(a * 255.0 + 0.5);
+            if (!bar) { c.px[y * s + x] = A << 24; continue; }
+            if (glass) Bar_Surface(mon, px + x, py + y, &rgb, &glass);
+            c.px[y * s + x] = A << 24 | (((rgb >> 16) & 255) * A / 255) << 16 | (((rgb >> 8) & 255) * A / 255) << 8 | (rgb & 255) * A / 255;
         }
     }
 
@@ -272,6 +280,16 @@ static void PaintCorner(HWND hwnd, int px, int py, int s, int which)
     UpdateLayeredWindow(hwnd, screen, &dst, &sz, c.dc, &src, 0, &bf, ULW_ALPHA);
     ReleaseDC(NULL, screen);
     Canvas_Free(&c);
+    return glass;
+}
+
+/* Pinta la esquina i; el vidrio no debe verse a sí mismo al capturar lo de detrás, así que
+ * esas esquinas quedan fuera de captura (solo se llama al sistema si cambia). */
+static void PaintCornerAt(int i, HWND h)
+{
+    const BOOL glass = PaintCorner(h, g_cinfo[i].x, g_cinfo[i].y, g_cinfo[i].s, g_cinfo[i].which, &g_cinfo[i].mon);
+    const int aff = g_cfg.hideCapture || glass ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE;
+    if (g_cinfo[i].affinity != aff) { SetWindowDisplayAffinity(h, (DWORD)aff); g_cinfo[i].affinity = aff; }
 }
 
 /* ───────────────────────── Gestión de esquinas ───────────────────────── */
@@ -311,12 +329,22 @@ static BOOL CALLBACK MonitorProc(HMONITOR mon, HDC hdc, LPRECT lprc, LPARAM lp)
                 CORNER_CLASS, L"", WS_POPUP, x, y, s, s, NULL, NULL, g_inst, NULL);
             if (!h) continue;
         }
-        SetWindowDisplayAffinity(h, g_cfg.hideCapture ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
-        PaintCorner(h, x, y, s, i);
+        if (fresh) g_cinfo[g_used].affinity = -1;
+        g_cinfo[g_used].x = x; g_cinfo[g_used].y = y; g_cinfo[g_used].s = s; g_cinfo[g_used].which = i; g_cinfo[g_used].mon = r;
+        PaintCornerAt(g_used, h);
         if (fresh) ShowWindow(h, SW_SHOWNOACTIVATE);
         g_corners[g_used++] = h;
     }
     return TRUE;
+}
+
+static void RebuildCorners(void);
+/* El fondo detrás de la barra cambió: solo cambian las esquinas de arriba de su monitor. */
+void App_BarSurfaceChanged(void)
+{
+    if (!g_cfg.enabled) return;
+    for (int i = 0; i < g_count; ++i)
+        if (g_corners[i] && !(g_cinfo[i].which & 2) && Bar_HeightOn(&g_cinfo[i].mon)) PaintCornerAt(i, g_corners[i]);
 }
 
 static void RebuildCorners(void)
