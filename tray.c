@@ -19,6 +19,7 @@
 #define HOST_CLASS  L"Shell_TrayWnd"
 #define TRAY_MAGIC  0x34753423
 #define MAX_TRAY    48
+#define MAX_PER_PID 8       /* un solo proceso no puede llenar la bandeja */
 #define CHECK_MS    2000
 
 /* lo que manda shell32 (siempre con campos de 32 bits, también desde procesos de 64) */
@@ -40,6 +41,7 @@ static const GUID kNoGuid = { 0 };
 
 typedef struct {
     HWND  hwnd;
+    DWORD pid;          /* proceso dueño de hwnd: tope de iconos por proceso */
     UINT  uid, cb, ver;
     GUID  guid;
     BOOL  hasGuid, hidden;
@@ -110,10 +112,16 @@ static BOOL Handle(DWORD msg, const NID32 *n, DWORD size)
     switch (msg) {
     case NIM_ADD:
         if (i < 0) {
-            if (T.n >= MAX_TRAY) { ok = FALSE; break; }
+            HWND hw = (HWND)(ULONG_PTR)n->hWnd;
+            DWORD pid = 0;
+            if (T.n >= MAX_TRAY || !IsWindow(hw) || !GetWindowThreadProcessId(hw, &pid)) { ok = FALSE; break; }
+            int mine = 0;
+            for (int k = 0; k < T.n; ++k) if (T.s[k].pid == pid) ++mine;
+            if (mine >= MAX_PER_PID) { ok = FALSE; break; }
             i = T.n++;
             ZeroMemory(&T.s[i], sizeof(Slot));
-            T.s[i].hwnd = (HWND)(ULONG_PTR)n->hWnd;
+            T.s[i].hwnd = hw;
+            T.s[i].pid = pid;
             T.s[i].uid = n->uID;
             if (byGuid) { T.s[i].guid = n->guidItem; T.s[i].hasGuid = TRUE; }
         }
@@ -314,7 +322,9 @@ void Tray_Click(HWND hwnd, UINT uid, BOOL right)
     for (int i = 0; i < T.n; ++i)
         if (T.s[i].hwnd == hwnd && T.s[i].uid == uid) { cb = T.s[i].cb; ver = T.s[i].ver; found = TRUE; break; }
     LeaveCriticalSection(&T.cs);
-    if (!found || !cb || !IsWindow(hwnd)) return;
+    /* solo mensajes de aplicación (WM_USER en adelante o registrados): un icono no puede hacer
+     * que mandemos WM_CLOSE, WM_COMMAND… a una ventana ajena */
+    if (!found || cb < WM_USER || !IsWindow(hwnd)) return;
     DWORD pid = 0;
     GetWindowThreadProcessId(hwnd, &pid);
     AllowSetForegroundWindow(pid);                  /* para que su menú o su ventana se pongan delante */

@@ -17,6 +17,7 @@
 #define RUN_KEY       L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 #define UNINSTALL_KEY L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" APP_NAME
 #define EXE_NAME      L"OpenDock.exe"
+#define HELPER_DIR    L"OpenDock-uninstall-"   /* %TEMP%\\OpenDock-uninstall-<pid>-<tick>\\ */
 
 static BOOL KnownPath(REFKNOWNFOLDERID id, LPCWSTR tail, wchar_t *out)
 {
@@ -271,16 +272,44 @@ void Inst_RemoveFiles(void)
         return;
     }
 
-    wchar_t tmp[MAX_PATH], helper[MAX_PATH], cmd[MAX_PATH + 48];
+    /* en una carpeta nueva y propia de %TEMP% (no junto a lo que haya en %TEMP%) */
+    wchar_t tmp[MAX_PATH], work[MAX_PATH], helper[MAX_PATH], cmd[MAX_PATH + 48];
     const DWORD n = GetTempPathW(MAX_PATH, tmp);
-    if (!n || n + 32 >= MAX_PATH) return;
-    wsprintfW(helper, L"%sOpenDock-uninstall.exe", tmp);
-    if (!CopySelf(helper)) return;
+    if (!n || n + 64 >= MAX_PATH) return;
+    wsprintfW(work, L"%s" HELPER_DIR L"%lu-%lu", tmp, GetCurrentProcessId(), GetTickCount());
+    if (!CreateDirectoryW(work, NULL)) return;
+    wsprintfW(helper, L"%s\\OpenDock-uninstall.exe", work);
+    if (!CopySelf(helper)) { RemoveDirectoryW(work); return; }
     wsprintfW(cmd, L"\"%s\" --cleanup %lu", helper, GetCurrentProcessId());
 
     STARTUPINFOW si = { sizeof(si) };
     PROCESS_INFORMATION pi;
-    if (CreateProcessW(helper, cmd, NULL, NULL, FALSE, 0, NULL, tmp, &si, &pi)) {
+    if (CreateProcessW(helper, cmd, NULL, NULL, FALSE, 0, NULL, work, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+}
+
+/* El ayudante no puede borrarse a sí mismo mientras corre: deja a cmd.exe (del sistema, ruta
+ * absoluta) borrando su carpeta un par de segundos después. Solo si de verdad es la carpeta
+ * del ayudante, dentro de %TEMP%. */
+static void RemoveHelperLater(void)
+{
+    wchar_t self[MAX_PATH], tmp[MAX_PATH], sys[MAX_PATH], cmdexe[MAX_PATH], line[MAX_PATH * 2 + 128];
+    SelfPath(self);
+    const DWORD n = GetTempPathW(MAX_PATH, tmp);
+    wchar_t *slash = wcsrchr(self, L'\\');
+    if (!n || !slash || CompareStringOrdinal(self, (int)n, tmp, (int)n, TRUE) != CSTR_EQUAL) return;
+    *slash = 0;                                             /* self = la carpeta del ayudante */
+    const int dl = lstrlenW(HELPER_DIR);
+    if (CompareStringOrdinal(self + n, dl, HELPER_DIR, dl, TRUE) != CSTR_EQUAL || wcschr(self + n, L'\\')) return;
+    const UINT sl = GetSystemDirectoryW(sys, MAX_PATH);
+    if (!sl || sl > MAX_PATH - 16) return;
+    wsprintfW(cmdexe, L"%s\\cmd.exe", sys);
+    wsprintfW(line, L"\"%s\" /d /q /c ping -n 3 127.0.0.1 >nul & rd /s /q \"%s\"", cmdexe, self);
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
+    if (CreateProcessW(cmdexe, line, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, tmp, &si, &pi)) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
     }
@@ -310,5 +339,6 @@ int Inst_Cleanup(DWORD waitPid)
     wsprintfW(tmp, L"%s.new", exe);
     DeleteFileW(tmp);
     RemoveDirectoryW(dir);
+    RemoveHelperLater();
     return 0;
 }

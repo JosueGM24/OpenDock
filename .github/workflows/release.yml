@@ -1,0 +1,61 @@
+# Compila OpenDock.exe con MSVC (Control Flow Guard, CET, CRT estática, DLL solo de System32)
+# y comprueba sus protecciones. Con una etiqueta v* (git tag v2.0.0 && git push --tags) además
+# publica la versión en GitHub Releases con el .exe y su SHA-256: es lo que descarga la web.
+name: Versión para Windows
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SQLite estática (vcpkg)
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install sqlite3:x64-windows-static
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "SQLITE_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static" >> $env:GITHUB_ENV
+
+      - name: Compilar con MSVC
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS=%%i"
+          call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          call build.bat || exit /b 1
+
+      - name: Comprobar protecciones
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tools/check_pe.py OpenDock.exe --strict
+
+      - name: SHA-256
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash OpenDock.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  OpenDock.exe" | Out-File OpenDock.exe.sha256 -Encoding ascii -NoNewline
+          "SHA-256: $h" >> $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenDock
+          path: |
+            OpenDock.exe
+            OpenDock.exe.sha256
+
+      - name: Publicar la versión
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME OpenDock.exe OpenDock.exe.sha256 `
+            --title "OpenDock $($env:GITHUB_REF_NAME.TrimStart('v'))" --generate-notes
