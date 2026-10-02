@@ -1,5 +1,5 @@
 # La web de OpenDock: archivos estáticos en docs/ (generados con site/build_site.py).
-# La publica .github/workflows/web.yml; también sirve si conectas el repo en Netlify.
+# Netlify la publica al conectar este repo (Git): cada push a main despliega docs/.
 [build]
   publish = "docs"
   command = "echo 'sin compilación: docs/ ya está generado'"

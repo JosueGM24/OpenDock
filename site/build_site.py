@@ -7,7 +7,7 @@
 - docs/assets/logo.png, favicon.png, apple-touch-icon.png, og.png
 - docs/assets/sounds/*.wav   los sonidos de la demo (de sounds/, a 24 kHz)
 - docs/gracias.html          destino de los formularios sin JavaScript
-Se publica en Netlify (Netlify Forms) con .github/workflows/web.yml.
+Se publica en Netlify (Netlify Forms) conectando el repo; ver netlify.toml.
 Requiere Pillow. REPO y SITE son las únicas direcciones del sitio.
 """
 import os, io, wave, audioop, re
