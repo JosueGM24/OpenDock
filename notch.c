@@ -1789,7 +1789,7 @@ void Notch_StyleChanged(void)
 
 void Notch_Raise(void)
 {
-    if (N.hwnd && N.mode != M_HIDDEN)
+    if (N.hwnd && N.mode != M_HIDDEN && App_Covered(N.hwnd))
         SetWindowPos(N.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING);
 }

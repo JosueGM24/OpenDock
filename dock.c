@@ -535,8 +535,11 @@ static float HopOffset(const DockItem *it)
 }
 
 /* ───────────────────────── Fondo desenfocado ───────────────────────── */
+static BOOL HiddenAway(void) { return g_cfg.dockAutoHide == 2 && D.sink > 0.98f && !D.atDock; }
+
 static BOOL CaptureBackdrop(void)
 {
+    if (HiddenAway()) return FALSE;             /* nadie lo ve: ya se capturará al subir */
     const int y0 = max(0, (int)(PanelBottom() - PanelH()) - DS(16));
     /* solo la franja que hay detrás del panel (más el sitio para crecer al magnificar) */
     const int span = D.panelW > 0 ? D.panelW + DS(160) : D.frame.w;
@@ -1128,7 +1131,7 @@ static void CALLBACK WinHook(HWINEVENTHOOK hk, DWORD ev, HWND w, LONG obj, LONG 
     (void)hk; (void)th; (void)t;
     if (!D.hwnd || obj != OBJID_WINDOW || child != CHILDID_SELF || !w) return;
     if (ev == EVENT_OBJECT_LOCATIONCHANGE) {               /* algo se movió: quizá detrás del dock */
-        if (GetAncestor(w, GA_ROOT) == w && IsWindowVisible(w)) SetTimer(D.hwnd, TIMER_DBLURQ, 160, NULL);
+        if (!HiddenAway() && GetAncestor(w, GA_ROOT) == w && IsWindowVisible(w)) SetTimer(D.hwnd, TIMER_DBLURQ, 160, NULL);
         return;
     }
     if (ev == EVENT_OBJECT_SHOW) {
@@ -1166,10 +1169,21 @@ static void PollCursor(void)
 {
     POINT pt;
     if (!GetCursorPos(&pt) || D.fullscreen || D.shellOpen) return;
+    {   /* lejos del borde de abajo no llega en 150 ms: cada 150 ms basta */
+        static UINT every = 50;
+        const UINT want = !D.atDock && D.mon.bottom - pt.y > 260 ? 150 : 50;
+        if (want != every) { every = want; SetTimer(D.hwnd, TIMER_DPOLL, every, NULL); }
+    }
     const BOOL at = InDockZone(pt);
     if (at == D.atDock) return;
     D.atDock = at;
     if (!at) { D.leaveAt = GetTickCount(); SetTimer(D.hwnd, TIMER_DSINK, SINK_DELAY, NULL); }
+    else if (g_cfg.dockBlur && g_cfg.dockAutoHide == 2) {   /* el vidrio, desde donde va a quedar */
+        const int keep = D.sinkPx;
+        D.sinkPx = 0;
+        CaptureBackdrop();
+        D.sinkPx = keep;
+    }
     Kick();
 }
 
@@ -1415,7 +1429,7 @@ void Dock_Reposition(void)
 
 void Dock_Raise(void)
 {
-    if (D.hwnd && !D.fullscreen)
+    if (D.hwnd && !D.fullscreen && App_Covered(D.hwnd))
         SetWindowPos(D.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 }
 

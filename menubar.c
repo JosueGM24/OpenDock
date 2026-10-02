@@ -2621,7 +2621,7 @@ int Bar_HeightOn(const RECT *mon)
 
 void Bar_Raise(void)
 {
-    if (B.hwnd && !B.fullscreen)
+    if (B.hwnd && !B.fullscreen && App_Covered(B.hwnd))
         SetWindowPos(B.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 }
 

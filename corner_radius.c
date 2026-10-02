@@ -355,14 +355,31 @@ static void CALLBACK LocationHook(HWINEVENTHOOK h, DWORD ev, HWND w, LONG o, LON
         SetTimer(g_ctrl, TIMER_FSCHECK, 120, NULL);
 }
 
+/* Recorre el orden Z hacia arriba desde h: si hay una ventana visible de otro proceso por
+ * encima, hay que volver a subirla. Casi siempre no la hay y se ahorra el SetWindowPos
+ * (que hace trabajar a DWM aunque la ventana ya esté arriba). */
+BOOL App_Covered(HWND h)
+{
+    if (!h) return FALSE;
+    const DWORD me = GetCurrentProcessId();
+    for (HWND p = GetWindow(h, GW_HWNDPREV); p; p = GetWindow(p, GW_HWNDPREV)) {
+        if (!IsWindowVisible(p)) continue;
+        DWORD pid = 0;
+        GetWindowThreadProcessId(p, &pid);
+        if (pid != me) return TRUE;
+    }
+    return FALSE;
+}
+
 static void RaiseCorners(void)
 {
     CheckFullscreen();
     Bar_Raise();
     Dock_Raise();
     for (int i = 0; i < g_count; ++i)
-        SetWindowPos(g_corners[i], HWND_TOPMOST, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING);
+        if (App_Covered(g_corners[i]))
+            SetWindowPos(g_corners[i], HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING);
     Notch_Raise();
 }
 
@@ -512,6 +529,11 @@ static void CheckEdge(void)
     if (!GetCursorPos(&pt)) return;
     MONITORINFO mi = { sizeof(mi) };
     if (!GetMonitorInfoW(MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST), &mi)) return;
+    {   /* lejos del borde de arriba no puede llegar en 150 ms: cada 150 ms basta */
+        static UINT every = 50;
+        const UINT want = pt.y - mi.rcMonitor.top > 260 ? 150 : 50;
+        if (want != every) { every = want; SetTimer(g_ctrl, TIMER_EDGE, every, NULL); }
+    }
     const BOOL buttons = (GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON)) & 0x8000;
     /* con la barra superior, su franja hace de borde: no hace falta subir hasta arriba */
     const int edge = mi.rcMonitor.top + 1 + Bar_HeightOn(&mi.rcMonitor);

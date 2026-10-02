@@ -145,10 +145,14 @@ static void KeepOnTop(void)
 {
     if (!T.host) return;
     /* por encima de la de Explorer (así FindWindow da con esta) y con su mismo tamaño, por
-     * si alguna app mira dónde está "la barra" */
-    RECT r = { 0 };
+     * si alguna app mira dónde está "la barra"; solo si algo de eso cambió */
+    RECT r = { 0 }, mine;
     if (T.explorer) GetWindowRect(T.explorer, &r);
-    SetWindowPos(T.host, HWND_TOPMOST, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOACTIVATE);
+    GetWindowRect(T.host, &mine);
+    const BOOL first = FindWindowW(HOST_CLASS, NULL) == T.host;
+    if (first && EqualRect(&r, &mine)) return;
+    SetWindowPos(T.host, first ? NULL : HWND_TOPMOST, r.left, r.top, r.right - r.left, r.bottom - r.top,
+                 SWP_NOACTIVATE | (first ? SWP_NOZORDER : 0));
 }
 
 static void CALLBACK ExplorerHook(HWINEVENTHOOK hk, DWORD ev, HWND w, LONG obj, LONG child, DWORD th, DWORD t);

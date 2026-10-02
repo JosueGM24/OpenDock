@@ -258,6 +258,7 @@ void Bar_ApplyClock(BOOL hide);
 void Bar_Reposition(void);
 void Bar_ForegroundChanged(void);
 int  Bar_HeightOn(const RECT *mon);
+BOOL App_Covered(HWND h);                   /* ¿alguna ventana ajena (visible) está por encima? */
 void Bar_Raise(void);
 void Bar_FullscreenFg(const RECT *mon);     /* monitor con una ventana a pantalla completa delante, o NULL */
 void Bar_StyleChanged(void);
