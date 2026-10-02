@@ -29,6 +29,8 @@
 #define TIMER_DRESCAN 4      /* repaso de apps tras un aviso de Windows (agrupa ráfagas) */
 #define TIMER_DBLURQ  5      /* recaptura del fondo tras mover una ventana */
 #define TIMER_DPEEK   6      /* fin de la visita a la bandeja */
+#define TIMER_DSINK   7      /* ocultar a medias: un momento después de salir el cursor */
+#define SINK_DELAY    450
 #define STATUS_MS     10000  /* repaso de seguridad: lo normal llega por avisos */
 #define MAX_ITEMS     48
 #define ICON_GAP      12
@@ -89,6 +91,10 @@ static struct {
     BOOL     peek;              /* la bandeja de Windows a la vista un momento */
     DWORD    peekAt;
     float    slide;             /* 0 = visible · 1 = escondido bajo el borde */
+    float    sink, sinkV;       /* ocultar dock: 0 arriba · 1 con media altura bajo la pantalla */
+    int      sinkPx;
+    DWORD    leaveAt;
+    BOOL     menuOpen;
     int      taskWatch;         /* ticks restantes de TIMER_DTASK */
 } D;
 
@@ -540,7 +546,7 @@ static BOOL CaptureBackdrop(void)
     }
     HDC screen = GetDC(NULL);
     SetStretchBltMode(D.raw.dc, COLORONCOLOR);       /* el desenfoque ya suaviza: sin HALFTONE */
-    StretchBlt(D.raw.dc, 0, 0, sw, sh, screen, D.mon.left + x0, D.mon.bottom - WinH() + y0,
+    StretchBlt(D.raw.dc, 0, 0, sw, sh, screen, D.mon.left + x0, D.mon.bottom - WinH() + D.sinkPx + y0,
                sw * BACK_SCALE, sh * BACK_SCALE, SRCCOPY);
     ReleaseDC(NULL, screen);
     GdiFlush();
@@ -760,7 +766,7 @@ present:;
 
     /* con Inicio abierto el dock baja y se desvanece para no chocar con el menú */
     const float e = D.slide * D.slide * (3 - 2 * D.slide);
-    POINT dst = { D.mon.left, D.mon.bottom - WinH() + (int)(e * (WinH() - D.panelY + DS(6))) }, src = { 0, 0 };
+    POINT dst = { D.mon.left, D.mon.bottom - WinH() + D.sinkPx + (int)(e * (WinH() - D.panelY + DS(6))) }, src = { 0, 0 };
     SIZE sz = { f->w, f->h };
     BLENDFUNCTION bf = { AC_SRC_OVER, 0, (BYTE)(255 * (1 - e) + 0.5f), AC_SRC_ALPHA };
     /* a DWM solo se le manda lo que cambió (lo de ahora y lo del fotograma anterior) */
@@ -832,6 +838,18 @@ static void Tick(void)
     const float st = D.shellOpen ? 1.0f : 0.0f;
     if (fabsf(st - D.slide) > 0.004f) { D.slide += (st - D.slide) * min(1.0f, dt * 11.0f); busy = TRUE; }
     else D.slide = st;
+    /* ocultar dock: sin el cursor baja hasta que su mitad queda bajo la pantalla; al
+     * acercarlo sube con el rebote configurado */
+    const BOOL sunk = g_cfg.dockAutoHide && !D.inside && !D.menuOpen && GetTickCount() - D.leaveAt >= SINK_DELAY;
+    const float kt = sunk ? 1.0f : 0.0f, z = sunk ? 0.95f : min(1.0f, Pop_Zeta() + 0.12f);
+    if (fabsf(kt - D.sink) > 0.002f || fabsf(D.sinkV) > 0.02f) {
+        for (int k = 0; k < 2; ++k) Spring2(&D.sink, &D.sinkV, kt, dt * 0.5f, sunk ? 140.0f : 260.0f, z);
+        busy = TRUE;
+    } else if (D.sink != kt) {
+        D.sink = kt; D.sinkV = 0;
+        if (g_cfg.dockBlur) SetTimer(D.hwnd, TIMER_DBLURQ, 30, NULL);    /* el vidrio, desde su sitio nuevo */
+    }
+    D.sinkPx = (int)lroundf(D.sink * (DS(BOTTOM_MARGIN) + PanelH() * 0.5f));
     /* con el cursor quieto encima ya no se redibuja 120 veces por segundo: solo si algo
      * se movió (o lo pidió un clic), y el marcapasos se para hasta el próximo movimiento */
     if (busy || D.dirty) { Render(); D.dirty = FALSE; }
@@ -932,8 +950,12 @@ static void AppMenu(int i, POINT at)
     AppendMenuW(m, MF_STRING, IDM_PREFS, L"Ajustes del dock\x2026");
 
     SetForegroundWindow(D.hwnd);                 /* para que el menú se cierre al hacer clic fuera */
+    D.menuOpen = TRUE;                           /* con el menú abierto el dock no se esconde */
     const int cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_BOTTOMALIGN | TPM_CENTERALIGN | TPM_RIGHTBUTTON,
                                         at.x, at.y, 0, D.hwnd, NULL);
+    D.menuOpen = FALSE;
+    D.leaveAt = GetTickCount();
+    if (g_cfg.dockAutoHide) SetTimer(D.hwnd, TIMER_DSINK, SINK_DELAY, NULL);
     DestroyMenu(m);
     PostMessageW(D.hwnd, WM_NULL, 0, 0);
     if (cmd >= IDM_WIN0 && cmd < IDM_WIN0 + it->nwin) { StartHop(it, FALSE); FocusWindow(it->wins[cmd - IDM_WIN0]); }
@@ -1023,7 +1045,8 @@ static void DockMeasure(void)
 static void AppBarPos(void)
 {
     if (!D.appbar) return;
-    const int reserve = DS(BOTTOM_MARGIN) + (int)(PanelH() * 0.5f);
+    /* oculto: las ventanas usan toda la altura y el dock asoma por encima */
+    const int reserve = g_cfg.dockAutoHide ? 0 : DS(BOTTOM_MARGIN) + (int)(PanelH() * 0.5f);
     APPBARDATA abd = { sizeof(abd) };
     abd.hWnd = D.hwnd;
     abd.uEdge = ABE_BOTTOM;
@@ -1157,6 +1180,8 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_MOUSELEAVE:
         D.inside = FALSE;
         D.hot = -1;
+        D.leaveAt = GetTickCount();
+        if (g_cfg.dockAutoHide) SetTimer(h, TIMER_DSINK, SINK_DELAY, NULL);
         Kick();             /* deja que las escalas vuelvan a 1 y luego se detiene */
         return 0;
     case WM_LBUTTONDOWN:
@@ -1195,6 +1220,9 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
         } else if (w == TIMER_DBLURQ) {
             KillTimer(h, TIMER_DBLURQ);
             if (!D.fullscreen && WaitForSingleObject(s_dpOn, 0) != WAIT_OBJECT_0 && CaptureBackdrop()) Render();
+        } else if (w == TIMER_DSINK) {
+            KillTimer(h, TIMER_DSINK);
+            Kick();
         } else if (w == TIMER_DPEEK) {
             if (D.peek && GetTickCount() - D.peekAt > 1500) {
                 /* fin de la visita a la bandeja: el foco ya no está en la barra ni en su panel */
@@ -1224,6 +1252,7 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
         KillTimer(h, TIMER_DRESCAN);
         KillTimer(h, TIMER_DBLURQ);
         KillTimer(h, TIMER_DPEEK);
+        KillTimer(h, TIMER_DSINK);
         if (D.winHook) { UnhookWinEvent(D.winHook); D.winHook = NULL; }
         if (D.moveHook) { UnhookWinEvent(D.moveHook); D.moveHook = NULL; }
         if (D.fgHook) { UnhookWinEvent(D.fgHook); D.fgHook = NULL; }
@@ -1308,6 +1337,7 @@ void Dock_ConfigChanged(void)
     Canvas_Free(&D.back);
     Rescan();           /* con otro tamaño de icono la caché pide la nueva resolución */
     Render();
+    Kick();             /* ocultar dock activado o quitado: que baje o suba */
 }
 
 void Dock_Reposition(void)
