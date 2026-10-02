@@ -28,7 +28,7 @@
 
 /* Opciones (claves de los elementos) */
 enum {
-    K_RADIUS, K_HIDECAP, K_STARTUP, K_BAR, K_CLOCK, K_BATTPCT, K_DOCK, K_DOCKTB, K_DHIDE, K_DBLUR, K_DOPAC, K_DICON,
+    K_RADIUS, K_HIDECAP, K_STARTUP, K_BAR, K_CLOCK, K_BATTPCT, K_DOCK, K_DOCKTB, K_DHIDE, K_DWINFULL, K_DBLUR, K_DOPAC, K_DICON,
     K_NOTCH, K_MIRROR, K_BANNERS, K_EDGE, K_SHOTS,
     K_SOUND, K_STYLE, K_MATERIAL, K_SIZE, K_BOUNCE, K_ACCENT, K_TEST,
     K_COUNT
@@ -57,7 +57,8 @@ static const ItemDef kGeneral[] = {
 static const ItemDef kDock[] = {
     { IT_TOGGLE,  K_DOCK,    L"Dock inferior estilo Apple", L"Apps ancladas y abiertas, con magnificación \x00B7 Ctrl+Alt+D" },
     { IT_TOGGLE,  K_DOCKTB,  L"Desactivar barra de tareas", L"La de Windows desaparece mientras el dock está activo" },
-    { IT_TOGGLE,  K_DHIDE,   L"Ocultar el dock", L"Baja hasta la mitad y sube al acercar el cursor" },
+    { IT_SEGMENT, K_DHIDE,   L"Ocultar sin el cursor", NULL, { L"No", L"A la mitad", L"Del todo" } },
+    { IT_TOGGLE,  K_DWINFULL, L"Ventanas hasta abajo", L"Con el dock oculto, las maximizadas usan toda la altura" },
     { IT_DIVIDER, -1 },
     { IT_SEGMENT, K_DBLUR,   L"Desenfoque del fondo", NULL, { L"No", L"Suave", L"Intenso" } },
     { IT_SEGMENT, K_DOPAC,   L"Opacidad", NULL, { L"30 %", L"55 %", L"75 %", L"92 %" } },
@@ -126,7 +127,7 @@ static BOOL ToggleValue(int key)
     case K_BATTPCT: return g_cfg.battPct;
     case K_DOCK:    return g_cfg.dock;
     case K_DOCKTB:  return g_cfg.dockHideTaskbar;
-    case K_DHIDE:   return g_cfg.dockAutoHide;
+    case K_DWINFULL: return g_cfg.dockWinFull;
     case K_NOTCH:   return g_cfg.notch;
     case K_MIRROR:  return g_cfg.mirror;
     case K_BANNERS: return g_cfg.hideBanners;
@@ -141,6 +142,7 @@ static BOOL ItemEnabled(int key)
 {
     if (key == K_CLOCK || key == K_BATTPCT) return g_cfg.menubar;
     if (key == K_MATERIAL) return TRUE;
+    if (key == K_DWINFULL) return g_cfg.dock && g_cfg.dockAutoHide;
     if (key == K_DOCKTB || key == K_DHIDE || key == K_DBLUR || key == K_DOPAC || key == K_DICON) return g_cfg.dock;
     return key < K_MIRROR || key == K_BANNERS || g_cfg.notch;
 }
@@ -155,6 +157,7 @@ static int SegmentValue(int key)
     case K_DBLUR:    return g_cfg.dockBlur;
     case K_DOPAC:    return g_cfg.dockOpacity;
     case K_DICON:    return g_cfg.dockIcon;
+    case K_DHIDE:    return g_cfg.dockAutoHide;
     }
     return g_cfg.bounce;
 }
@@ -564,7 +567,8 @@ static void Activate(int hit)
     case K_BATTPCT:  g_cfg.battPct = !g_cfg.battPct; Cfg_Save(); Bar_StyleChanged(); Panel_Refresh(); return;
     case K_DOCK:     App_SetDock(!g_cfg.dock, FALSE); return;
     case K_DOCKTB:   g_cfg.dockHideTaskbar = !g_cfg.dockHideTaskbar; Cfg_Save(); Dock_Apply(); Panel_Refresh(); return;
-    case K_DHIDE:    g_cfg.dockAutoHide = !g_cfg.dockAutoHide; Cfg_Save(); Dock_ConfigChanged(); Panel_Refresh(); return;
+    case K_DHIDE:    g_cfg.dockAutoHide = sub; Cfg_Save(); Dock_ConfigChanged(); Panel_Refresh(); return;
+    case K_DWINFULL: g_cfg.dockWinFull = !g_cfg.dockWinFull; Cfg_Save(); Dock_ConfigChanged(); Panel_Refresh(); return;
     case K_DBLUR:    g_cfg.dockBlur = sub;    Cfg_Save(); Dock_ConfigChanged(); Panel_Refresh(); return;
     case K_DOPAC:    g_cfg.dockOpacity = sub; Cfg_Save(); Dock_ConfigChanged(); Panel_Refresh(); return;
     case K_DICON:    g_cfg.dockIcon = sub;    Cfg_Save(); Dock_ConfigChanged(); Panel_Refresh(); return;

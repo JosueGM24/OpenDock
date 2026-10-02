@@ -57,7 +57,8 @@ typedef struct {
     int  dockOpacity;   /* 0..3 → 30 % · 55 % · 75 % · 92 % */
     int  dockIcon;      /* tamaño de icono: 0 pequeño · 1 mediano · 2 grande · 3 enorme */
     BOOL battPct;       /* barra superior: porcentaje dentro de la batería */
-    BOOL dockAutoHide;  /* el dock baja a medias sin el cursor encima y sube al acercarlo */
+    int  dockAutoHide;  /* ocultar dock sin el cursor: 0 no · 1 a la mitad · 2 del todo */
+    BOOL dockWinFull;   /* con el dock oculto, las ventanas maximizadas llegan hasta abajo */
 } Config;
 
 enum { MAT_OLED, MAT_GLASS, MAT_SYSTEM };
