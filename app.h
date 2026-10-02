@@ -259,6 +259,7 @@ void Dock_Reposition(void);
 void Dock_Raise(void);
 void Dock_RestoreTaskbar(void);
 void Dock_ConfigChanged(void);
+void Dock_TrayPeek(BOOL on);
 void Dock_Destroy(void);
 
 /* ── install.c: instalación por usuario (sin admin) ── */

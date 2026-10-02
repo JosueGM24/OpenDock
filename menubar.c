@@ -31,6 +31,7 @@
 #define TIMER_CLOCK     1
 #define TIMER_STATUS    2
 #define TIMER_BANIM     3       /* muelles de los iconos de la barra */
+#define TIMER_TRAY      4       /* abrir la bandeja de Windows: Win+B y luego Entrar */
 #define BAR_H           28      /* alto lógico de la barra */
 #define CC_W            340     /* el mismo ancho que los ajustes, que viven dentro */
 
@@ -49,7 +50,7 @@ static const GUID kCLSID_MMDeviceEnumerator = { 0xBCDE0395, 0xE52F, 0x467C, { 0x
 static const GUID kIID_IMMDeviceEnumerator  = { 0xA95664D2, 0x9614, 0x4F35, { 0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6 } };
 static const GUID kIID_IAudioEndpointVolume = { 0x5CDF2C82, 0x841E, 0x4546, { 0x97, 0x22, 0x0C, 0xF7, 0x40, 0x78, 0x22, 0x9A } };
 
-enum { BH_NONE, BH_LOGO, BH_APP, BH_VOL, BH_WIFI, BH_BATT, BH_CLOCK, BH_CC, BH_COUNT };
+enum { BH_NONE, BH_LOGO, BH_APP, BH_VOL, BH_WIFI, BH_BATT, BH_CLOCK, BH_CC, BH_TRAY, BH_COUNT };
 
 typedef struct {
     DWORD bg, fg, fg2, tile, tileOn, track, accent;
@@ -68,6 +69,7 @@ static struct {
     RECT    hit[BH_COUNT];
     int     pressed;
     int     bhot;               /* icono bajo el cursor */
+    int     trayStep;
     float   bs[BH_COUNT], bsv[BH_COUNT];    /* su escala animada (vectorial: crece nítido) */
     LARGE_INTEGER blast;
     wchar_t app[64];
@@ -517,6 +519,17 @@ static float PlaceIcon(const Ink *k, float right, float midY, float h, float *cx
     return w;
 }
 
+/* Bandeja: un chevrón hacia arriba, con el mismo trazo que los demás iconos. */
+static void DrawChevron(Canvas *c, float cx, float cy, float size, DWORD fg)
+{
+    ICON_LOOP(cx, cy, size)
+        const float d = min(SdSeg(q, 6.5f, 14.5f, 12.0f, 9.0f), SdSeg(q, 12.0f, 9.0f, 17.5f, 14.5f)) - 1.35f;
+        const float a = COV(d);
+        if (a > 0) Gfx_Blend(c, px, py, fg, a);
+    ICON_END
+}
+static const Ink kInkTray = { 5.15f, 7.65f, 18.85f, 15.85f, 0.62f };
+
 static int WifiArcs(void)  { return B.wifi >= 60 ? 2 : B.wifi >= 30 ? 1 : 0; }
 
 static void DrawLogo(Canvas *c, float x, float y, float g, DWORD rgb)
@@ -572,7 +585,7 @@ static void BarAnimate(void)
     if (dt > 0.05f) dt = 0.05f;
     const float z = Pop_Zeta();
     BOOL moving = FALSE;
-    for (int id = BH_VOL; id <= BH_CC; ++id) {
+    for (int id = BH_VOL; id <= BH_TRAY; ++id) {
         if (id == BH_CLOCK) continue;
         if (B.bs[id] < 0.1f) B.bs[id] = 1.0f;
         const float tg = B.pressed == id && B.bhot == id ? 0.88f : B.bhot == id ? 1.16f : 1.0f;
@@ -646,6 +659,12 @@ static void PaintBar(HDC target)
         iw = PlaceIcon(&kInkSound, (float)r, (float)cy, ih, &icx, &icy, &isz);
         DrawSound(c, icx, icy, isz * BarScale(BH_VOL), B.volume < 0.5f ? 1 : 2, mute, L->fg);
         SetRect(&B.hit[BH_VOL], r - (int)iw - BS(4), 0, r + BS(6), H);
+        r -= (int)(iw + gap);
+    }
+    {   /* la bandeja de Windows: Tailscale, OneDrive y demás iconos de la barra de tareas */
+        iw = PlaceIcon(&kInkTray, (float)r, (float)cy, ih, &icx, &icy, &isz);
+        DrawChevron(c, icx, icy, isz * BarScale(BH_TRAY), L->fg2);
+        SetRect(&B.hit[BH_TRAY], r - (int)iw - BS(6), 0, r + BS(6), H);
     }
 
     BitBlt(target, 0, 0, c->w, c->h, c->dc, 0, 0, SRCCOPY);
@@ -1776,6 +1795,11 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
         case BH_LOGO:  Panel_ShowTab(0); break;
         case BH_CLOCK: Notch_OpenCenter(); break;
         case BH_VOL: case BH_WIFI: case BH_BATT: case BH_CC: CC_Toggle(); break;
+        case BH_TRAY:  /* deja ver la barra de tareas y abre su panel de iconos ocultos */
+            Dock_TrayPeek(TRUE);
+            B.trayStep = 0;
+            SetTimer(h, TIMER_TRAY, 120, NULL);
+            break;
         }
         return 0;
     }
@@ -1792,6 +1816,26 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
             if (BarGlass() && CaptureBarBack()) InvalidateRect(h, NULL, FALSE);
         } else if (w == TIMER_BANIM) {
             BarAnimate();
+        } else if (w == TIMER_TRAY) {
+            /* Win+B lleva el foco al área de notificación (al botón de iconos ocultos) y
+             * Entrar lo abre: el panel real de Windows, con todo funcionando */
+            if (B.trayStep == 0) {
+                INPUT in[4] = { 0 };
+                for (int i = 0; i < 4; ++i) in[i].type = INPUT_KEYBOARD;
+                in[0].ki.wVk = VK_LWIN; in[1].ki.wVk = 'B';
+                in[2].ki.wVk = 'B'; in[2].ki.dwFlags = KEYEVENTF_KEYUP;
+                in[3].ki.wVk = VK_LWIN; in[3].ki.dwFlags = KEYEVENTF_KEYUP;
+                SendInput(4, in, sizeof(INPUT));
+                B.trayStep = 1;
+                SetTimer(h, TIMER_TRAY, 380, NULL);
+            } else {
+                INPUT in[2] = { 0 };
+                in[0].type = in[1].type = INPUT_KEYBOARD;
+                in[0].ki.wVk = in[1].ki.wVk = VK_RETURN;
+                in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+                SendInput(2, in, sizeof(INPUT));
+                KillTimer(h, TIMER_TRAY);
+            }
         } else if (w == TIMER_STATUS) {
             ReadBattery();
             ReadWifi();
@@ -1811,6 +1855,7 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
         KillTimer(h, TIMER_CLOCK);
         KillTimer(h, TIMER_STATUS);
         KillTimer(h, TIMER_BANIM);
+        KillTimer(h, TIMER_TRAY);
         if (B.registered) {
             APPBARDATA abd = { sizeof(abd) };
             abd.hWnd = h;

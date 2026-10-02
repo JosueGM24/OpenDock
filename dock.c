@@ -76,6 +76,8 @@ static struct {
     DWORD    lastScan;
     HWINEVENTHOOK fgHook;
     BOOL     shellOpen;         /* Inicio / Buscar de Windows abierto */
+    BOOL     peek;              /* la bandeja de Windows a la vista un momento */
+    DWORD    peekAt;
     float    slide;             /* 0 = visible · 1 = escondido bajo el borde */
     int      taskWatch;         /* ticks restantes de TIMER_DTASK */
 } D;
@@ -380,7 +382,25 @@ static void Rescan(void)
     if (s_nicons > MAX_ICONS - MAX_ITEMS) ClearIconCache();   /* los items se rehacen ahora */
     D.count = 0;
     AddPinned();
+    const int pinned = D.count;
     EnumWindows(EnumProc, 0);
+    /* EnumWindows las da en orden z (cambia al pasar de una app a otra): las abiertas sin
+     * anclar conservan su sitio según el orden en que aparecieron */
+    static wchar_t order[MAX_ITEMS][MAX_PATH];
+    static int norder;
+    int rank[MAX_ITEMS];
+    for (int i = pinned; i < D.count; ++i) {
+        rank[i] = norder + i;
+        for (int j = 0; j < norder; ++j) if (!lstrcmpiW(order[j], ItemKey(&D.items[i]))) { rank[i] = j; break; }
+    }
+    for (int i = pinned; i < D.count; ++i)
+        for (int j = i + 1; j < D.count; ++j)
+            if (rank[j] < rank[i]) {
+                DockItem t = D.items[i]; D.items[i] = D.items[j]; D.items[j] = t;
+                const int r = rank[i]; rank[i] = rank[j]; rank[j] = r;
+            }
+    norder = 0;
+    for (int i = pinned; i < D.count && norder < MAX_ITEMS; ++i) lstrcpynW(order[norder++], ItemKey(&D.items[i]), MAX_PATH);
     for (int i = 0; i < D.count; ++i) {
         DockItem *it = &D.items[i];
         for (int j = 0; j < oldN; ++j)
@@ -895,6 +915,16 @@ static void SetTaskbarOff(BOOL off)
 
 void Dock_RestoreTaskbar(void) { SetTaskbarOff(FALSE); }
 
+/* La bandeja de Windows (iconos de Tailscale, OneDrive…) vive en la barra de tareas: para
+ * usarla se deja ver la barra un momento; al irse el foco de ella, el dock la vuelve a ocultar. */
+void Dock_TrayPeek(BOOL on)
+{
+    if (!D.hwnd || !g_cfg.dockHideTaskbar) return;
+    D.peek = on;
+    D.peekAt = GetTickCount();
+    if (on) EnumWindows(ShowTrayProc, TRUE);
+}
+
 /* ───────────────────────── Ventana ───────────────────────── */
 static void DockMeasure(void)
 {
@@ -1031,9 +1061,18 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
             }
             if (!fs && !D.inside) { Rescan(); Kick(); }   /* refresca indicadores de apps abiertas */
             /* Explorer a veces vuelve a mostrar la barra (cambio de pantalla, reinicio) */
-            if (g_cfg.dockHideTaskbar && !D.shellOpen) SetTaskbarOff(TRUE);
+            if (D.peek && GetTickCount() - D.peekAt > 1500) {
+                /* fin de la visita a la bandeja: el foco ya no está en la barra ni en su panel */
+                HWND fg = GetForegroundWindow();
+                wchar_t cls[64] = L"";
+                if (fg) GetClassNameW(fg, cls, 64);
+                const BOOL tray = !lstrcmpW(cls, L"Shell_TrayWnd") || !lstrcmpW(cls, L"TopLevelWindowForOverflowXamlIsland") ||
+                                  !lstrcmpW(cls, L"NotifyIconOverflowWindow") || !lstrcmpW(cls, L"Xaml_WindowedPopupClass");
+                if (!tray || GetTickCount() - D.peekAt > 60000) D.peek = FALSE;
+            }
+            if (g_cfg.dockHideTaskbar && !D.shellOpen && !D.peek) SetTaskbarOff(TRUE);
         } else if (w == TIMER_DTASK) {
-            if (!D.shellOpen && g_cfg.dockHideTaskbar) SetTaskbarOff(TRUE);
+            if (!D.shellOpen && !D.peek && g_cfg.dockHideTaskbar) SetTaskbarOff(TRUE);
             if (--D.taskWatch <= 0 || D.shellOpen) KillTimer(h, TIMER_DTASK);
         } else if (w == TIMER_DBLUR) {
             /* el fondo cambió (ventana movida, vídeo…): recomponer el vidrio */
