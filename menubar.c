@@ -1936,6 +1936,59 @@ static void ArmClock(HWND h)
     SetTimer(h, TIMER_CLOCK, max(200u, ms), NULL);
 }
 
+/* El panel de iconos ocultos de Windows (Tailscale, OneDrive…) es una ventana de Explorer.
+ * Se abre con Win+B y Entrar y, en cuanto aparece, se coloca bajo el chevrón de la barra;
+ * si Explorer intenta devolverlo abajo, se vuelve a subir mientras siga abierto. Ya arriba,
+ * la barra de tareas se vuelve a esconder (si al hacerlo Windows cerrase el panel, en
+ * adelante se deja a la vista mientras esté abierto). */
+#define TRAY_FLYOUT L"TopLevelWindowForOverflowXamlIsland"
+static HWND s_trayFly;
+static HWINEVENTHOOK s_trayHook;
+static BOOL s_trayKeepTaskbar;
+
+static void PlaceTrayFlyout(HWND w)
+{
+    RECT r;
+    if (!B.hwnd || !GetWindowRect(w, &r)) return;
+    const int fw = r.right - r.left;
+    const RECT *hb = &B.hit[BH_TRAY];
+    int x = B.mon.left + (hb->left + hb->right) / 2 - fw / 2;
+    x = max(B.mon.left + BS(8), min(B.mon.right - BS(8) - fw, x));
+    const int y = B.mon.top + B.h + BS(6);
+    if (r.left != x || r.top != y) SetWindowPos(w, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+static void StopTrayWatch(void)
+{
+    if (s_trayHook) { UnhookWinEvent(s_trayHook); s_trayHook = NULL; }
+    s_trayFly = NULL;
+}
+
+static void CALLBACK TrayHook(HWINEVENTHOOK hk, DWORD ev, HWND w, LONG obj, LONG child, DWORD th, DWORD t)
+{
+    (void)hk; (void)th; (void)t;
+    if (!s_trayFly || w != s_trayFly || obj != OBJID_WINDOW || child != CHILDID_SELF) return;
+    if (ev == EVENT_OBJECT_HIDE) { StopTrayWatch(); return; }
+    if (ev == EVENT_OBJECT_SHOW || ev == EVENT_OBJECT_LOCATIONCHANGE) {
+        PlaceTrayFlyout(w);
+        if (ev == EVENT_OBJECT_SHOW && B.hwnd && g_cfg.dock && g_cfg.dockHideTaskbar && !s_trayKeepTaskbar) {
+            B.trayStep = 3;
+            SetTimer(B.hwnd, TIMER_TRAY, 250, NULL);
+        }
+    }
+}
+
+static void StartTrayWatch(void)
+{
+    StopTrayWatch();
+    HWND w = FindWindowW(TRAY_FLYOUT, NULL);           /* existe siempre, oculta hasta abrirse */
+    DWORD pid = 0;
+    if (!w || !GetWindowThreadProcessId(w, &pid)) return;
+    s_trayFly = w;
+    s_trayHook = SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_LOCATIONCHANGE, NULL, TrayHook, pid, 0, WINEVENT_OUTOFCONTEXT);
+    if (IsWindowVisible(w)) PlaceTrayFlyout(w);
+}
+
 static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
@@ -2026,6 +2079,7 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
             /* Win+B lleva el foco al área de notificación (al botón de iconos ocultos) y
              * Entrar lo abre: el panel real de Windows, con todo funcionando */
             if (B.trayStep == 0) {
+                StartTrayWatch();
                 INPUT in[4] = { 0 };
                 for (int i = 0; i < 4; ++i) in[i].type = INPUT_KEYBOARD;
                 in[0].ki.wVk = VK_LWIN; in[1].ki.wVk = 'B';
@@ -2034,13 +2088,25 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 SendInput(4, in, sizeof(INPUT));
                 B.trayStep = 1;
                 SetTimer(h, TIMER_TRAY, 380, NULL);
-            } else {
+            } else if (B.trayStep == 1) {
                 INPUT in[2] = { 0 };
                 in[0].type = in[1].type = INPUT_KEYBOARD;
                 in[0].ki.wVk = in[1].ki.wVk = VK_RETURN;
                 in[1].ki.dwFlags = KEYEVENTF_KEYUP;
                 SendInput(2, in, sizeof(INPUT));
+                B.trayStep = 2;
+                SetTimer(h, TIMER_TRAY, 2000, NULL);     /* si no llega a abrirse, se deja de vigilar */
+            } else if (B.trayStep == 2) {
                 KillTimer(h, TIMER_TRAY);
+                if (!s_trayFly || !IsWindowVisible(s_trayFly)) StopTrayWatch();
+            } else if (B.trayStep == 3) {           /* el panel ya está arriba */
+                Dock_TrayPeek(FALSE);
+                B.trayStep = 4;
+                SetTimer(h, TIMER_TRAY, 450, NULL);
+            } else {
+                KillTimer(h, TIMER_TRAY);
+                /* ¿Windows lo cerró al esconder la barra? Entonces la próxima vez se queda */
+                if (!s_trayFly || !IsWindowVisible(s_trayFly)) { s_trayKeepTaskbar = TRUE; StopTrayWatch(); }
             }
         } else if (w == TIMER_STATUS) {         /* repaso de seguridad: lo normal llega por avisos */
             ReadBattery();
@@ -2077,6 +2143,7 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
         KillTimer(h, TIMER_BANIM);
         KillTimer(h, TIMER_TRAY);
         KillTimer(h, TIMER_WIFIQ);
+        StopTrayWatch();
         if (B.battNotify) { UnregisterPowerSettingNotification(B.battNotify); B.battNotify = NULL; }
         B.synced = FALSE;
         if (B.registered) {

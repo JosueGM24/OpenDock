@@ -1034,6 +1034,9 @@ void Dock_TrayPeek(BOOL on)
     if (on) {
         EnumWindows(ShowTrayProc, TRUE);
         SetTimer(D.hwnd, TIMER_DPEEK, 700, NULL);
+    } else {                     /* el panel ya está arriba: la barra de tareas sobra */
+        KillTimer(D.hwnd, TIMER_DPEEK);
+        if (!D.shellOpen) SetTaskbarOff(TRUE);
     }
 }
 
