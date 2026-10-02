@@ -26,9 +26,8 @@
 typedef struct {
     wchar_t aumid[160];
     wchar_t name[64];
-    HBITMAP icon;
-    int     iconPx;         /* tamaño con el que se pidió el icono */
-    BOOL    iconTried;
+    HBITMAP icon[2];        /* dos tamaños: el normal y el de insignia (sobre una foto) */
+    int     iconPx[2];      /* tamaño con el que se pidió cada uno; 0 = hueco libre */
     wchar_t siteIcon[MAX_PATH];     /* sitio web: su icono, el que registró el navegador */
     BOOL    siteTried;
 } AppInfo;
@@ -164,7 +163,7 @@ static const AppInfo *LookupApp(const wchar_t *aumid)
         if (!lstrcmpiW(s_apps[i].aumid, aumid)) return &s_apps[i];
 
     AppInfo *a = &s_apps[s_napps < MAX_APPS ? s_napps++ : MAX_APPS - 1];
-    if (a->icon) DeleteObject(a->icon);
+    for (int k = 0; k < 2; ++k) if (a->icon[k]) DeleteObject(a->icon[k]);
     ZeroMemory(a, sizeof(*a));
     lstrcpynW(a->aumid, aumid, 160);
 
@@ -513,13 +512,19 @@ static HBITMAP DecodeLogo(LPCWSTR path, int px)
 
 HBITMAP Wn_LogoIcon(LPCWSTR path, int px)
 {
-    static struct { wchar_t path[MAX_PATH]; int px; HBITMAP bmp; } cache[24];
-    static int next;
+    /* Caché holgada y por uso (LRU): con hasta WN_MAX avisos, cada uno con su foto y el icono
+     * del sitio en dos tamaños. Si se reciclara, al redibujar (hover, scroll) habría que leer
+     * de nuevo el archivo, y el navegador suele haberlo borrado ya: el icono cambiaría. */
+    #define LOGO_CACHE (WN_MAX * 2 + 16)
+    static struct { wchar_t path[MAX_PATH]; int px; HBITMAP bmp; DWORD used; } cache[LOGO_CACHE];
+    static DWORD tick;
     if (!path || !path[0]) return NULL;
-    for (int i = 0; i < 24; ++i)
-        if (cache[i].px == px && !lstrcmpiW(cache[i].path, path)) return cache[i].bmp;
+    for (int i = 0; i < LOGO_CACHE; ++i)
+        if (cache[i].px == px && !lstrcmpiW(cache[i].path, path)) { cache[i].used = ++tick; return cache[i].bmp; }
     HBITMAP b = DecodeLogo(path, px);
-    const int slot = next++ % 24;
+    int slot = 0;
+    for (int i = 1; i < LOGO_CACHE; ++i) if (cache[i].used < cache[slot].used) slot = i;
+    cache[slot].used = ++tick;
     if (cache[slot].bmp) DeleteObject(cache[slot].bmp);
     lstrcpynW(cache[slot].path, path, MAX_PATH);
     cache[slot].px = px;
@@ -531,10 +536,6 @@ HBITMAP Wn_LogoIcon(LPCWSTR path, int px)
 HBITMAP Wn_AppIcon(LPCWSTR aumid, int px)
 {
     AppInfo *a = (AppInfo *)LookupApp(aumid);
-    if (a->iconTried && a->iconPx == px) return a->icon;
-    if (a->icon) { DeleteObject(a->icon); a->icon = NULL; }
-    a->iconTried = TRUE;
-    a->iconPx = px;
     if (IsSiteNote(aumid)) {    /* sitios web: su icono (el que registró el navegador), no el del navegador */
         if (!g_cfg.siteIcons) return NULL;
         if (!a->siteTried && s_db) {
@@ -554,6 +555,11 @@ HBITMAP Wn_AppIcon(LPCWSTR aumid, int px)
         return a->siteIcon[0] ? Wn_LogoIcon(a->siteIcon, px) : NULL;
     }
 
+    for (int k = 0; k < 2; ++k) if (a->iconPx[k] == px) return a->icon[k];
+    const int k = a->iconPx[0] ? 1 : 0;     /* un tercer tamaño (cambio de DPI) pisa el segundo */
+    if (a->icon[k]) { DeleteObject(a->icon[k]); a->icon[k] = NULL; }
+    a->iconPx[k] = px;
+
     wchar_t path[200];
     if (lstrlenW(aumid) >= 170) return NULL;
     wsprintfW(path, L"shell:AppsFolder\\%s", aumid);
@@ -562,12 +568,12 @@ HBITMAP Wn_AppIcon(LPCWSTR aumid, int px)
         IShellItemImageFactory *f = NULL;
         if (SUCCEEDED(IShellItem_QueryInterface(si, &IID_IShellItemImageFactory, (void **)&f))) {
             SIZE sz = { px, px };
-            IShellItemImageFactory_GetImage(f, sz, SIIGBF_RESIZETOFIT | SIIGBF_ICONONLY, &a->icon);
+            IShellItemImageFactory_GetImage(f, sz, SIIGBF_RESIZETOFIT | SIIGBF_ICONONLY, &a->icon[k]);
             IShellItemImageFactory_Release(f);
         }
         IShellItem_Release(si);
     }
-    return a->icon;
+    return a->icon[k];
 }
 
 const WinNote *Wn_Get(int i)
@@ -871,7 +877,8 @@ void Wn_Start(void)
 void Wn_Stop(void)
 {
     if (s_db) { sqlite3_close(s_db); s_db = NULL; }
-    for (int i = 0; i < s_napps; ++i) if (s_apps[i].icon) DeleteObject(s_apps[i].icon);
+    for (int i = 0; i < s_napps; ++i)
+        for (int k = 0; k < 2; ++k) if (s_apps[i].icon[k]) DeleteObject(s_apps[i].icon[k]);
     s_napps = 0;
     s_count = 0;
 }
