@@ -616,14 +616,19 @@ static float WifiLit(void) { return B.wifi < 0 ? 0.0f : 1.0f + WifiArcs(); }
 static BOOL  VolMuted(void) { return B.volume >= 0 && (B.muted || B.volume <= 0.001f); }
 static float VolLit(void)  { return VolMuted() ? 0.0f : B.volume < 0.5f ? 1.0f : 2.0f; }
 
+/* El logo de OpenDock a una tinta: el contorno del azulejo, la isla arriba y el dock abajo. */
 static void DrawLogo(Canvas *c, float x, float y, float g, DWORD rgb)
 {
-    const float th = max(1.5f, BS(2) * 0.9f), o = th;
+    const float th = max(1.3f, BS(2) * 0.75f), in = th * 0.5f;
+    const float iw = g * 0.40f, ih = max(2.0f, g * 0.15f), dw = g * 0.62f, dh = max(2.2f, g * 0.19f);
     GdiFlush();
-    for (int py = (int)y; py < (int)(y + g); ++py)
-        for (int px = (int)x; px < (int)(x + g); ++px) {
-            const float d = fabsf(Gfx_SdRRect(px + 0.5f, py + 0.5f, x + o, y + o, g * 2, g * 2, g * 0.75f));
-            Gfx_Blend(c, px, py, rgb, Gfx_Cov(d - th * 0.5f));
+    for (int py = (int)y; py < (int)(y + g + 1); ++py)
+        for (int px = (int)x; px < (int)(x + g + 1); ++px) {
+            const float fx = px + 0.5f, fy = py + 0.5f;
+            float k = Gfx_Cov(fabsf(Gfx_SdRRect(fx, fy, x + in, y + in, g - th, g - th, g * 0.28f)) - th * 0.5f);
+            k = max(k, Gfx_Cov(Gfx_SdRRect(fx, fy, x + (g - iw) * 0.5f, y + g * 0.24f, iw, ih, ih * 0.5f)));
+            k = max(k, Gfx_Cov(Gfx_SdRRect(fx, fy, x + (g - dw) * 0.5f, y + g * 0.60f, dw, dh, dh * 0.42f)));
+            if (k > 0) Gfx_Blend(c, px, py, rgb, k);
         }
 }
 
