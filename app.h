@@ -49,7 +49,7 @@ typedef struct {
     int  notchX;        /* centro del notch, 0..10000 del ancho del monitor */
     int  notchY;        /* 0 = pegado al borde superior; >0 = isla flotante (px lógicos) */
     BOOL floating;      /* estilo propio: la isla flota separada del borde en vez de ser un notch */
-    int  sound;         /* sonido al llegar una notificación: 0 silencio · 1 Windows · 2 suave */
+    int  sound;         /* sonido al llegar una notificación: 0 silencio · 1 Windows · 2.. Material (3 = Eco suave) */
     BOOL menubar;       /* barra superior estilo macOS */
     BOOL hideClock;     /* con la barra activa, ocultar el reloj de la barra de tareas */
     BOOL dock;          /* dock inferior estilo macOS */
@@ -257,7 +257,7 @@ HBITMAP Wn_LogoIcon(LPCWSTR path, int px);  /* el icono propio de un aviso (PNG,
 BOOL    Wn_IsSite(LPCWSTR aumid);           /* aviso de un sitio web (lo entrega el navegador) */
 
 /* sonidos de notificación (notch.c): 0 silencio · 1 Windows · 2… los propios */
-#define SOUND_COUNT 16
+#define SOUND_COUNT 15
 LPCWSTR Notch_SoundName(int i);
 LPCWSTR Notch_SoundFamily(int i);  /* el icono propio de un aviso (PNG, JPG, ICO…); ídem */
 

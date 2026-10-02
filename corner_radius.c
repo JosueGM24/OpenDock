@@ -180,7 +180,7 @@ void Cfg_Save(void)
     RegWriteDword(L"NotchAccent", (DWORD)g_cfg.accent);
     RegWriteDword(L"NotchBounce", (DWORD)g_cfg.bounce);
     RegWriteDword(L"NotchFloating", (DWORD)g_cfg.floating);
-    RegWriteDword(L"NotchSoundV3", (DWORD)g_cfg.sound);
+    RegWriteDword(L"NotchSoundV4", (DWORD)g_cfg.sound);
     RegWriteDword(L"MenuBar", (DWORD)g_cfg.menubar);
     RegWriteDword(L"HideWindowsClock", (DWORD)g_cfg.hideClock);
     RegWriteDword(L"Dock", (DWORD)g_cfg.dock);
@@ -213,12 +213,15 @@ static void LoadConfig(void)
     g_cfg.accent      = (int)min(RegReadDword(L"NotchAccent", 0), ACCENT_COUNT - 1);
     g_cfg.bounce      = (int)min(RegReadDword(L"NotchBounce", 1), 2);
     g_cfg.floating    = RegReadDword(L"NotchFloating", 0) != 0;
-    {   /* catálogos anteriores: silencio, Windows y Campanita se conservan; lo demás pasa a Campanita */
-        const DWORD v3 = RegReadDword(L"NotchSoundV3", 0xFFFF), v2 = RegReadDword(L"NotchSoundV2", 0xFFFF);
-        const DWORD old = RegReadDword(L"NotchSound", 0);
-        g_cfg.sound = v3 != 0xFFFF ? (int)min(v3, SOUND_COUNT - 1)
-                    : v2 != 0xFFFF ? (v2 <= 2 ? (int)v2 : 2)
-                    : old <= 1 ? (int)old : 2;
+    {   /* catálogos anteriores: silencio y Windows se conservan; Campanita (ya no está) y los
+         * sintetizados pasan a Eco suave, que es también el de una instalación nueva */
+        enum { ECO_SUAVE = 3 };
+        const DWORD v4 = RegReadDword(L"NotchSoundV4", 0xFFFF), v3 = RegReadDword(L"NotchSoundV3", 0xFFFF);
+        const DWORD v2 = RegReadDword(L"NotchSoundV2", 0xFFFF), old = RegReadDword(L"NotchSound", 0xFFFF);
+        g_cfg.sound = v4 != 0xFFFF ? (int)min(v4, SOUND_COUNT - 1)
+                    : v3 != 0xFFFF ? (v3 <= 1 ? (int)v3 : v3 == 2 ? ECO_SUAVE : (int)min(v3 - 1, SOUND_COUNT - 1))
+                    : v2 != 0xFFFF ? (v2 <= 1 ? (int)v2 : ECO_SUAVE)
+                    : old != 0xFFFF && old <= 1 ? (int)old : ECO_SUAVE;
     }
     g_cfg.menubar     = RegReadDword(L"MenuBar", 0) != 0;
     g_cfg.hideClock   = RegReadDword(L"HideWindowsClock", 1) != 0;

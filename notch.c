@@ -995,8 +995,7 @@ static void StopFrames(void)
 }
 
 /* ───────────────────────── Sonido ─────────────────────────
- * Silencio, el de Windows, "Campanita" (campana FM sintetizada aquí) y los avisos y
- * celebraciones de Material Design Sound Resources (Google, CC-BY 4.0), incrustados como
+ * Silencio, el de Windows y los avisos y celebraciones de Material Design Sound Resources (Google, CC-BY 4.0), incrustados como
  * recursos (mono, 16 bit, 48 kHz, recortados y a la misma altura). El volumen se aplica al
  * reproducir. */
 #define MATERIAL_COUNT 13
@@ -1010,48 +1009,13 @@ LPCWSTR Notch_SoundName(int i)
 {
     if (i == 0) return L"Silencio";
     if (i == 1) return L"Windows";
-    if (i == 2) return L"Campanita";
-    return i > 2 && i < SOUND_COUNT ? kMaterial[i - 3].name : L"";
+    return i > 1 && i < SOUND_COUNT ? kMaterial[i - 2].name : L"";
 }
 
 LPCWSTR Notch_SoundFamily(int i)
 {
     if (i <= 1) return L"Sistema";
-    if (i == 2) return L"Campanas";
-    return i < SOUND_COUNT && kMaterial[i - 3].celebration ? L"Celebración \x00B7 Material" : L"Avisos \x00B7 Material";
-}
-
-static void WavHeader(BYTE *h, int rate, DWORD dataLen)
-{
-    const DWORD riff = 36 + dataLen, fmtLen = 16, rateB = rate * 2, srate = rate;
-    const WORD pcm = 1, ch = 1, align = 2, bits = 16;
-    CopyMemory(h, "RIFF", 4); CopyMemory(h + 4, &riff, 4); CopyMemory(h + 8, "WAVEfmt ", 8);
-    CopyMemory(h + 16, &fmtLen, 4); CopyMemory(h + 20, &pcm, 2); CopyMemory(h + 22, &ch, 2);
-    CopyMemory(h + 24, &srate, 4); CopyMemory(h + 28, &rateB, 4); CopyMemory(h + 32, &align, 2);
-    CopyMemory(h + 34, &bits, 2); CopyMemory(h + 36, "data", 4); CopyMemory(h + 40, &dataLen, 4);
-}
-
-/* Campanita: una campana FM (portadora modulada a razón 3,5 con un índice que se apaga). */
-static BYTE *BuildCampanita(DWORD *size)
-{
-    const int rate = 44100, n = rate;
-    BYTE *h = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 44 + (SIZE_T)n * 2);
-    if (!h) return NULL;
-    WavHeader(h, rate, (DWORD)n * 2);
-    short *out = (short *)(h + 44);
-    const float tau = 6.2831853f, f = 1046.5f, d = 4.0f;
-    float peak = 0.0001f;
-    for (int pass = 0; pass < 2; ++pass)
-        for (int i = 0; i < n; ++i) {
-            const float t = (float)i / rate, idx = 2.4f * expf(-t * d * 0.8f);
-            float v = sinf(tau * f * t + idx * sinf(tau * f * 3.5f * t)) * expf(-t * d) * min(1.0f, t / 0.003f);
-            if (!pass) { peak = max(peak, fabsf(v)); continue; }
-            v = v / peak * 0.80f;
-            if (i > n - rate / 25) v *= (float)(n - i) / (rate / 25);
-            out[i] = (short)(v * 32767.0f);
-        }
-    *size = 44 + (DWORD)n * 2;
-    return h;
+    return i < SOUND_COUNT && kMaterial[i - 2].celebration ? L"Celebración \x00B7 Material" : L"Avisos \x00B7 Material";
 }
 
 /* Un sonido de Material: el recurso tal cual (vive con el ejecutable, no se libera). */
@@ -1125,8 +1089,7 @@ void Notch_PlaySound(void)
     const float gain = powf(max(0, min(100, g_cfg.soundVol)) / 100.0f, 1.2f);   /* 0..100, curva de oído */
     const int i = g_cfg.sound;
     if (i <= 0 || i >= SOUND_COUNT) return;
-    if (!s_built[i]) s_built[i] = i == 1 ? LoadWindowsSound(&s_size[i]) : i == 2 ? BuildCampanita(&s_size[i])
-                                : MaterialSound(i - 3, &s_size[i]);
+    if (!s_built[i]) s_built[i] = i == 1 ? LoadWindowsSound(&s_size[i]) : MaterialSound(i - 2, &s_size[i]);
     PlaySoundW(NULL, NULL, 0);                       /* el anterior se corta antes de reutilizar el búfer */
     if (!s_built[i]) {                               /* Windows sin .wav legible: su alias, a su volumen */
         if (i == 1) PlaySoundW(L"Notification.Default", NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);

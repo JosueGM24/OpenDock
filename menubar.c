@@ -861,13 +861,13 @@ static void PaintBar(HDC target)
 
     /* izquierda: icono de la app activa (o el logo, si no tiene) + su nombre */
     int x = BS(16);
-    const int is = BS(16);
+    const int is = BS(13);
     if (!B.appIcon || !BlitAppIcon(c, B.appIcon, x, cy - is / 2, is)) {
         const float g = (float)BS(14);
         DrawLogo(c, (float)x + (is - g) * 0.5f, cy - g * 0.5f, g, L->fg);
     }
     SetRect(&B.hit[BH_LOGO], 0, 0, x + is + BS(6), H);
-    x += is + BS(9);
+    x += is + BS(8);
     if (B.app[0]) {
         const int w = min(Gfx_TextWidth(B.fBold, B.app), BS(320));
         Gfx_Text(c, B.fBold, B.app, x, 0, w + 2, H, L->fg, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
@@ -2317,7 +2317,7 @@ static void RefreshStatus(void)
     ReadWifi();
     ReadVolume();
     ForegroundAppName(B.app, 64);
-    ForegroundAppIcon(BS(16));
+    ForegroundAppIcon(BS(13));
 }
 
 /* El reloj solo cambia una vez por minuto: se despierta justo al cambiar (con vidrio,
@@ -2710,7 +2710,7 @@ void Bar_ForegroundChanged(void)
     if (!B.hwnd) return;
     wchar_t name[64];
     ForegroundAppName(name, 64);
-    const BOOL icon = ForegroundAppIcon(BS(16));
+    const BOOL icon = ForegroundAppIcon(BS(13));
     if (name[0] && lstrcmpW(name, B.app)) lstrcpynW(B.app, name, 64);
     else if (!icon) return;
     InvalidateRect(B.hwnd, NULL, FALSE);

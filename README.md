@@ -50,8 +50,9 @@ Para que Windows no muestre además su banner de la esquina, activa su **No mole
 toca `ShowBanner` en el registro: Windows no lo relee en vivo. Al arrancar deshace los
 cambios que hicieron versiones anteriores.
 
-**Sonido**: al llegar una notificación al notch puede sonar el sonido de Windows o un
-"ding" suave propio (sintetizado, sin archivos), aunque tengas No molestar activado.
+**Sonido**: al llegar una notificación al notch puede sonar el sonido de Windows o uno de
+los trece de Material Design (por defecto, "Eco suave"), con su propio volumen, aunque
+tengas No molestar activado.
 
 **Estilo**: "Notch" (pegado al borde superior) o "Flotante" (una tarjeta separada del borde).
 
