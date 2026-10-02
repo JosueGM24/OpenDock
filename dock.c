@@ -70,11 +70,17 @@ static struct {
     BOOL     inside, fullscreen;
     int      panelX, panelY, panelW, panelH;   /* panel dibujado (coords de ventana) */
     int      iconTop;           /* borde superior del icono más alto (magnificado/saltando) */
-    int      backY;             /* fila de la ventana donde empieza el fondo capturado */
+    int      backY, backX;      /* origen del fondo capturado (en la ventana) */
+    Canvas   raw;               /* captura sin desenfocar: si no cambió, no se recalcula */
+    RECT     dirtyPrev;         /* zona presentada en el fotograma anterior */
+    Canvas   gstrip;            /* vidrio teñido precalculado (franja del panel) */
+    DWORD    gstripKey;
+    BOOL     gstripDirty;
     DWORD    backTick, backHash;
     LARGE_INTEGER last, freq;
     DWORD    lastScan;
     HWINEVENTHOOK fgHook;
+    BOOL     dirty;             /* hay que redibujar aunque nada se anime */
     BOOL     shellOpen;         /* Inicio / Buscar de Windows abierto */
     BOOL     peek;              /* la bandeja de Windows a la vista un momento */
     DWORD    peekAt;
@@ -197,6 +203,10 @@ static BOOL GetIcon(LPCWSTR path, DockItem *it)
     DWORD *px = NULL;
     int w = 0, h = 0;
     LoadIconPixels(path, size, &px, &w, &h);
+    for (int i = 0; px && i < w * h; ++i) {           /* a premultiplicado, una sola vez */
+        const DWORD v = px[i], a = v >> 24;
+        px[i] = a << 24 | (((v >> 16) & 255) * a / 255) << 16 | (((v >> 8) & 255) * a / 255) << 8 | ((v & 255) * a / 255);
+    }
     if (s_nicons < MAX_ICONS) {      /* también se guardan los fallos, para no reintentar */
         IconEntry *e = &s_icons[s_nicons++];
         lstrcpynW(e->path, path, MAX_PATH);
@@ -503,24 +513,34 @@ static float HopOffset(const DockItem *it)
 static BOOL CaptureBackdrop(void)
 {
     const int y0 = max(0, (int)(PanelBottom() - PanelH()) - DS(16));
-    const int sw = max(1, D.frame.w / BACK_SCALE), sh = max(1, (WinH() - y0) / BACK_SCALE);
-    if (D.back.w != sw || D.back.h != sh) {
-        Canvas_Free(&D.back);
-        if (!Canvas_Init(&D.back, sw, sh)) return FALSE;
+    /* solo la franja que hay detrás del panel (más el sitio para crecer al magnificar) */
+    const int span = D.panelW > 0 ? D.panelW + DS(160) : D.frame.w;
+    const int x0 = max(0, min(D.frame.w - 1, (D.frame.w - span) / 2));
+    const int sw = max(1, min(D.frame.w - x0, span) / BACK_SCALE), sh = max(1, (WinH() - y0) / BACK_SCALE);
+    if (D.raw.w != sw || D.raw.h != sh) {
+        Canvas_Free(&D.raw);
+        if (!Canvas_Init(&D.raw, sw, sh)) return FALSE;
+        D.backHash = 0;
     }
-    D.backY = y0;
     HDC screen = GetDC(NULL);
-    SetStretchBltMode(D.back.dc, HALFTONE);
-    SetBrushOrgEx(D.back.dc, 0, 0, NULL);
-    /* el dock está excluido de captura: aquí solo se ve lo que hay detrás */
-    StretchBlt(D.back.dc, 0, 0, sw, sh, screen, D.mon.left, D.mon.bottom - WinH() + y0,
+    SetStretchBltMode(D.raw.dc, COLORONCOLOR);       /* el desenfoque ya suaviza: sin HALFTONE */
+    StretchBlt(D.raw.dc, 0, 0, sw, sh, screen, D.mon.left + x0, D.mon.bottom - WinH() + y0,
                sw * BACK_SCALE, sh * BACK_SCALE, SRCCOPY);
     ReleaseDC(NULL, screen);
     GdiFlush();
     DWORD hash = 2166136261u;
-    for (int i = 0; i < sw * sh; ++i) hash = (hash ^ (D.back.px[i] & 0xFFFFFF)) * 16777619u;
-    const BOOL changed = hash != D.backHash;
+    for (int i = 0; i < sw * sh; ++i) hash = (hash ^ (D.raw.px[i] & 0xFFFFFF)) * 16777619u;
+    D.backTick = GetTickCount();
+    if (hash == D.backHash && D.back.px && D.back.w == sw && D.back.h == sh && D.backX == x0 && D.backY == y0)
+        return FALSE;                                  /* lo de detrás no cambió */
     D.backHash = hash;
+    if (D.back.w != sw || D.back.h != sh) {
+        Canvas_Free(&D.back);
+        if (!Canvas_Init(&D.back, sw, sh)) return FALSE;
+    }
+    D.backX = x0; D.backY = y0;
+    D.gstripDirty = TRUE;                              /* el vidrio se vuelve a teñir */
+    CopyMemory(D.back.px, D.raw.px, (SIZE_T)sw * sh * 4);
     const int r = max(1, DS(g_cfg.dockBlur == 2 ? 24 : 11) / BACK_SCALE);
     for (int i = 0; i < 2; ++i) Gfx_BoxBlur(D.back.px, sw, sh, r);
     /* vibrancia: algo más de saturación, como el vidrio de Apple */
@@ -531,13 +551,12 @@ static BOOL CaptureBackdrop(void)
                        (DWORD)max(0, min(255, Y + (G - Y) * 3 / 2)) << 8 |
                        (DWORD)max(0, min(255, Y + (B - Y) * 3 / 2));
     }
-    D.backTick = GetTickCount();
-    return changed;
+    return TRUE;
 }
 
 static DWORD SampleBack(int x, int y)
 {
-    const float fx = (x + 0.5f) / BACK_SCALE - 0.5f, fy = (y - D.backY + 0.5f) / BACK_SCALE - 0.5f;
+    const float fx = (x - D.backX + 0.5f) / BACK_SCALE - 0.5f, fy = (y - D.backY + 0.5f) / BACK_SCALE - 0.5f;
     const int x0 = max(0, min(D.back.w - 1, (int)floorf(fx))), y0 = max(0, min(D.back.h - 1, (int)floorf(fy)));
     const int x1 = min(D.back.w - 1, x0 + 1), y1 = min(D.back.h - 1, y0 + 1);
     const float tx = max(0.0f, min(1.0f, fx - x0)), ty = max(0.0f, min(1.0f, fy - y0));
@@ -548,44 +567,56 @@ static DWORD SampleBack(int x, int y)
 
 /* ───────────────────────── Dibujo ─────────────────────────
  * Se compone en color straight + alpha y se premultiplica al final, antes de presentar. */
+/* El fotograma se compone directamente en BGRA premultiplicado (lo que pide
+ * UpdateLayeredWindow): "encima" es src + dst·(1 − α), todo en enteros. */
 static void PutPx(DWORD *dst, DWORD rgb, float a)
 {
+    const int A = (int)(a * 255.0f + 0.5f);
+    if (A <= 0) return;
     const DWORD d = *dst;
-    const float da = (d >> 24) / 255.0f, oa = a + da * (1 - a);
-    if (oa <= 0) return;
-    const float k = da * (1 - a);
-    const float nr = (((rgb >> 16) & 255) * a + ((d >> 16) & 255) * k) / oa;
-    const float ng = (((rgb >> 8) & 255) * a + ((d >> 8) & 255) * k) / oa;
-    const float nb = ((rgb & 255) * a + (d & 255) * k) / oa;
-    *dst = (DWORD)(oa * 255 + 0.5f) << 24 | (DWORD)(nr + 0.5f) << 16 | (DWORD)(ng + 0.5f) << 8 | (DWORD)(nb + 0.5f);
+    const DWORD ia = 255 - A;
+    const DWORD rb = ((((rgb & 0xFF00FF) * A) + ((d & 0xFF00FF) * ia) + 0x800080) >> 8) & 0xFF00FF;
+    const DWORD g  = ((((rgb & 0x00FF00) * A) + ((d & 0x00FF00) * ia) + 0x008000) >> 8) & 0x00FF00;
+    const DWORD al = (DWORD)A + (((d >> 24) * ia + 127) / 255);
+    *dst = min(255u, al) << 24 | rb | g;
 }
 
+/* Icono escalado: bilineal en punto fijo sobre píxeles ya premultiplicados (de la caché). */
 static void BlitIcon(Canvas *f, const DockItem *it, float cx, float bottom, float size)
 {
     if (!it->px || size < 1) return;
-    const float hw = size * 0.5f;
-    const int x0 = max(0, (int)floorf(cx - hw)), x1 = min(f->w, (int)ceilf(cx + hw));
-    const int y0 = max(0, (int)floorf(bottom - size)), y1 = min(f->h, (int)ceilf(bottom));
+    const float hw = size * 0.5f, left = cx - hw, topf = bottom - size;
+    const int x0 = max(0, (int)floorf(left)), x1 = min(f->w, (int)ceilf(cx + hw));
+    const int y0 = max(0, (int)floorf(topf)), y1 = min(f->h, (int)ceilf(bottom));
     const float inv = (float)it->iw / size;
+    const int step = (int)(inv * 65536.0f), W = it->iw, H = it->ih;
     for (int y = y0; y < y1; ++y) {
-        const float sy = (y + 0.5f - (bottom - size)) * inv - 0.5f;
-        const int iy = (int)floorf(sy); if (iy < -1 || iy >= it->ih) continue;
-        const float ty = sy - iy; const int ya = max(0, iy), yb = min(it->ih - 1, iy + 1);
-        for (int x = x0; x < x1; ++x) {
-            const float sx = (x + 0.5f - (cx - hw)) * inv - 0.5f;
-            const int ix = (int)floorf(sx); if (ix < -1 || ix >= it->iw) continue;
-            const float tx = sx - ix; const int xa = max(0, ix), xb = min(it->iw - 1, ix + 1);
-            const DWORD ps[4] = { it->px[ya * it->iw + xa], it->px[ya * it->iw + xb],
-                                  it->px[yb * it->iw + xa], it->px[yb * it->iw + xb] };
-            const float wgt[4] = { (1 - tx) * (1 - ty), tx * (1 - ty), (1 - tx) * ty, tx * ty };
-            float A = 0, R = 0, G = 0, Bv = 0;
-            for (int k = 0; k < 4; ++k) {
-                const float aa = (ps[k] >> 24) / 255.0f * wgt[k];
-                A += aa; R += ((ps[k] >> 16) & 255) * aa; G += ((ps[k] >> 8) & 255) * aa; Bv += (ps[k] & 255) * aa;
-            }
-            if (A <= 0.003f) continue;
-            const DWORD rgb = (DWORD)(R / A + 0.5f) << 16 | (DWORD)(G / A + 0.5f) << 8 | (DWORD)(Bv / A + 0.5f);
-            PutPx(&f->px[y * f->w + x], rgb, min(1.0f, A));
+        const int sy = (int)(((y + 0.5f - topf) * inv - 0.5f) * 65536.0f);
+        const int iy = sy >> 16, fy = (sy >> 8) & 255;
+        if (iy < -1 || iy >= H) continue;
+        const DWORD *ra = &it->px[max(0, iy) * W], *rbw = &it->px[min(H - 1, iy + 1) * W];
+        DWORD *out = &f->px[y * f->w];
+        int sx = (int)(((x0 + 0.5f - left) * inv - 0.5f) * 65536.0f);
+        for (int x = x0; x < x1; ++x, sx += step) {
+            const int ix = sx >> 16, fx = (sx >> 8) & 255;
+            if (ix < -1 || ix >= W) continue;
+            const int xa = max(0, ix), xb = min(W - 1, ix + 1);
+            const DWORD p0 = ra[xa], p1 = ra[xb], p2 = rbw[xa], p3 = rbw[xb];
+            if (!(p0 | p1 | p2 | p3)) continue;
+            /* dos canales a la vez: (a, g) y (r, b) */
+            const DWORD t0 = (((p0 >> 8) & 0xFF00FF) * (256 - fx) + ((p1 >> 8) & 0xFF00FF) * fx) >> 8 & 0xFF00FF;
+            const DWORD t1 = (((p2 >> 8) & 0xFF00FF) * (256 - fx) + ((p3 >> 8) & 0xFF00FF) * fx) >> 8 & 0xFF00FF;
+            const DWORD u0 = ((p0 & 0xFF00FF) * (256 - fx) + (p1 & 0xFF00FF) * fx) >> 8 & 0xFF00FF;
+            const DWORD u1 = ((p2 & 0xFF00FF) * (256 - fx) + (p3 & 0xFF00FF) * fx) >> 8 & 0xFF00FF;
+            const DWORD ag = ((t0 * (256 - fy) + t1 * fy) >> 8) & 0xFF00FF;
+            const DWORD rb = ((u0 * (256 - fy) + u1 * fy) >> 8) & 0xFF00FF;
+            const DWORD c = ag << 8 | rb, ca = c >> 24;
+            if (!ca) continue;
+            const DWORD d = out[x], ia = 255 - ca;
+            if (!ia) { out[x] = c; continue; }
+            const DWORD drb = (((d & 0xFF00FF) * ia + 0x800080) >> 8) & 0xFF00FF;
+            const DWORD dag = ((((d >> 8) & 0xFF00FF) * ia + 0x800080) >> 8) & 0xFF00FF;
+            out[x] = c + (dag << 8 | drb);
         }
     }
 }
@@ -602,25 +633,40 @@ static void FrameRRect(Canvas *f, float x, float y, float w, float h, float r, D
 }
 
 /* Panel con vidrio: el fondo desenfocado teñido con el color del panel según la opacidad. */
+/* Panel de vidrio. El color (fondo desenfocado teñido) se precalcula una vez por captura en
+ * una franja; en cada fotograma solo se recorta con las esquinas (SDF solo en los bordes). */
 static void GlassRRect(Canvas *f, float x, float y, float w, float h, float r, DWORD tint, float op)
 {
+    const int gy0 = max(0, (int)floorf(y) - 1), gh = min(f->h - gy0, (int)ceilf(h) + 3);
+    if (D.gstrip.w != f->w || D.gstrip.h != gh || D.gstripKey != (tint ^ (DWORD)(op * 1000) ^ (DWORD)gy0 << 20) || D.gstripDirty) {
+        if (D.gstrip.w != f->w || D.gstrip.h != gh) { Canvas_Free(&D.gstrip); if (!Canvas_Init(&D.gstrip, f->w, gh)) return; }
+        GdiFlush();
+        for (int yy = 0; yy < gh; ++yy)
+            for (int xx = 0; xx < f->w; ++xx)
+                D.gstrip.px[yy * f->w + xx] = Gfx_Mix(SampleBack(xx, gy0 + yy), tint, op) & 0xFFFFFF;
+        D.gstripKey = tint ^ (DWORD)(op * 1000) ^ (DWORD)gy0 << 20;
+        D.gstripDirty = FALSE;
+    }
     const int x0 = max(0, (int)floorf(x) - 1), x1 = min(f->w, (int)ceilf(x + w) + 1);
-    const int y0 = max(0, (int)floorf(y) - 1), y1 = min(f->h, (int)ceilf(y + h) + 1);
-    for (int py = y0; py < y1; ++py)
+    const int y0 = max(gy0, (int)floorf(y) - 1), y1 = min(gy0 + gh, (int)ceilf(y + h) + 1);
+    for (int py = y0; py < y1; ++py) {
+        const DWORD *g = &D.gstrip.px[(py - gy0) * f->w];
+        DWORD *out = &f->px[py * f->w];
+        const float cy = py + 0.5f;
+        const BOOL midRow = cy > y + r && cy < y + h - r;
+        const BOOL inRow = cy > y + 1.0f && cy < y + h - 1.0f;
         for (int px = x0; px < x1; ++px) {
-            const float cov = Gfx_Cov(Gfx_SdRRect(px + 0.5f, py + 0.5f, x, y, w, h, r));
-            if (cov > 0.002f) PutPx(&f->px[py * f->w + px], Gfx_Mix(SampleBack(px, py), tint, op), cov);
+            const float cx = px + 0.5f;
+            if (inRow && ((cx > x + r && cx < x + w - r) || (midRow && cx > x + 1.0f && cx < x + w - 1.0f))) {
+                out[px] = 0xFF000000 | g[px];               /* interior: copia directa */
+                continue;
+            }
+            const float cov = Gfx_Cov(Gfx_SdRRect(cx, cy, x, y, w, h, r));
+            if (cov > 0.002f) PutPx(&out[px], g[px], cov);
         }
-}
-
-static void Premultiply(Canvas *f, int y0)
-{
-    for (int i = max(0, y0) * f->w; i < f->w * f->h; ++i) {
-        const DWORD v = f->px[i], a = v >> 24;
-        if (a == 255 || !v) continue;
-        f->px[i] = a << 24 | (((v >> 16) & 255) * a / 255) << 16 | (((v >> 8) & 255) * a / 255) << 8 | ((v & 255) * a / 255);
     }
 }
+
 
 static void Render(void)
 {
@@ -692,14 +738,27 @@ static void Render(void)
     D.panelY = (int)panelTop; D.panelH = (int)panelH;
 
 present:;
-    Premultiply(f, top - 2);
+    /* zona con contenido este fotograma: el panel con sitio para la magnificación */
+    RECT dirty = { 0, max(0, top - 2), f->w, f->h };
+    if (D.count > 0 && D.panelW > 0) { dirty.left = max(0, D.panelX - DS(12)); dirty.right = min(f->w, D.panelX + D.panelW + DS(12)); }
+
     /* con Inicio abierto el dock baja y se desvanece para no chocar con el menú */
     const float e = D.slide * D.slide * (3 - 2 * D.slide);
     POINT dst = { D.mon.left, D.mon.bottom - WinH() + (int)(e * (WinH() - D.panelY + DS(6))) }, src = { 0, 0 };
     SIZE sz = { f->w, f->h };
     BLENDFUNCTION bf = { AC_SRC_OVER, 0, (BYTE)(255 * (1 - e) + 0.5f), AC_SRC_ALPHA };
+    /* a DWM solo se le manda lo que cambió (lo de ahora y lo del fotograma anterior) */
+    RECT upd = dirty;
+    if (D.dirtyPrev.right > D.dirtyPrev.left) UnionRect(&upd, &upd, &D.dirtyPrev);
+    D.dirtyPrev = dirty;
     HDC screen = GetDC(NULL);
-    UpdateLayeredWindow(D.hwnd, screen, &dst, &sz, f->dc, &src, 0, &bf, ULW_ALPHA);
+    UPDATELAYEREDWINDOWINFO ui = { sizeof(ui) };
+    ui.hdcDst = screen; ui.pptDst = &dst; ui.psize = &sz; ui.hdcSrc = f->dc; ui.pptSrc = &src;
+    ui.pblend = &bf; ui.dwFlags = ULW_ALPHA; ui.prcDirty = &upd;
+    if (!UpdateLayeredWindowIndirect(D.hwnd, &ui)) {
+        ui.prcDirty = NULL;                            /* primera vez o cambio de tamaño */
+        UpdateLayeredWindowIndirect(D.hwnd, &ui);
+    }
     ReleaseDC(NULL, screen);
 }
 
@@ -757,13 +816,16 @@ static void Tick(void)
     const float st = D.shellOpen ? 1.0f : 0.0f;
     if (fabsf(st - D.slide) > 0.004f) { D.slide += (st - D.slide) * min(1.0f, dt * 11.0f); busy = TRUE; }
     else D.slide = st;
-    Render();
-    if (!busy && !D.inside) PacerOn(FALSE);
+    /* con el cursor quieto encima ya no se redibuja 120 veces por segundo: solo si algo
+     * se movió (o lo pidió un clic), y el marcapasos se para hasta el próximo movimiento */
+    if (busy || D.dirty) { Render(); D.dirty = FALSE; }
+    if (!busy) PacerOn(FALSE);
 }
 
 static void Kick(void)
 {
     QueryPerformanceCounter(&D.last);
+    D.dirty = TRUE;
     PacerOn(TRUE);
 }
 
@@ -959,7 +1021,7 @@ static void ApplyCapture(void)
     const BOOL exclude = g_cfg.hideCapture || g_cfg.dockBlur;
     if (D.hwnd) SetWindowDisplayAffinity(D.hwnd, exclude ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
     if (D.hwnd) {
-        if (g_cfg.dockBlur) SetTimer(D.hwnd, TIMER_DBLUR, 200, NULL);
+        if (g_cfg.dockBlur) SetTimer(D.hwnd, TIMER_DBLUR, 350, NULL);
         else KillTimer(D.hwnd, TIMER_DBLUR);
     }
 }
@@ -1094,6 +1156,9 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
         D.count = 0;
         Canvas_Free(&D.frame);
         Canvas_Free(&D.back);
+        Canvas_Free(&D.raw);
+        Canvas_Free(&D.gstrip);
+        ZeroMemory(&D.dirtyPrev, sizeof(D.dirtyPrev));
         D.hwnd = NULL;
         return 0;
     }
