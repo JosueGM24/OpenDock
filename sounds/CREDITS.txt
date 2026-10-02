@@ -1,0 +1,7 @@
+Material Design Sound Resources — (c) Google, CC BY 4.0
+https://creativecommons.org/licenses/by/4.0/
+Cambios: mezcla a mono, 16 bit / 48 kHz, recorte de silencios, normalización y fundido final.
+simple1=notification_simple-01 simple2=notification_simple-02 alert=alert_simple deco1=notification_decorative-01
+deco2=notification_decorative-02 intense=notification_high-intensity ambient=notification_ambient
+confirm=state-change_confirm-up celeb1..3=hero_simple-celebration-01..03 party=hero_decorative-celebration-01
+complete=navigation_selection-complete-celebration

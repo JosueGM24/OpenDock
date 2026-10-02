@@ -257,7 +257,7 @@ HBITMAP Wn_LogoIcon(LPCWSTR path, int px);  /* el icono propio de un aviso (PNG,
 BOOL    Wn_IsSite(LPCWSTR aumid);           /* aviso de un sitio web (lo entrega el navegador) */
 
 /* sonidos de notificación (notch.c): 0 silencio · 1 Windows · 2… los propios */
-#define SOUND_COUNT 26
+#define SOUND_COUNT 16
 LPCWSTR Notch_SoundName(int i);
 LPCWSTR Notch_SoundFamily(int i);  /* el icono propio de un aviso (PNG, JPG, ICO…); ídem */
 

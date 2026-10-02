@@ -30,3 +30,18 @@ BEGIN
     VALUE "Translation", 0x040A, 1200
   END
 END
+
+/* Sonidos de notificación: Material Design Sound Resources, Google, CC-BY 4.0 */
+200 RCDATA "sounds/simple1.wav"
+201 RCDATA "sounds/simple2.wav"
+202 RCDATA "sounds/alert.wav"
+203 RCDATA "sounds/deco1.wav"
+204 RCDATA "sounds/deco2.wav"
+205 RCDATA "sounds/intense.wav"
+206 RCDATA "sounds/ambient.wav"
+207 RCDATA "sounds/confirm.wav"
+208 RCDATA "sounds/celeb1.wav"
+209 RCDATA "sounds/celeb2.wav"
+210 RCDATA "sounds/celeb3.wav"
+211 RCDATA "sounds/party.wav"
+212 RCDATA "sounds/complete.wav"

@@ -179,7 +179,7 @@ void Cfg_Save(void)
     RegWriteDword(L"NotchAccent", (DWORD)g_cfg.accent);
     RegWriteDword(L"NotchBounce", (DWORD)g_cfg.bounce);
     RegWriteDword(L"NotchFloating", (DWORD)g_cfg.floating);
-    RegWriteDword(L"NotchSoundV2", (DWORD)g_cfg.sound);
+    RegWriteDword(L"NotchSoundV3", (DWORD)g_cfg.sound);
     RegWriteDword(L"MenuBar", (DWORD)g_cfg.menubar);
     RegWriteDword(L"HideWindowsClock", (DWORD)g_cfg.hideClock);
     RegWriteDword(L"Dock", (DWORD)g_cfg.dock);
@@ -212,9 +212,12 @@ static void LoadConfig(void)
     g_cfg.accent      = (int)min(RegReadDword(L"NotchAccent", 0), ACCENT_COUNT - 1);
     g_cfg.bounce      = (int)min(RegReadDword(L"NotchBounce", 1), 2);
     g_cfg.floating    = RegReadDword(L"NotchFloating", 0) != 0;
-    {   /* catálogo nuevo: del anterior se conservan silencio y Windows; lo demás pasa a Campanita */
-        const DWORD old = RegReadDword(L"NotchSound", 0), v2 = RegReadDword(L"NotchSoundV2", 0xFFFF);
-        g_cfg.sound = v2 != 0xFFFF ? (int)min(v2, SOUND_COUNT - 1) : old <= 1 ? (int)old : 2;
+    {   /* catálogos anteriores: silencio, Windows y Campanita se conservan; lo demás pasa a Campanita */
+        const DWORD v3 = RegReadDword(L"NotchSoundV3", 0xFFFF), v2 = RegReadDword(L"NotchSoundV2", 0xFFFF);
+        const DWORD old = RegReadDword(L"NotchSound", 0);
+        g_cfg.sound = v3 != 0xFFFF ? (int)min(v3, SOUND_COUNT - 1)
+                    : v2 != 0xFFFF ? (v2 <= 2 ? (int)v2 : 2)
+                    : old <= 1 ? (int)old : 2;
     }
     g_cfg.menubar     = RegReadDword(L"MenuBar", 0) != 0;
     g_cfg.hideClock   = RegReadDword(L"HideWindowsClock", 1) != 0;

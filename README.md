@@ -127,3 +127,11 @@ Solo se consigue **firmando** el exe con un certificado de confianza pública
 ## Compilar
 - MSYS2 / Linux / WSL: `./build.sh` (mingw-w64)
 - Windows: `build.bat` desde Developer Command Prompt (MSVC)
+
+## Créditos
+
+Los sonidos de notificación "Nota", "Eco suave", "Alerta", "Destello", "Cascada", "Aviso",
+"Ambiente", "Confirmar", "Logro", "Brindis", "Fanfarria", "Fiesta" y "Completado" son de
+[Material Design Sound Resources](https://m2.material.io/design/sound/sound-resources.html),
+© Google, con licencia [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Se han
+convertido a mono, recortado y normalizado (carpeta `sounds/`).
