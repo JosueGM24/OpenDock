@@ -59,8 +59,8 @@ Solo reacciona a imágenes sin ventana dueña (Recortes) o de ShareX/Greenshot/L
 no a "copiar imagen" de un navegador. El DIB del portapapeles se valida antes de leerlo.
 Para quitar el aviso propio de Windows: Configuración → Sistema → Notificaciones → Recortes → desactivar.
 
-## Barra superior estilo Apple
-Panel → General → "Barra superior estilo Apple" (o Ctrl+Alt+B, o el menú de la bandeja).
+## Barra superior
+Panel → General → "Barra superior" (o Ctrl+Alt+B, o el menú de la bandeja).
 Una franja fina arriba, como la de macOS, con el notch en medio: logo (abre ajustes), app
 activa, volumen, Wi‑Fi, batería, fecha/hora (abre el centro de notificaciones) y el
 **centro de control** (Wi‑Fi, batería, No molestar, notificaciones, brillo y volumen reales).
@@ -74,7 +74,7 @@ barra superior y el dock: OLED es negro puro; Vidrio desenfoca lo que hay detrá
 con su vidrio propio, por eso con Vidrio quedan fuera de capturas); Sistema sigue el tema
 claro/oscuro de Windows.
 
-## Dock inferior estilo Apple
+## Dock
 Panel → pestaña **Dock** (o Ctrl+Alt+D, o el menú de la bandeja; clic derecho en el dock abre
 sus ajustes). Un dock flotante abajo con tus apps **ancladas** a la barra de tareas más las
 que tengas **abiertas**: una barrita blanca corta marca las que corren y una larga y brillante

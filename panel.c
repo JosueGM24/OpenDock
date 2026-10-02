@@ -49,13 +49,13 @@ static const ItemDef kGeneral[] = {
     { IT_DIVIDER, -1 },
     { IT_SEGMENT, K_MATERIAL, L"Material \x00B7 notch, barra y dock", NULL, { L"OLED", L"Vidrio", L"Sistema" } },
     { IT_DIVIDER, -1 },
-    { IT_TOGGLE,  K_BAR,     L"Barra superior estilo Apple", L"Hora, batería, Wi\x2011" L"Fi y centro de control \x00B7 Ctrl+Alt+B" },
+    { IT_TOGGLE,  K_BAR,     L"Barra superior", L"Sin ella vuelve la barra de tareas y se quita el dock \x00B7 Ctrl+Alt+B" },
     { IT_TOGGLE,  K_CLOCK,   L"Ocultar reloj de Windows", L"Mientras la barra superior está activa" },
     { IT_TOGGLE,  K_BATTPCT, L"Porcentaje en la batería", L"El número dentro del icono de la barra" },
 };
 
 static const ItemDef kDock[] = {
-    { IT_TOGGLE,  K_DOCK,    L"Dock inferior estilo Apple", L"Apps ancladas y abiertas, con magnificación \x00B7 Ctrl+Alt+D" },
+    { IT_TOGGLE,  K_DOCK,    L"Dock", L"Apps ancladas y abiertas, con magnificación \x00B7 Ctrl+Alt+D" },
     { IT_TOGGLE,  K_DOCKTB,  L"Desactivar barra de tareas", L"La de Windows desaparece mientras el dock está activo" },
     { IT_SEGMENT, K_DHIDE,   L"Ocultar sin el cursor", NULL, { L"No", L"A la mitad", L"Del todo" } },
     { IT_TOGGLE,  K_DWINFULL, L"Ventanas hasta abajo", L"Con el dock oculto, las maximizadas usan toda la altura" },

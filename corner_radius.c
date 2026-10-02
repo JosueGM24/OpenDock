@@ -551,11 +551,24 @@ static void CheckEdge(void)
     }
 }
 
+/* La barra y el dock van juntos: sin barra superior se quita también el dock y vuelve la
+ * barra de tareas de Windows; al volver a activar la barra, el dock vuelve si estaba. */
+static BOOL s_dockWithBar;
+
 void App_SetMenuBar(BOOL on, BOOL notify)
 {
     g_cfg.menubar = on;
+    if (!on) {
+        s_dockWithBar = g_cfg.dock;
+        g_cfg.dock = FALSE;
+    } else if (s_dockWithBar) {
+        g_cfg.dock = TRUE;
+        s_dockWithBar = FALSE;
+    }
     Cfg_Save();
     Bar_Apply();
+    Dock_Apply();
+    if (!on) Dock_RestoreTaskbar();     /* la barra de tareas de Windows, de vuelta */
     RebuildCorners();
     Notch_StyleChanged();       /* el notch flotante se recoloca bajo la barra */
     Panel_Refresh();
