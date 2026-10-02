@@ -24,6 +24,7 @@
 #define WM_WNCHANGED    (WM_APP + 5)   /* cambió la base de notificaciones de Windows */
 #define WM_BARCHANGED   (WM_APP + 6)   /* la barra superior apareció/desapareció: recolocar esquinas */
 #define WM_POPFRAME     (WM_APP + 80)  /* fotograma de la animación de una ventana emergente */
+#define WM_TRAYCHANGED  (WM_APP + 81)  /* cambió algún icono de la bandeja de Windows */
 
 #define RADIUS_MIN      2
 #define RADIUS_MAX      120
@@ -116,6 +117,14 @@ void    Gfx_FillCircle(Canvas *c, float cx, float cy, float rad, DWORD rgb, floa
 DWORD   Gfx_Mix(DWORD a, DWORD b, float t);
 void    Gfx_BoxBlur(DWORD *px, int w, int h, int r);
 void    Gfx_BlitScaled(Canvas *dst, const Canvas *src, float cx, float cy, float k);
+
+/* ── tray.c: los iconos de la bandeja de Windows, para la barra ── */
+typedef struct { HWND hwnd; UINT uid; HICON icon; WCHAR tip[128]; } TrayItem;
+void    Tray_Start(HWND notify);
+void    Tray_Stop(void);
+int     Tray_Snapshot(TrayItem *out, int max);
+void    Tray_Click(HWND hwnd, UINT uid, BOOL right);
+HWND    Tray_Explorer(void);
 
 /* ── pop.c: ventanas emergentes con el muelle del notch ── */
 typedef struct {

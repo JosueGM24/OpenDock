@@ -1879,6 +1879,295 @@ void CC_OpenSettings(int tab)
     CC_Open(1, tab);
 }
 
+/* ───────────────────────── Bandeja ─────────────────────────
+ * Los iconos de la bandeja de Windows (Tailscale, OneDrive…) en un panel propio bajo el
+ * chevrón, con el material de la barra y el muelle del centro de control. Los iconos los
+ * recoge tray.c; un clic aquí es un clic en el icono (izquierdo o derecho, con su menú). */
+#define TP_CLASS L"CornerRadius.TrayMenu"
+#define TP_MAX   32
+#define TP_COLS  6
+
+static struct {
+    HWND     hwnd;
+    Pop      pop;
+    PopGlass glass;
+    Canvas   cv;
+    TrayItem it[TP_MAX];
+    Canvas   ico[TP_MAX];           /* cada icono rasterizado: color premultiplicado y alfa */
+    float    hs[TP_MAX], hsv[TP_MAX];
+    int      n, hot, press, ox, oy, w, h;
+    HFONT    fTip;
+    LARGE_INTEGER last;
+    DWORD    closedAt;
+} TP;
+
+static int TPCell(void) { return CS(42); }
+static int TPCols(void) { return max(1, min(TP_COLS, TP.n)); }
+static int TPWidth(void) { return max(CS(210), TPCols() * TPCell() + 2 * CS(12)); }
+static int TPHeight(void) { return CS(10) + ((TP.n + TPCols() - 1) / TPCols()) * TPCell() + CS(30); }
+
+static void TPCellCenter(int i, float *cx, float *cy)
+{
+    const int cols = TPCols(), cell = TPCell(), x0 = (TP.w - cols * cell) / 2;
+    *cx = x0 + (i % cols) * cell + cell * 0.5f;
+    *cy = CS(10) + (i / cols) * cell + cell * 0.5f;
+}
+
+static int TPHit(int x, int y)
+{
+    for (int i = 0; i < TP.n; ++i) {
+        float cx, cy;
+        TPCellCenter(i, &cx, &cy);
+        if (fabsf(x - cx) <= TPCell() * 0.5f && fabsf(y - cy) <= TPCell() * 0.5f) return i;
+    }
+    return -1;
+}
+
+/* Un icono de Windows a píxeles con alfa: se dibuja sobre negro y sobre blanco, y la
+ * diferencia da la transparencia (vale para iconos con alfa y para los de máscara). */
+static void RasterIcon(Canvas *out, HICON ic, int px)
+{
+    Canvas b = { 0 }, w = { 0 };
+    if (!ic || !Canvas_Init(&b, px, px) || !Canvas_Init(&w, px, px) || !Canvas_Init(out, px, px)) {
+        Canvas_Free(&b); Canvas_Free(&w); return;
+    }
+    Canvas_Clear(&b, 0x000000);
+    Canvas_Clear(&w, 0xFFFFFF);
+    DrawIconEx(b.dc, 0, 0, ic, px, px, 0, NULL, DI_NORMAL);
+    DrawIconEx(w.dc, 0, 0, ic, px, px, 0, NULL, DI_NORMAL);
+    GdiFlush();
+    for (int i = 0; i < px * px; ++i) {
+        const DWORD bb = b.px[i], ww = w.px[i];
+        int d = 0;
+        for (int sh = 0; sh < 24; sh += 8) d = max(d, (int)((ww >> sh) & 255) - (int)((bb >> sh) & 255));
+        const DWORD a = (DWORD)max(0, min(255, 255 - d));
+        out->px[i] = (a << 24) | (bb & 0xFFFFFF);
+    }
+    Canvas_Free(&b);
+    Canvas_Free(&w);
+}
+
+/* El icono escalado k alrededor de (cx, cy), bilineal, sobre lo que haya. */
+static void TPBlitIcon(Canvas *dst, const Canvas *ic, float cx, float cy, float k)
+{
+    if (!ic->px) return;
+    const float half = ic->w * k * 0.5f, inv = 1.0f / k;
+    for (int y = (int)(cy - half) - 1; y <= (int)(cy + half) + 1; ++y)
+        for (int x = (int)(cx - half) - 1; x <= (int)(cx + half) + 1; ++x) {
+            if (x < 0 || y < 0 || x >= dst->w || y >= dst->h) continue;
+            const float sx = (x + 0.5f - cx) * inv + ic->w * 0.5f - 0.5f, sy = (y + 0.5f - cy) * inv + ic->h * 0.5f - 0.5f;
+            const int ix = (int)floorf(sx), iy = (int)floorf(sy);
+            const float fx = sx - ix, fy = sy - iy;
+            float acc[4] = { 0 };
+            for (int q = 0; q < 4; ++q) {
+                const int qx = ix + (q & 1), qy = iy + (q >> 1);
+                if (qx < 0 || qy < 0 || qx >= ic->w || qy >= ic->h) continue;
+                const float wq = ((q & 1) ? fx : 1 - fx) * ((q >> 1) ? fy : 1 - fy);
+                const DWORD p = ic->px[qy * ic->w + qx];
+                acc[0] += (p & 255) * wq; acc[1] += ((p >> 8) & 255) * wq; acc[2] += ((p >> 16) & 255) * wq; acc[3] += (p >> 24) * wq;
+            }
+            if (acc[3] < 0.5f) continue;
+            DWORD *d = &dst->px[y * dst->w + x];
+            const float ia = 1.0f - acc[3] / 255.0f;
+            DWORD o = 0;
+            for (int ch = 0; ch < 3; ++ch) {
+                const float v = ((*d >> (ch * 8)) & 255) * ia + acc[ch];
+                o |= (DWORD)max(0, min(255, (int)(v + 0.5f))) << (ch * 8);
+            }
+            *d = o;
+        }
+}
+
+static void TPFree(void)
+{
+    for (int i = 0; i < TP.n; ++i) {
+        if (TP.it[i].icon) DestroyIcon(TP.it[i].icon);
+        Canvas_Free(&TP.ico[i]);
+    }
+    TP.n = 0;
+}
+
+static void TPLoad(void)
+{
+    TPFree();
+    TP.n = Tray_Snapshot(TP.it, TP_MAX);
+    for (int i = 0; i < TP.n; ++i) {
+        RasterIcon(&TP.ico[i], TP.it[i].icon, CS(20));
+        TP.hs[i] = 1.0f; TP.hsv[i] = 0;
+    }
+    if (TP.hot >= TP.n) TP.hot = -1;
+}
+
+static void TPPaint(void)
+{
+    if (!TP.cv.dc || TP.cv.w != TP.w || TP.cv.h != TP.h) {
+        Canvas_Free(&TP.cv);
+        if (!Canvas_Init(&TP.cv, TP.w, TP.h)) return;
+    }
+    Canvas *c = &TP.cv;
+    const BarLook *L = &B.look;
+    if (L->light)                         Canvas_Clear(c, 0xE5E5EA);
+    else if (g_cfg.material == MAT_GLASS) Pop_PaintGlass(c, &TP.glass, TP.ox, TP.oy, 0x1C1C1E, 0.58f);
+    else                                  Canvas_Clear(c, g_cfg.material == MAT_OLED ? 0x000000 : 0x161618);
+    for (int i = 0; i < TP.n; ++i) {
+        float cx, cy;
+        TPCellCenter(i, &cx, &cy);
+        TPBlitIcon(c, &TP.ico[i], cx, cy, max(0.8f, min(1.3f, TP.hs[i])));
+    }
+    /* abajo, el nombre del icono señalado (la primera línea de su descripción) */
+    wchar_t tip[128];
+    if (TP.hot >= 0 && TP.it[TP.hot].tip[0]) {
+        lstrcpynW(tip, TP.it[TP.hot].tip, 128);
+        for (wchar_t *p = tip; *p; ++p) if (*p == L'\r' || *p == L'\n') { *p = 0; break; }
+    } else lstrcpynW(tip, L"Bandeja del sistema", 128);
+    Gfx_Text(c, TP.fTip, tip, CS(12), TP.h - CS(30), TP.w - CS(24), CS(24), TP.hot >= 0 ? L->fg : L->fg2,
+             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    Pop_Present(&TP.pop, c);
+}
+
+static void TPKick(void)
+{
+    QueryPerformanceCounter(&TP.last);
+    Pop_Hold(&TP.pop, TRUE);
+}
+
+static BOOL TPAdvance(void)
+{
+    LARGE_INTEGER t, f;
+    QueryPerformanceCounter(&t);
+    QueryPerformanceFrequency(&f);
+    float dt = (float)(t.QuadPart - TP.last.QuadPart) / (float)f.QuadPart;
+    TP.last = t;
+    if (dt > 0.05f) dt = 0.05f;
+    const float z = Pop_Zeta();
+    BOOL moving = FALSE;
+    for (int i = 0; i < TP.n; ++i) {
+        const float tg = TP.press == i ? 0.88f : TP.hot == i ? 1.18f : 1.0f, b0 = TP.hs[i];
+        for (int k = 0; k < 2; ++k) CCSpring(&TP.hs[i], &TP.hsv[i], tg, dt * 0.5f, 420.0f, z);
+        if (fabsf(TP.hs[i] - tg) < 0.0006f && fabsf(TP.hsv[i]) < 0.01f) { TP.hs[i] = tg; TP.hsv[i] = 0; }
+        if (fabsf(TP.hs[i] - b0) > 0.00005f) moving = TRUE;
+    }
+    Pop_Hold(&TP.pop, moving);
+    return moving;
+}
+
+static void TP_Close(void) { if (TP.hwnd) Pop_Close(&TP.pop); }
+
+static LRESULT CALLBACK TPProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m >= WM_MOUSEFIRST && m <= WM_MOUSELAST && m != WM_MOUSEWHEEL && m != WM_MOUSEHWHEEL) l = Pop_Mouse(&TP.pop, l);
+    switch (m) {
+    case WM_ERASEBKGND: return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        BeginPaint(h, &ps);
+        TPPaint();
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_NCHITTEST: return Pop_NcHit(&TP.pop, l);
+    case WM_POPFRAME:
+        Pop_Step(&TP.pop);
+        if (!TP.hwnd) return 0;
+        if (TPAdvance() || !TP.cv.px) TPPaint();
+        else Pop_Present(&TP.pop, &TP.cv);
+        return 0;
+    case WM_ACTIVATE:
+        if (LOWORD(w) == WA_INACTIVE) TP_Close();
+        return 0;
+    case WM_KEYDOWN:
+        if (w == VK_ESCAPE) TP_Close();
+        return 0;
+    case WM_MOUSEMOVE: {
+        const int hv = TPHit((short)LOWORD(l), (short)HIWORD(l));
+        if (hv != TP.hot) {
+            TP.hot = hv;
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 };
+            TrackMouseEvent(&tme);
+            TPKick();
+        }
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        TP.hot = TP.press = -1;
+        TPKick();
+        return 0;
+    case WM_LBUTTONDOWN: case WM_RBUTTONDOWN:
+        TP.press = TPHit((short)LOWORD(l), (short)HIWORD(l));
+        TPKick();
+        return 0;
+    case WM_LBUTTONUP: case WM_RBUTTONUP: {
+        const int hit = TPHit((short)LOWORD(l), (short)HIWORD(l)), was = TP.press;
+        TP.press = -1;
+        TPKick();
+        if (hit < 0 || hit != was) return 0;
+        const HWND app = TP.it[hit].hwnd;
+        const UINT uid = TP.it[hit].uid;
+        TP_Close();                         /* el panel se va y la app abre su menú o su ventana */
+        Tray_Click(app, uid, m == WM_RBUTTONUP);
+        return 0;
+    }
+    case WM_DESTROY:
+        Pop_Destroyed(&TP.pop);
+        Pop_FreeGlass(&TP.glass);
+        Canvas_Free(&TP.cv);
+        TPFree();
+        if (TP.fTip) { DeleteObject(TP.fTip); TP.fTip = NULL; }
+        TP.hwnd = NULL;
+        TP.closedAt = GetTickCount();
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+/* Abre el panel de la bandeja; FALSE si no hay iconos propios que enseñar. */
+static BOOL TP_Open(void)
+{
+    if (TP.hwnd) DestroyWindow(TP.hwnd);
+    TP.hot = TP.press = -1;
+    TPLoad();
+    if (!TP.n) return FALSE;
+    TP.fTip = Gfx_Font(Gfx_UiFace(), CS(12), FW_SEMIBOLD, CLEARTYPE_QUALITY);
+    const BOOL attached = !g_cfg.floating;
+    TP.w = TPWidth(); TP.h = TPHeight();
+    const RECT *hb = &B.hit[BH_TRAY];
+    const int cx = B.mon.left + (hb->left + hb->right) / 2;
+    TP.ox = max(B.mon.left + CS(8), min(B.mon.right - CS(8) - TP.w, cx - TP.w / 2));
+    TP.oy = B.mon.top + B.h + (attached ? 0 : CS(8));
+    if (g_cfg.material == MAT_GLASS) Pop_CaptureGlass(&TP.glass, TP.ox, TP.oy, TP.w, TP.h + CS(80), CS(28));
+    TP.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED, TP_CLASS, L"Bandeja", WS_POPUP,
+                              TP.ox, TP.oy, TP.w, TP.h, NULL, NULL, g_inst, NULL);
+    if (!TP.hwnd) { TPFree(); return FALSE; }
+    if (g_cfg.hideCapture) SetWindowDisplayAffinity(TP.hwnd, WDA_EXCLUDEFROMCAPTURE);
+    const float ax = max(0.05f, min(0.95f, (cx - TP.ox) / (float)TP.w));
+    if (attached) {
+        Pop_Open(&TP.pop, TP.hwnd, CS(44), (float)CS(20), ax, 0.0f);
+        Pop_SetAttached(&TP.pop, (float)CS(8), (float)CS(70));
+    } else {
+        Pop_Open(&TP.pop, TP.hwnd, CS(18), (float)CS(16), ax, 0.0f);
+    }
+    QueryPerformanceCounter(&TP.last);
+    Pop_SetBounds(&TP.pop, TP.ox, TP.oy, TP.w, TP.h);
+    TPPaint();
+    ShowWindow(TP.hwnd, SW_SHOWNA);
+    SetForegroundWindow(TP.hwnd);
+    return TRUE;
+}
+
+/* Un icono cambió (Tailscale se conectó, una app se cerró…): el panel abierto se pone al día. */
+static void TP_Refresh(void)
+{
+    if (!TP.hwnd || TP.pop.closing) return;
+    TPLoad();
+    if (!TP.n) { TP_Close(); return; }
+    TP.w = TPWidth(); TP.h = TPHeight();
+    const RECT *hb = &B.hit[BH_TRAY];
+    const int cx = B.mon.left + (hb->left + hb->right) / 2;
+    TP.ox = max(B.mon.left + CS(8), min(B.mon.right - CS(8) - TP.w, cx - TP.w / 2));
+    Pop_SetBounds(&TP.pop, TP.ox, TP.oy, TP.w, TP.h);
+    TPPaint();
+}
+
 /* ───────────────────────── Barra: ventana ───────────────────────── */
 static void MakeBarFonts(void)
 {
@@ -2053,7 +2342,11 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
         case BH_LOGO:  Panel_ShowTab(0); break;
         case BH_CLOCK: Notch_OpenCenter(); break;
         case BH_VOL: case BH_WIFI: case BH_BATT: case BH_CC: CC_Toggle(); break;
-        case BH_TRAY:  /* deja ver la barra de tareas y abre su panel de iconos ocultos */
+        case BH_TRAY:  /* el panel propio con los iconos de la bandeja */
+            if (TP.hwnd && !TP.pop.closing) { TP_Close(); break; }
+            if (!TP.hwnd && GetTickCount() - TP.closedAt < 300) break;     /* el clic ya lo cerró */
+            if (TP_Open()) break;
+            /* aún sin iconos propios: el panel de Windows, dejando ver la barra de tareas */
             Dock_TrayPeek(TRUE);
             B.trayStep = 0;
             SetTimer(h, TIMER_TRAY, 120, NULL);
@@ -2121,6 +2414,9 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
             InvalidateRect(h, NULL, FALSE);
         }
         return 0;
+    case WM_TRAYCHANGED:
+        TP_Refresh();
+        return 0;
     case WM_BAR_STATUS:
         if (w == 1) {                           /* volumen o silencio: al momento */
             ReadVolume();
@@ -2144,6 +2440,8 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
         KillTimer(h, TIMER_TRAY);
         KillTimer(h, TIMER_WIFIQ);
         StopTrayWatch();
+        if (TP.hwnd) DestroyWindow(TP.hwnd);
+        Tray_Stop();
         if (B.battNotify) { UnregisterPowerSettingNotification(B.battNotify); B.battNotify = NULL; }
         B.synced = FALSE;
         if (B.registered) {
@@ -2218,6 +2516,13 @@ void Bar_Register(void)
     cc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
     cc.lpszClassName = CC_CLASS;
     RegisterClassExW(&cc);
+
+    WNDCLASSEXW tp = { sizeof(tp) };
+    tp.lpfnWndProc   = TPProc;
+    tp.hInstance     = g_inst;
+    tp.hCursor       = LoadCursorW(NULL, IDC_ARROW);
+    tp.lpszClassName = TP_CLASS;
+    RegisterClassExW(&tp);
 }
 
 /* Muestra u oculta la barra según g_cfg (y el reloj de Windows con ella). */
@@ -2243,6 +2548,7 @@ void Bar_Apply(void)
         BarPosition();
         ArmClock(B.hwnd);
         SetTimer(B.hwnd, TIMER_STATUS, 30000, NULL);
+        Tray_Start(B.hwnd);             /* los iconos de la bandeja, para el chevrón */
         B.battNotify = RegisterPowerSettingNotification(B.hwnd, &kGUID_BatteryPercent, DEVICE_NOTIFY_WINDOW_HANDLE);
         BarSync();
         Brightness_Request(-1);

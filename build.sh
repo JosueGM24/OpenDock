@@ -10,6 +10,6 @@ ${P}gcc -O2 -s -static -municode -mwindows \
   -Wall -Wextra -Wno-missing-field-initializers \
   -fstack-protector-strong \
   -Wl,--dynamicbase,--nxcompat,--high-entropy-va \
-  corner_radius.c gfx.c panel.c notch.c install.c winnotif.c menubar.c dock.c pop.c app.res -o CornerRadius.exe \
+  corner_radius.c gfx.c panel.c notch.c install.c winnotif.c menubar.c dock.c pop.c tray.c app.res -o CornerRadius.exe \
   -lshell32 -ladvapi32 -lgdi32 -luser32 -lole32 -luuid -ldwmapi -lsqlite3 -lmsimg32 -lwinmm -lwlanapi -lversion -loleaut32 -lwbemuuid -lbthprops
 echo "OK -> CornerRadius.exe"

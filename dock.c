@@ -980,6 +980,9 @@ static void AppMenu(int i, POINT at)
 static BOOL CALLBACK ShowTrayProc(HWND w, LPARAM show)
 {
     wchar_t cls[40];
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    if (pid == GetCurrentProcessId()) return TRUE;          /* la de la bandeja propia no se toca */
     if (GetClassNameW(w, cls, 40) && (!lstrcmpW(cls, L"Shell_TrayWnd") || !lstrcmpW(cls, L"Shell_SecondaryTrayWnd"))) {
         if (show && !IsWindowVisible(w)) ShowWindow(w, SW_SHOWNA);
         else if (!show && IsWindowVisible(w)) ShowWindow(w, SW_HIDE);
@@ -990,7 +993,7 @@ static BOOL CALLBACK ShowTrayProc(HWND w, LPARAM show)
 static void SetTaskbarAutohide(BOOL hide)
 {
     APPBARDATA abd = { sizeof(abd) };
-    abd.hWnd = FindWindowW(L"Shell_TrayWnd", NULL);
+    abd.hWnd = Tray_Explorer();
     if (!abd.hWnd) return;
     const BOOL already = RegGetValueW(HKEY_CURRENT_USER, REG_KEY, L"TaskbarWasAuto", RRF_RT_REG_DWORD, NULL, NULL, NULL) == ERROR_SUCCESS;
     if (hide == already) return;
