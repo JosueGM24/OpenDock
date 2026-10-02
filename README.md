@@ -105,6 +105,16 @@ desinstalar. Se oculta solo a pantalla completa.
   desde Descargas), bloqueo de imágenes remotas/baja integridad, sin puntos de extensión
   heredados (AppInit), sin código dinámico, solo fuentes del sistema, solo binarios
   firmados por Microsoft, heap que termina ante corrupción.
+- **Sin DLL plantables**: las DLL del sistema que no son KnownDLLs (version, winmm, dwmapi,
+  wlanapi, bthprops) no se importan de forma estática: `lazy.c` las carga solo desde System32
+  la primera vez que se usan (con MSVC, `/DEPENDENTLOADFLAG:0x800`). Así una DLL dejada junto al
+  .exe en Descargas o en %TEMP% no se carga antes de que actúen las mitigaciones.
+- **Nada de líneas de comandos a mano**: todo lo que se abre (apps del dock, avisos, rutas, URI)
+  pasa por `App_ShellOpen`, que rechaza comillas, caracteres de control y modificadores; los
+  protocolos de los avisos excluyen los peligrosos (file, shell, search, its, ms-* de Office…).
+- **Entradas ajenas acotadas**: XML de avisos con tope de etiquetas, logos solo de rutas locales
+  (nunca \servidor, que filtraría credenciales NTLM), WAV con trozos validados, y ningún
+  mensaje de ventana lleva punteros.
 - **Binario endurecido**: ASLR de alta entropía, DEP, stack protector
   (MSVC además: CFG y CET shadow stack).
 - Configuración validada al leerla; `--cleanup` nunca borra rutas recibidas por CLI.

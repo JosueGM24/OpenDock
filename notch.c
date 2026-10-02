@@ -1068,6 +1068,7 @@ static const BYTE *WithVolume(const BYTE *wav, DWORD size, float gain)
     for (DWORD p = 12; p + 8 <= size; ) {
         DWORD clen;
         CopyMemory(&clen, s_play + p + 4, 4);
+        if (clen > size - p - 8) break;             /* trozo que se sale del archivo */
         if (!memcmp(s_play + p, "fmt ", 4) && p + 24 <= size) { CopyMemory(&fmt, s_play + p + 8, 2); CopyMemory(&bits, s_play + p + 22, 2); }
         if (!memcmp(s_play + p, "data", 4)) {
             if (fmt == 1 && bits == 16) {
@@ -1431,15 +1432,7 @@ static void SavePosition(void)
 static void OpenPath(void)
 {
     /* lo abre explorer con la app predeterminada: ninguna extensión de shell entra en nuestro proceso */
-    wchar_t cmd[MAX_PATH + 32], exe[MAX_PATH];
-    GetWindowsDirectoryW(exe, MAX_PATH - 16);
-    lstrcatW(exe, L"\\explorer.exe");
-    wsprintfW(cmd, L"\"%s\" \"%s\"", exe, N.openPath);
-    STARTUPINFOW si = { sizeof(si) };
-    PROCESS_INFORMATION pi;
-    if (CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
+    if (App_ShellOpen(N.openPath)) {
     }
 }
 

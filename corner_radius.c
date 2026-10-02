@@ -21,6 +21,7 @@
  *   OpenDock.exe --uninstall   (lo usa Configuración → Aplicaciones)
  */
 #include "app.h"
+#include <dwmapi.h>
 #include <shellapi.h>
 #include <objbase.h>
 #include <shlobj.h>
@@ -70,7 +71,9 @@ static NOTIFYICONDATAW g_nid;
 static UINT      g_wmTaskbarCreated;
 static HWINEVENTHOOK g_fgHook, g_locHook;
 static BOOL      g_noSave;                  /* tras desinstalar: no volver a crear la clave */
-static wchar_t   g_relaunch[MAX_PATH];      /* tras instalar: arrancar la copia instalada */
+static wchar_t   g_relaunch[MAX_PATH];
+static CRITICAL_SECTION g_shotLock;         /* g_shotPending: la deja ShotWatcher, la recoge WM_SHOTFILE */
+static wchar_t   g_shotPending[MAX_PATH];      /* tras instalar: arrancar la copia instalada */
 static DWORD     g_clipSeq;                 /* último cambio de portapapeles revisado */
 static wchar_t   g_shotPath[MAX_PATH];      /* captura guardada pendiente de asociar al aviso */
 static DWORD     g_shotTick;
@@ -405,13 +408,19 @@ static void CALLBACK LocationHook(HWINEVENTHOOK h, DWORD ev, HWND w, LONG o, LON
  * (que hace trabajar a DWM aunque la ventana ya esté arriba). */
 BOOL App_Covered(HWND h)
 {
-    if (!h) return FALSE;
+    RECT mine;
+    if (!h || !GetWindowRect(h, &mine)) return FALSE;
     const DWORD me = GetCurrentProcessId();
     for (HWND p = GetWindow(h, GW_HWNDPREV); p; p = GetWindow(p, GW_HWNDPREV)) {
         if (!IsWindowVisible(p)) continue;
         DWORD pid = 0;
         GetWindowThreadProcessId(p, &pid);
-        if (pid != me) return TRUE;
+        if (pid == me) continue;
+        RECT r, x;
+        if (!GetWindowRect(p, &r) || !IntersectRect(&x, &r, &mine)) continue;     /* no la pisa */
+        BOOL cloaked = FALSE;     /* apps de la Store suspendidas, otros escritorios: "visibles" pero ocultas */
+        if (SUCCEEDED(DwmGetWindowAttribute(p, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) continue;
+        return TRUE;
     }
     return FALSE;
 }
@@ -757,12 +766,11 @@ static DWORD WINAPI ShotWatcher(LPVOID unused)
             const int len = (int)(fi->FileNameLength / sizeof(wchar_t));
             const BOOL added = fi->Action == FILE_ACTION_ADDED || fi->Action == FILE_ACTION_RENAMED_NEW_NAME;
             if (added && IsImageName(fi->FileName, len) && lstrlenW(dir) + len + 2 < MAX_PATH) {
-                wchar_t *path = (wchar_t *)HeapAlloc(GetProcessHeap(), 0, MAX_PATH * sizeof(wchar_t));
-                if (path) {
-                    const int n = wsprintfW(path, L"%s\\", dir);   /* wsprintf no admite %.*s */
-                    lstrcpynW(path + n, fi->FileName, len + 1);
-                    if (!PostMessageW(g_ctrl, WM_SHOTFILE, 0, (LPARAM)path)) HeapFree(GetProcessHeap(), 0, path);
-                }
+                EnterCriticalSection(&g_shotLock);
+                const int n = wsprintfW(g_shotPending, L"%s\\", dir);   /* wsprintf no admite %.*s */
+                lstrcpynW(g_shotPending + n, fi->FileName, len + 1);
+                LeaveCriticalSection(&g_shotLock);
+                PostMessageW(g_ctrl, WM_SHOTFILE, 0, 0);
             }
             if (!fi->NextEntryOffset) break;
             p += fi->NextEntryOffset;
@@ -886,11 +894,13 @@ static LRESULT CALLBACK CtrlProc(HWND h, UINT m, WPARAM w, LPARAM l)
         SetTimer(h, TIMER_CLIP, 150, NULL);
         return 0;
 
-    case WM_SHOTFILE: {
-        wchar_t *path = (wchar_t *)l;
-        lstrcpynW(g_shotPath, path, MAX_PATH);
+    case WM_SHOTFILE: {     /* la ruta la deja el hilo vigilante; el mensaje no trae punteros */
+        EnterCriticalSection(&g_shotLock);
+        lstrcpynW(g_shotPath, g_shotPending, MAX_PATH);
+        g_shotPending[0] = 0;
+        LeaveCriticalSection(&g_shotLock);
+        if (!g_shotPath[0]) return 0;
         g_shotTick = GetTickCount();
-        HeapFree(GetProcessHeap(), 0, path);
         AttachPendingShot();
         if (g_shotPath[0]) SetTimer(h, TIMER_SHOTFILE, 800, NULL);  /* quizá el portapapeles llega después */
         return 0;
@@ -973,6 +983,34 @@ static void MessageLoop(void)
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+}
+
+/* Abre una ruta, un AUMID (shell:AppsFolder\…) o un URI con explorer.exe: así ninguna
+ * extensión de shell se carga en nuestro proceso. El destino va entre comillas como un solo
+ * argumento: se rechaza todo lo que podría romper esas comillas o pasar como modificador
+ * (comillas, caracteres de control, "/" o "-" al principio). */
+BOOL App_ShellOpen(LPCWSTR target)
+{
+    if (!target || !target[0] || target[0] == L'/' || target[0] == L'-') return FALSE;
+    const int n = lstrlenW(target);
+    if (n > 2048) return FALSE;
+    for (int i = 0; i < n; ++i) if (target[i] == L'"' || target[i] < 0x20 || target[i] == 0x7F) return FALSE;
+    wchar_t exe[MAX_PATH];
+    const UINT wl = GetSystemWindowsDirectoryW(exe, MAX_PATH);
+    if (!wl || wl > MAX_PATH - 16) return FALSE;
+    lstrcatW(exe, L"\\explorer.exe");
+    const SIZE_T cap = (SIZE_T)(lstrlenW(exe) + n + 8);
+    wchar_t *cmd = (wchar_t *)HeapAlloc(GetProcessHeap(), 0, cap * sizeof(wchar_t));
+    if (!cmd) return FALSE;
+    wsprintfW(cmd, L"\"%s\" \"", exe);
+    lstrcatW(cmd, target);
+    lstrcatW(cmd, L"\"");
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
+    const BOOL ok = CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+    if (ok) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
+    HeapFree(GetProcessHeap(), 0, cmd);
+    return ok;
 }
 
 /* Cierra la instancia en ejecución y espera a que termine. */
@@ -1096,6 +1134,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
 
     g_clipSeq = GetClipboardSequenceNumber();
     AddClipboardFormatListener(g_ctrl);
+    InitializeCriticalSection(&g_shotLock);
     HANDLE watcher = CreateThread(NULL, 0, ShotWatcher, NULL, 0, NULL);
     if (watcher) CloseHandle(watcher);
     Wn_RestoreBanners();

@@ -201,11 +201,13 @@ typedef struct { wchar_t path[MAX_PATH]; int size; DWORD *px; int w, h; } IconEn
 static IconEntry s_icons[MAX_ICONS];
 static int       s_nicons;
 
+static DWORD s_iconGen;     /* sube al vaciar la caché: los items que apuntan a ella caducan */
 static void ClearIconCache(void)
 {
     for (int i = 0; i < s_nicons; ++i)
         if (s_icons[i].px) HeapFree(GetProcessHeap(), 0, s_icons[i].px);
     s_nicons = 0;
+    ++s_iconGen;
 }
 
 static BOOL GetIcon(LPCWSTR path, DockItem *it)
@@ -277,6 +279,7 @@ static void AddLnk(const wchar_t *dir, const wchar_t *file)
     DockItem *it = &D.items[D.count];
     NewItem(it);
     it->pinned = TRUE;
+    if (lstrlenW(dir) + lstrlenW(file) + 2 > MAX_PATH) return;      /* nombre de .lnk demasiado largo */
     wsprintfW(it->launch, L"%s\\%s", dir, file);
     ResolveLnk(it->launch, it->exe);
     lstrcpynW(it->name, file, 80);
@@ -381,6 +384,24 @@ static int ReadPinOrder(wchar_t (*lnks)[MAX_PATH], int nlnk, PinRef *refs, int m
     return n;
 }
 
+/* Firma de lo anclado: la fecha de la carpeta de accesos, la lista de Explorer en el
+ * registro y la generación de la caché de iconos. Si no cambió, los anclados son los mismos
+ * y no hace falta volver a resolver cada .lnk (lo más caro del repaso del dock). */
+static DWORD PinSignature(const wchar_t *dir)
+{
+    DWORD h = 2166136261u ^ s_iconGen;
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (GetFileAttributesExW(dir, GetFileExInfoStandard, &fa))
+        h = (h ^ fa.ftLastWriteTime.dwLowDateTime) * 16777619u, h = (h ^ fa.ftLastWriteTime.dwHighDateTime) * 16777619u;
+    BYTE buf[8192];
+    DWORD size = sizeof(buf);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Taskband", L"Favorites",
+                     RRF_RT_REG_BINARY, NULL, buf, &size) == ERROR_SUCCESS)
+        for (DWORD i = 0; i < size; ++i) h = (h ^ buf[i]) * 16777619u;
+    else h = (h ^ size) * 16777619u;     /* lista más grande que el búfer: cuenta su tamaño */
+    return h | 1;
+}
+
 static void AddPinned(void)
 {
     PWSTR appdata = NULL;
@@ -389,6 +410,18 @@ static void AddPinned(void)
     wsprintfW(dir, L"%s\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar", appdata);
     CoTaskMemFree(appdata);
     wsprintfW(pat, L"%s\\*.lnk", dir);
+
+    static DockItem cache[MAX_ITEMS];
+    static int ncache;
+    static DWORD sig;
+    const DWORD now = PinSignature(dir);
+    if (now == sig) {
+        const int n = min(ncache, MAX_ITEMS - D.count);
+        CopyMemory(&D.items[D.count], cache, sizeof(DockItem) * n);
+        D.count += n;
+        return;
+    }
+    const int first = D.count;
 
     static wchar_t lnks[MAX_ITEMS][MAX_PATH];
     static PinRef refs[MAX_ITEMS];
@@ -407,6 +440,9 @@ static void AddPinned(void)
         else AddPackaged(refs[i].aumid);
     }
     for (int k = 0; k < nlnk; ++k) if (!used[k]) AddLnk(dir, lnks[k]);
+    ncache = D.count - first;
+    CopyMemory(cache, &D.items[first], sizeof(DockItem) * ncache);
+    sig = now;
 }
 
 /* El AppUserModelID de una ventana (las de apps empaquetadas y PWA lo llevan). */
@@ -1036,14 +1072,7 @@ static void StartHop(DockItem *it, BOOL launching)
 
 static void Launch(const DockItem *it)
 {
-    /* abrir vía explorer: ninguna extensión de shell entra en nuestro proceso */
-    wchar_t exe[MAX_PATH], cmd[MAX_PATH + 16];
-    GetWindowsDirectoryW(exe, MAX_PATH - 16);
-    lstrcatW(exe, L"\\explorer.exe");
-    wsprintfW(cmd, L"\"%s\" \"%s\"", exe, it->launch);
-    STARTUPINFOW si = { sizeof(si) };
-    PROCESS_INFORMATION pi;
-    if (CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
+    App_ShellOpen(it->launch);      /* vía explorer: ninguna extensión de shell entra en nuestro proceso */
 }
 
 static void FocusWindow(HWND w)
@@ -1097,7 +1126,7 @@ static void AppMenu(int i, POINT at)
     for (int k = 0; k < it->nwin; ++k) {
         if (!IsWindow(it->wins[k])) continue;
         wchar_t t[64], esc[130];
-        if (GetWindowTextW(it->wins[k], t, 64) <= 0) lstrcpyW(t, it->name);
+        if (GetWindowTextW(it->wins[k], t, 64) <= 0) lstrcpynW(t, it->name, 64);
         int o = 0;                               /* "&" es atajo en los menús: duplicarlo */
         for (const wchar_t *q = t; *q && o < 126; ++q) { if (*q == L'&') esc[o++] = L'&'; esc[o++] = *q; }
         esc[o] = 0;
@@ -1171,10 +1200,20 @@ static void SetTaskbarAutohide(BOOL hide)
     }
 }
 
+/* Solo las barras de Explorer (la principal y las de otros monitores), sin recorrer todas
+ * las ventanas del sistema. */
+static void ShowTaskbars(BOOL show)
+{
+    static const wchar_t *kCls[] = { L"Shell_TrayWnd", L"Shell_SecondaryTrayWnd" };
+    for (int c = 0; c < 2; ++c)
+        for (HWND w = FindWindowExW(NULL, NULL, kCls[c], NULL); w; w = FindWindowExW(NULL, w, kCls[c], NULL))
+            ShowTrayProc(w, show);
+}
+
 static void SetTaskbarOff(BOOL off)
 {
     SetTaskbarAutohide(off);
-    EnumWindows(ShowTrayProc, !off);
+    ShowTaskbars(!off);
 }
 
 void Dock_RestoreTaskbar(void) { SetTaskbarOff(FALSE); }
@@ -1187,7 +1226,7 @@ void Dock_TrayPeek(BOOL on)
     D.peek = on;
     D.peekAt = GetTickCount();
     if (on) {
-        EnumWindows(ShowTrayProc, TRUE);
+        ShowTaskbars(TRUE);
         SetTimer(D.hwnd, TIMER_DPEEK, 700, NULL);
     } else {                     /* el panel ya está arriba: la barra de tareas sobra */
         KillTimer(D.hwnd, TIMER_DPEEK);

@@ -1064,15 +1064,7 @@ static int CS(int v) { return BS(v); }
 
 static void OpenUri(LPCWSTR uri)
 {
-    wchar_t exe[MAX_PATH], cmd[MAX_PATH + 128];
-    GetWindowsDirectoryW(exe, MAX_PATH - 16);
-    lstrcatW(exe, L"\\explorer.exe");
-    wsprintfW(cmd, L"\"%s\" %s", exe, uri);
-    STARTUPINFOW si = { sizeof(si) };
-    PROCESS_INFORMATION pi;
-    if (CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
+    if (App_ShellOpen(uri)) {
     }
 }
 

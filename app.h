@@ -20,7 +20,7 @@
 #define WM_TRAY         (WM_APP + 1)
 #define WM_SETRADIUS    (WM_APP + 2)
 #define WM_SHOWPANEL    (WM_APP + 3)
-#define WM_SHOTFILE     (WM_APP + 4)   /* lParam: wchar_t* (HeapAlloc) de una captura guardada */
+#define WM_SHOTFILE     (WM_APP + 4)   /* hay una captura guardada pendiente (sin parámetros) */
 #define WM_WNCHANGED    (WM_APP + 5)   /* cambió la base de notificaciones de Windows */
 #define WM_BARCHANGED   (WM_APP + 6)   /* la barra superior apareció/desapareció: recolocar esquinas */
 #define WM_POPFRAME     (WM_APP + 80)  /* fotograma de la animación de una ventana emergente */
@@ -269,6 +269,7 @@ void Bar_Reposition(void);
 void Bar_ForegroundChanged(void);
 int  Bar_HeightOn(const RECT *mon);
 BOOL App_Covered(HWND h);
+BOOL App_ShellOpen(LPCWSTR target);         /* abre algo con %WINDIR%\\explorer.exe "target" (validado) */
 void App_BarSurfaceChanged(void);           /* la barra cambió de color o de vidrio: repintar las esquinas */
 BOOL Bar_Surface(const RECT *mon, int sx, int sy, DWORD *rgb, BOOL *glass);                   /* ¿alguna ventana ajena (visible) está por encima? */
 void Bar_Raise(void);

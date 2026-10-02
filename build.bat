@@ -7,4 +7,4 @@ cl /nologo /O2 /W4 /sdl /GS /guard:cf /DUNICODE /D_UNICODE ^
    corner_radius.c gfx.c panel.c notch.c install.c winnotif.c menubar.c dock.c pop.c tray.c sqlite3.c app.res ^
    /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup /MANIFEST:NO ^
    /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA /CETCOMPAT /guard:cf ^
-   shell32.lib advapi32.lib gdi32.lib user32.lib ole32.lib uuid.lib dwmapi.lib msimg32.lib winmm.lib wlanapi.lib version.lib oleaut32.lib wbemuuid.lib bthprops.lib /OUT:OpenDock.exe
+   shell32.lib advapi32.lib gdi32.lib user32.lib ole32.lib uuid.lib dwmapi.lib msimg32.lib winmm.lib wlanapi.lib version.lib oleaut32.lib wbemuuid.lib bthprops.lib /DEPENDENTLOADFLAG:0x800 /OUT:OpenDock.exe

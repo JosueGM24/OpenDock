@@ -76,7 +76,10 @@ static BOOL AppDataPath(const wchar_t *aumid, const wchar_t *uri, wchar_t *out)
     static const struct { LPCWSTR seg, dir; } kMap[] = { { L"local/", L"LocalState" }, { L"roaming/", L"RoamingState" }, { L"temp/", L"TempState" } };
     if (CompareStringOrdinal(uri, 14, L"ms-appdata:///", 14, TRUE) != CSTR_EQUAL) return FALSE;
     const wchar_t *rest = uri + 14, *bang = wcschr(aumid, L'!');
-    if (!bang || bang - aumid >= 120 || wcsstr(rest, L"..") || wcschr(rest, L':')) return FALSE;
+    if (!bang || bang - aumid >= 120 || wcsstr(rest, L"..") || wcschr(rest, L':') || rest[0] == L'/' || rest[0] == L'\\') return FALSE;
+    for (const wchar_t *q = aumid; q < bang; ++q)     /* familia de paquete: letras, cifras, . _ - */
+        if (!((*q >= L'a' && *q <= L'z') || (*q >= L'A' && *q <= L'Z') || (*q >= L'0' && *q <= L'9') || *q == L'.' || *q == L'_' || *q == L'-'))
+            return FALSE;
     for (int k = 0; k < 3; ++k) {
         const int n = lstrlenW(kMap[k].seg);
         if (CompareStringOrdinal(rest, n, kMap[k].seg, n, TRUE) != CSTR_EQUAL) continue;
@@ -254,7 +257,8 @@ static void ParseActions(const wchar_t *xml, WinNote *w)
             if (Attr(t + 1, e, L"activationType", v, 48)) w->launchType = ActType(v);
         }
     }
-    for (const wchar_t *p = xml; (p = wcsstr(p, L"<input")) != NULL; ++p) {
+    int guard = 0;      /* XML hostil (miles de etiquetas sin cerrar): tope de trabajo */
+    for (const wchar_t *p = xml; guard++ < 64 && (p = wcsstr(p, L"<input")) != NULL; ++p) {
         const wchar_t *e = wcschr(p, L'>');
         if (!e) break;
         if (Attr(p + 1, e, L"type", v, 48) && !lstrcmpiW(v, L"text") && Attr(p + 1, e, L"id", w->inputId, 24)) {
@@ -263,7 +267,8 @@ static void ParseActions(const wchar_t *xml, WinNote *w)
             break;
         }
     }
-    for (const wchar_t *p = xml; w->nact < WN_ACTIONS && (p = wcsstr(p, L"<action")) != NULL; ++p) {
+    guard = 0;
+    for (const wchar_t *p = xml; w->nact < WN_ACTIONS && guard++ < 64 && (p = wcsstr(p, L"<action")) != NULL; ++p) {
         if (p[7] != L' ' && p[7] != L'/' && p[7] != L'\t') continue;      /* no <actions> */
         const wchar_t *e = wcschr(p, L'>');
         if (!e) break;
@@ -287,7 +292,8 @@ static void ParseLogo(const wchar_t *xml, WinNote *w)
 {
     wchar_t v[48], src[MAX_PATH * 2];
     w->logo[0] = 0;
-    for (const wchar_t *p = xml; (p = wcsstr(p, L"<image")) != NULL; ++p) {
+    int guard = 0;
+    for (const wchar_t *p = xml; guard++ < 64 && (p = wcsstr(p, L"<image")) != NULL; ++p) {
         const wchar_t *e = wcschr(p, L'>');
         if (!e) break;
         if (!Attr(p + 1, e, L"placement", v, 48) || lstrcmpiW(v, L"appLogoOverride")) continue;
@@ -310,6 +316,9 @@ static void ParseLogo(const wchar_t *xml, WinNote *w)
         u8[k] = 0;
         wchar_t path[MAX_PATH];
         if (!MultiByteToWideChar(CP_UTF8, 0, u8, -1, path, MAX_PATH)) continue;
+        if (!(((path[0] | 0x20) >= L'a' && (path[0] | 0x20) <= L'z') && path[1] == L':' && path[2] == L'\\') ||
+            wcsstr(path, L"\\\\") || wcsstr(path, L"..") || GetDriveTypeW((wchar_t[]){ path[0], L':', L'\\', 0 }) == DRIVE_REMOTE)
+            continue;                                     /* solo archivos locales: nada de rutas de red */
         const DWORD at = GetFileAttributesW(path);
         if (at == INVALID_FILE_ATTRIBUTES || (at & FILE_ATTRIBUTE_DIRECTORY)) continue;
         lstrcpynW(w->logo, path, MAX_PATH);
@@ -610,16 +619,9 @@ void Wn_DismissAll(void)
 void Wn_Open(const WinNote *w)
 {
     if (!w->aumid[0] || lstrlenW(w->aumid) > 160) return;
-    wchar_t exe[MAX_PATH], cmd[MAX_PATH + 220];
-    GetWindowsDirectoryW(exe, MAX_PATH - 16);
-    lstrcatW(exe, L"\\explorer.exe");
-    wsprintfW(cmd, L"\"%s\" \"shell:AppsFolder\\%s\"", exe, w->aumid);
-    STARTUPINFOW si = { sizeof(si) };
-    PROCESS_INFORMATION pi;
-    if (CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
-    }
+    wchar_t target[200];
+    wsprintfW(target, L"shell:AppsFolder\\%s", w->aumid);
+    App_ShellOpen(target);
 }
 
 /* ───────────────────────── Acciones y respuestas rápidas ─────────────────────────
@@ -770,7 +772,19 @@ static BOOL SafeUri(const wchar_t *u)
     while (u[i] && ((u[i] >= L'a' && u[i] <= L'z') || (u[i] >= L'A' && u[i] <= L'Z') ||
                     (i && ((u[i] >= L'0' && u[i] <= L'9') || u[i] == L'+' || u[i] == L'-' || u[i] == L'.')))) ++i;
     if (i < 2 || u[i] != L':') return FALSE;
-    static const wchar_t *kBad[] = { L"file", L"shell", L"javascript", L"vbscript", L"data", L"ms-msdt", L"search-ms", L"ms-officecmd" };
+    /* los manejadores ms-* de Office, el instalador de apps o la ayuda abren cosas remotas:
+     * de esa familia solo pasan los conocidos */
+    if (i > 3 && CompareStringOrdinal(u, 3, L"ms-", 3, TRUE) == CSTR_EQUAL) {
+        static const wchar_t *kOk[] = { L"ms-settings", L"ms-windows-store", L"ms-outlook", L"ms-teams", L"ms-clock", L"ms-photos" };
+        BOOL ok = FALSE;
+        for (int k = 0; k < (int)(sizeof(kOk) / sizeof(kOk[0])) && !ok; ++k) {
+            const int n = lstrlenW(kOk[k]);
+            ok = i == n && CompareStringOrdinal(u, n, kOk[k], n, TRUE) == CSTR_EQUAL;
+        }
+        if (!ok) return FALSE;
+    }
+    static const wchar_t *kBad[] = { L"file", L"shell", L"javascript", L"vbscript", L"data", L"search", L"search-ms",
+                                     L"its", L"mk", L"hcp", L"res", L"jar", L"vbefile", L"jsfile" };
     for (int k = 0; k < (int)(sizeof(kBad) / sizeof(kBad[0])); ++k) {
         const int n = lstrlenW(kBad[k]);
         if (i == n && CompareStringOrdinal(u, n, kBad[k], n, TRUE) == CSTR_EQUAL) return FALSE;
@@ -791,15 +805,7 @@ static DWORD WINAPI ActivateWorker(LPVOID p)
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     BOOL done = FALSE;
     if (j->type == WA_PROTOCOL) {
-        if (SafeUri(j->args)) {
-            wchar_t exe[MAX_PATH], cmd[MAX_PATH + 420];
-            GetWindowsDirectoryW(exe, MAX_PATH - 16);
-            lstrcatW(exe, L"\\explorer.exe");
-            wsprintfW(cmd, L"\"%s\" \"%s\"", exe, j->args);
-            STARTUPINFOW si = { sizeof(si) };
-            PROCESS_INFORMATION pi;
-            if (CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); done = TRUE; }
-        }
+        if (SafeUri(j->args)) done = App_ShellOpen(j->args);     /* sin comillas ni modificadores colados */
     } else {
         CLSID clsid;
         NotifCb *cb = NULL;
