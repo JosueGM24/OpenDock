@@ -61,7 +61,7 @@ static const int kPresets[] = { 6, 8, 10, 12, 14, 16, 20, 24, 32, 40, 56 };
 
 HINSTANCE g_inst;
 HWND      g_ctrl;
-Config    g_cfg = { 12, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, MAT_OLED, 1, 0, 1, 5000, 0, FALSE, 0, FALSE, TRUE, FALSE, TRUE, 1, 2, 1, FALSE, 0, TRUE, TRUE };
+Config    g_cfg = { 12, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, MAT_OLED, 1, 0, 1, 5000, 0, FALSE, 0, FALSE, TRUE, FALSE, TRUE, 1, 2, 1, FALSE, 0, TRUE, TRUE, 1 };
 
 static HWND      g_corners[MAX_CORNERS];
 static int       g_count;
@@ -179,7 +179,7 @@ void Cfg_Save(void)
     RegWriteDword(L"NotchAccent", (DWORD)g_cfg.accent);
     RegWriteDword(L"NotchBounce", (DWORD)g_cfg.bounce);
     RegWriteDword(L"NotchFloating", (DWORD)g_cfg.floating);
-    RegWriteDword(L"NotchSound", (DWORD)g_cfg.sound);
+    RegWriteDword(L"NotchSoundV2", (DWORD)g_cfg.sound);
     RegWriteDword(L"MenuBar", (DWORD)g_cfg.menubar);
     RegWriteDword(L"HideWindowsClock", (DWORD)g_cfg.hideClock);
     RegWriteDword(L"Dock", (DWORD)g_cfg.dock);
@@ -191,6 +191,7 @@ void Cfg_Save(void)
     RegWriteDword(L"DockAutoHide", (DWORD)g_cfg.dockAutoHide);
     RegWriteDword(L"DockWindowsFull", (DWORD)g_cfg.dockWinFull);
     RegWriteDword(L"NotchSiteIcons", (DWORD)g_cfg.siteIcons);
+    RegWriteDword(L"NotchSoundVolume", (DWORD)g_cfg.soundVol);
     RegWriteDword(L"NotchX", (DWORD)g_cfg.notchX);
     RegWriteDword(L"NotchY", (DWORD)g_cfg.notchY);
 }
@@ -211,7 +212,10 @@ static void LoadConfig(void)
     g_cfg.accent      = (int)min(RegReadDword(L"NotchAccent", 0), ACCENT_COUNT - 1);
     g_cfg.bounce      = (int)min(RegReadDword(L"NotchBounce", 1), 2);
     g_cfg.floating    = RegReadDword(L"NotchFloating", 0) != 0;
-    g_cfg.sound       = (int)min(RegReadDword(L"NotchSound", 0), SOUND_COUNT - 1);
+    {   /* catálogo nuevo: del anterior se conservan silencio y Windows; lo demás pasa a Campanita */
+        const DWORD old = RegReadDword(L"NotchSound", 0), v2 = RegReadDword(L"NotchSoundV2", 0xFFFF);
+        g_cfg.sound = v2 != 0xFFFF ? (int)min(v2, SOUND_COUNT - 1) : old <= 1 ? (int)old : 2;
+    }
     g_cfg.menubar     = RegReadDword(L"MenuBar", 0) != 0;
     g_cfg.hideClock   = RegReadDword(L"HideWindowsClock", 1) != 0;
     g_cfg.dock        = RegReadDword(L"Dock", 0) != 0;
@@ -223,6 +227,7 @@ static void LoadConfig(void)
     g_cfg.dockAutoHide = (int)min(RegReadDword(L"DockAutoHide", 0), 2);
     g_cfg.dockWinFull  = RegReadDword(L"DockWindowsFull", 1) != 0;
     g_cfg.siteIcons    = RegReadDword(L"NotchSiteIcons", 1) != 0;
+    g_cfg.soundVol     = (int)min(RegReadDword(L"NotchSoundVolume", 1), 3);
     g_cfg.notchX      = (int)RegReadDword(L"NotchX", 5000);
     g_cfg.notchY      = (int)RegReadDword(L"NotchY", 0);
     g_cfg.radius = max(RADIUS_MIN, min(RADIUS_MAX, g_cfg.radius));

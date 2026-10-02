@@ -30,7 +30,7 @@
 enum {
     K_RADIUS, K_HIDECAP, K_STARTUP, K_BAR, K_CLOCK, K_BATTPCT, K_DOCK, K_DOCKTB, K_DHIDE, K_DWINFULL, K_DBLUR, K_DOPAC, K_DICON,
     K_NOTCH, K_MIRROR, K_BANNERS, K_SITEICON, K_EDGE, K_SHOTS,
-    K_SOUND, K_STYLE, K_MATERIAL, K_SIZE, K_BOUNCE, K_ACCENT, K_TEST,
+    K_SOUND, K_SOUNDVOL, K_STYLE, K_MATERIAL, K_SIZE, K_BOUNCE, K_ACCENT, K_TEST,
     K_COUNT
 };
 enum { IT_RADIUS, IT_DIVIDER, IT_TOGGLE, IT_SEGMENT, IT_SWATCH, IT_BUTTON, IT_PICKER };
@@ -74,6 +74,7 @@ static const ItemDef kNotch[] = {
     { IT_TOGGLE,  K_SHOTS,   L"Capturas en el notch" },
     { IT_DIVIDER, -1 },
     { IT_PICKER,  K_SOUND,    L"Sonido de notificación" },
+    { IT_SEGMENT, K_SOUNDVOL, L"Volumen del sonido", NULL, { L"Bajo", L"Medio", L"Alto", L"Máximo" } },
     { IT_SEGMENT, K_STYLE,    L"Estilo",   NULL, { L"Notch", L"Flotante" } },
     { IT_SEGMENT, K_SIZE,     L"Tamaño",   NULL, { L"Compacto", L"Normal", L"Grande" } },
     { IT_SEGMENT, K_BOUNCE,   L"Rebote",   NULL, { L"Suave", L"Normal", L"Bouncy" } },
@@ -146,6 +147,7 @@ static BOOL ItemEnabled(int key)
     if (key == K_MATERIAL) return TRUE;
     if (key == K_DWINFULL) return g_cfg.dock && g_cfg.dockAutoHide;
     if (key == K_DOCKTB || key == K_DHIDE || key == K_DBLUR || key == K_DOPAC || key == K_DICON) return g_cfg.dock;
+    if (key == K_SOUNDVOL) return g_cfg.notch && g_cfg.sound != 0;
     return key < K_MIRROR || key == K_BANNERS || g_cfg.notch;
 }
 
@@ -153,6 +155,7 @@ static int SegmentValue(int key)
 {
     switch (key) {
     case K_SOUND:    return g_cfg.sound;
+    case K_SOUNDVOL: return g_cfg.soundVol;
     case K_STYLE:    return g_cfg.floating;
     case K_MATERIAL: return g_cfg.material;
     case K_SIZE:     return g_cfg.size;
@@ -611,6 +614,7 @@ static void Activate(int hit)
         if (sub == 0) g_cfg.sound = (g_cfg.sound + SOUND_COUNT - 1) % SOUND_COUNT;
         else if (sub == 2) g_cfg.sound = (g_cfg.sound + 1) % SOUND_COUNT;
         Cfg_Save(); Notch_PlaySound(); Panel_Refresh(); return;
+    case K_SOUNDVOL: g_cfg.soundVol = sub; Cfg_Save(); Notch_PlaySound(); Panel_Refresh(); return;
     case K_STYLE:    g_cfg.floating = sub; break;
     case K_MATERIAL:
         g_cfg.material = sub;

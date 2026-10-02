@@ -977,121 +977,72 @@ static void StopFrames(void)
     KillTimer(N.hwnd, TIMER_FRAME);
 }
 
-/* ───────────────────────── Sonido ───────────────────────── */
-static BYTE *s_chime;
+/* ───────────────────────── Sonido ─────────────────────────
+ * Familia "campanita": campanas de síntesis FM (portadora modulada por otra a una razón no
+ * entera, con un índice que se apaga: el ataque brilla y la cola queda pura). Nada de
+ * archivos: se generan la primera vez que suenan y se guardan en memoria. El volumen se
+ * aplica al reproducir, también al sonido de Windows. */
+typedef struct { float at, f, decay, amp, ratio, index; } Bell;
+typedef struct { LPCWSTR name; float len, echo; const Bell *b; int n; } SoundDef;
 
-/* "Ding" de cristal sintetizado: tres parciales con caída exponencial. */
-static void BuildChime(void)
-{
-    const int rate = 44100, n = rate * 55 / 100;
-    const DWORD bytes = 44 + n * 2;
-    s_chime = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
-    if (!s_chime) return;
-    BYTE *h = s_chime;
-    const DWORD riff = bytes - 8, fmtLen = 16, rateB = rate * 2, dataLen = n * 2;
-    const WORD pcm = 1, ch = 1, align = 2, bits = 16;
-    const DWORD srate = rate;
-    CopyMemory(h, "RIFF", 4); CopyMemory(h + 4, &riff, 4); CopyMemory(h + 8, "WAVEfmt ", 8);
-    CopyMemory(h + 16, &fmtLen, 4); CopyMemory(h + 20, &pcm, 2); CopyMemory(h + 22, &ch, 2);
-    CopyMemory(h + 24, &srate, 4); CopyMemory(h + 28, &rateB, 4); CopyMemory(h + 32, &align, 2);
-    CopyMemory(h + 34, &bits, 2); CopyMemory(h + 36, "data", 4); CopyMemory(h + 40, &dataLen, 4);
-    short *pcmData = (short *)(h + 44);
-    const float tau = 6.2831853f;
-    for (int i = 0; i < n; ++i) {
-        const float t = (float)i / rate;
-        const float attack = min(1.0f, t / 0.004f);
-        const float v = 0.55f * sinf(tau * 1318.5f * t) * expf(-t * 6.0f)
-                      + 0.28f * sinf(tau * 1975.5f * t) * expf(-t * 9.0f)
-                      + 0.12f * sinf(tau * 2637.0f * t) * expf(-t * 14.0f);
-        pcmData[i] = (short)(v * attack * 0.42f * 32767.0f);
-    }
-}
-
-/* ── Librería de sonidos ──
- * Todos se sintetizan aquí (nada de archivos): notas con envolvente suave y timbres de
- * campana, marimba, gota, campana FM, pad o cuenco, con eco opcional. Se generan la primera
- * vez que suenan y se guardan en memoria. */
-enum { T_BELL, T_MARIMBA, T_DROP, T_FM, T_PAD, T_BOWL };
-typedef struct { float at, f, decay, amp; int kind; float p1; } Tone;
-typedef struct { LPCWSTR name; float len, echo; const Tone *t; int n; } SoundDef;
-
-static const Tone kCristal[]   = { { 0.00f, 1318.5f, 7, .60f, T_BELL }, { 0.11f, 1975.5f, 6, .50f, T_BELL } };
-static const Tone kBurbuja[]   = { { 0.00f, 520, 13, .80f, T_DROP, 2.2f }, { 0.09f, 760, 15, .45f, T_DROP, 2.0f } };
-static const Tone kBrisa[]     = { { 0.00f, 1046.5f, 5, .40f, T_BELL }, { 0.07f, 1318.5f, 5, .38f, T_BELL }, { 0.14f, 1568.0f, 4.5f, .36f, T_BELL } };
-static const Tone kPulso[]     = { { 0.00f, 784.0f, 9, .70f, T_MARIMBA }, { 0.14f, 1046.5f, 9, .70f, T_MARIMBA } };
-static const Tone kAurora[]    = { { 0.00f, 523.25f, 0, .30f, T_PAD, 0.95f }, { 0.00f, 659.25f, 0, .26f, T_PAD, 0.95f },
-                                   { 0.00f, 783.99f, 0, .24f, T_PAD, 0.95f }, { 0.28f, 2093.0f, 6, .14f, T_BELL } };
-static const Tone kCampanita[] = { { 0.00f, 1046.5f, 4, .60f, T_FM, 3.5f } };
-static const Tone kGota[]      = { { 0.00f, 1800, 14, .80f, T_DROP, 0.5f } };
-static const Tone kMarimba[]   = { { 0.00f, 784.0f, 8, .60f, T_MARIMBA }, { 0.10f, 659.25f, 8, .60f, T_MARIMBA }, { 0.20f, 523.25f, 7, .62f, T_MARIMBA } };
-static const Tone kDestello[]  = { { 0.00f, 2093.0f, 10, .30f, T_BELL }, { 0.05f, 2349.3f, 10, .30f, T_BELL },
-                                   { 0.10f, 2637.0f, 10, .30f, T_BELL }, { 0.15f, 3136.0f, 9, .30f, T_BELL } };
-static const Tone kZen[]       = { { 0.00f, 432.0f, 2.2f, .70f, T_BOWL } };
-static const Tone kEco[]       = { { 0.00f, 1174.7f, 8, .60f, T_BELL } };
+/*                                 inicio  frec     caída amp   razón índice */
+static const Bell kCampanita[] = { { 0.00f, 1046.5f, 4.0f, .60f, 3.5f, 2.4f } };
+static const Bell kDoble[]     = { { 0.00f, 1046.5f, 5.0f, .55f, 3.5f, 2.4f }, { 0.16f, 1568.0f, 4.5f, .50f, 3.5f, 2.2f } };
+static const Bell kCarillon[]  = { { 0.00f, 1318.5f, 4.5f, .50f, 3.5f, 2.2f }, { 0.14f, 1046.5f, 4.5f, .50f, 3.5f, 2.2f },
+                                   { 0.28f,  784.0f, 3.5f, .55f, 3.5f, 2.4f } };
+static const Bell kCristalina[]= { { 0.00f, 2637.0f, 6.5f, .45f, 2.0f, 1.6f } };
+static const Bell kTubular[]   = { { 0.00f,  784.0f, 2.6f, .65f, 1.4f, 3.0f } };
+static const Bell kCelesta[]   = { { 0.00f, 1046.5f, 7.0f, .50f, 4.0f, 1.8f }, { 0.09f, 1318.5f, 7.0f, .50f, 4.0f, 1.8f } };
+static const Bell kGlock[]     = { { 0.00f, 2093.0f, 6.0f, .40f, 3.5f, 1.4f }, { 0.07f, 2637.0f, 6.0f, .40f, 3.5f, 1.4f },
+                                   { 0.14f, 3136.0f, 5.5f, .40f, 3.5f, 1.4f } };
+static const Bell kTemplo[]    = { { 0.00f,  523.3f, 1.8f, .65f, 1.4f, 2.6f }, { 0.00f, 1046.5f, 3.0f, .20f, 3.5f, 1.2f } };
+static const Bell kBrillo[]    = { { 0.00f, 1568.0f, 5.0f, .55f, 3.5f, 2.0f } };
+static const Bell kAscenso[]   = { { 0.00f, 1568.0f, 6.0f, .50f, 3.5f, 2.2f }, { 0.10f, 2093.0f, 4.5f, .50f, 3.5f, 2.2f } };
+static const Bell kSerena[]    = { { 0.00f,  880.0f, 3.5f, .60f, 3.5f, 1.2f } };
 
 #define SND(name, len, echo, arr) { name, len, echo, arr, (int)(sizeof(arr) / sizeof(arr[0])) }
-static const SoundDef kSounds[SOUND_COUNT - 3] = {
-    SND(L"Cristal", 0.80f, 0, kCristal),   SND(L"Burbuja", 0.40f, 0, kBurbuja), SND(L"Brisa", 0.95f, 0, kBrisa),
-    SND(L"Pulso", 0.60f, 0, kPulso),       SND(L"Aurora", 1.10f, 0, kAurora),   SND(L"Campanita", 1.00f, 0, kCampanita),
-    SND(L"Gota", 0.32f, 0, kGota),         SND(L"Marimba", 0.80f, 0, kMarimba), SND(L"Destello", 0.62f, 0, kDestello),
-    SND(L"Zen", 1.90f, 0, kZen),           SND(L"Eco", 0.95f, 0.38f, kEco),
+static const SoundDef kSounds[SOUND_COUNT - 2] = {
+    SND(L"Campanita", 1.00f, 0, kCampanita),  SND(L"Doble", 1.05f, 0, kDoble),       SND(L"Carillón", 1.25f, 0, kCarillon),
+    SND(L"Cristalina", 0.75f, 0, kCristalina), SND(L"Tubular", 1.60f, 0, kTubular),  SND(L"Celesta", 0.80f, 0, kCelesta),
+    SND(L"Glockenspiel", 0.85f, 0, kGlock),    SND(L"Templo", 2.00f, 0, kTemplo),    SND(L"Brillo", 1.10f, 0.28f, kBrillo),
+    SND(L"Ascenso", 0.95f, 0, kAscenso),       SND(L"Serena", 1.20f, 0, kSerena),
 };
 
 LPCWSTR Notch_SoundName(int i)
 {
-    static const LPCWSTR kFixed[3] = { L"Silencio", L"Windows", L"Suave" };
-    if (i < 0 || i >= SOUND_COUNT) return L"";
-    return i < 3 ? kFixed[i] : kSounds[i - 3].name;
+    if (i == 0) return L"Silencio";
+    if (i == 1) return L"Windows";
+    return i > 1 && i < SOUND_COUNT ? kSounds[i - 2].name : L"";
 }
 
-static float ToneAt(const Tone *n, float lt)
+static float BellAt(const Bell *n, float lt)
 {
-    const float tau = 6.2831853f, f = n->f, d = n->decay;
-    float v = 0;
-    switch (n->kind) {
-    case T_BELL:
-        v = sinf(tau * f * lt) * expf(-lt * d) + 0.35f * sinf(tau * 2.0f * f * lt) * expf(-lt * d * 1.6f)
-          + 0.12f * sinf(tau * 3.01f * f * lt) * expf(-lt * d * 2.5f);
-        break;
-    case T_MARIMBA:
-        v = sinf(tau * f * lt) * expf(-lt * d) + 0.25f * sinf(tau * 4.0f * f * lt) * expf(-lt * d * 4.0f)
-          + 0.08f * sinf(tau * 10.0f * f * lt) * expf(-lt * d * 10.0f);
-        break;
-    case T_DROP: {        /* la frecuencia va de f a f·p1 muy rápido (fase integrada) */
-        const float k = 28.0f, ph = tau * f * (n->p1 * lt + (1.0f - n->p1) * (1.0f - expf(-k * lt)) / k);
-        v = sinf(ph) * expf(-lt * d);
-        break;
-    }
-    case T_FM: {
-        const float idx = 2.4f * expf(-lt * d * 0.8f);
-        v = sinf(tau * f * lt + idx * sinf(tau * f * n->p1 * lt)) * expf(-lt * d);
-        break;
-    }
-    case T_PAD: {         /* entra y sale suave, con tres voces apenas desafinadas */
-        if (lt >= n->p1) return 0;
-        const float e = sinf(3.14159f * lt / n->p1);
-        v = (sinf(tau * f * lt) + sinf(tau * f * 1.003f * lt) + sinf(tau * f * 0.997f * lt)) * (e * e) / 3.0f;
-        break;
-    }
-    case T_BOWL:
-        v = sinf(tau * f * lt) * expf(-lt * d) * (1.0f + 0.25f * sinf(tau * 3.0f * lt))
-          + 0.45f * sinf(tau * 2.76f * f * lt) * expf(-lt * d * 1.8f) + 0.18f * sinf(tau * 5.4f * f * lt) * expf(-lt * d * 3.0f);
-        break;
-    }
-    const float attack = n->kind == T_PAD ? 1.0f : min(1.0f, lt / 0.003f);
-    return v * attack * n->amp;
+    const float tau = 6.2831853f;
+    const float idx = n->index * expf(-lt * n->decay * 0.8f);
+    const float v = sinf(tau * n->f * lt + idx * sinf(tau * n->f * n->ratio * lt)) * expf(-lt * n->decay);
+    return v * min(1.0f, lt / 0.003f) * n->amp;
 }
 
-static BYTE *BuildSound(const SoundDef *s)
+static void WavHeader(BYTE *h, int rate, DWORD dataLen)
+{
+    const DWORD riff = 36 + dataLen, fmtLen = 16, rateB = rate * 2, srate = rate;
+    const WORD pcm = 1, ch = 1, align = 2, bits = 16;
+    CopyMemory(h, "RIFF", 4); CopyMemory(h + 4, &riff, 4); CopyMemory(h + 8, "WAVEfmt ", 8);
+    CopyMemory(h + 16, &fmtLen, 4); CopyMemory(h + 20, &pcm, 2); CopyMemory(h + 22, &ch, 2);
+    CopyMemory(h + 24, &srate, 4); CopyMemory(h + 28, &rateB, 4); CopyMemory(h + 32, &align, 2);
+    CopyMemory(h + 34, &bits, 2); CopyMemory(h + 36, "data", 4); CopyMemory(h + 40, &dataLen, 4);
+}
+
+/* A plena escala (pico 0,8): el volumen elegido se aplica después. */
+static BYTE *BuildSound(const SoundDef *s, DWORD *size)
 {
     const int rate = 44100, n = (int)(rate * s->len);
-    const DWORD bytes = 44 + (DWORD)n * 2;
     float *mix = (float *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (SIZE_T)n * sizeof(float));
-    BYTE *h = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
+    BYTE *h = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 44 + (SIZE_T)n * 2);
     if (!mix || !h) { if (mix) HeapFree(GetProcessHeap(), 0, mix); if (h) HeapFree(GetProcessHeap(), 0, h); return NULL; }
     for (int i = 0; i < n; ++i) {
         const float t = (float)i / rate;
-        for (int k = 0; k < s->n; ++k) if (t >= s->t[k].at) mix[i] += ToneAt(&s->t[k], t - s->t[k].at);
+        for (int k = 0; k < s->n; ++k) if (t >= s->b[k].at) mix[i] += BellAt(&s->b[k], t - s->b[k].at);
     }
     if (s->echo > 0) {                 /* eco: repeticiones cada 130 ms que se apagan */
         const int d = rate * 13 / 100;
@@ -1099,36 +1050,88 @@ static BYTE *BuildSound(const SoundDef *s)
     }
     float peak = 0.0001f;
     for (int i = 0; i < n; ++i) peak = max(peak, fabsf(mix[i]));
-    const int fade = rate / 50;        /* 20 ms de salida, sin chasquido */
-    const DWORD riff = bytes - 8, fmtLen = 16, rateB = rate * 2, dataLen = (DWORD)n * 2, srate = rate;
-    const WORD pcm = 1, ch = 1, align = 2, bits = 16;
-    CopyMemory(h, "RIFF", 4); CopyMemory(h + 4, &riff, 4); CopyMemory(h + 8, "WAVEfmt ", 8);
-    CopyMemory(h + 16, &fmtLen, 4); CopyMemory(h + 20, &pcm, 2); CopyMemory(h + 22, &ch, 2);
-    CopyMemory(h + 24, &srate, 4); CopyMemory(h + 28, &rateB, 4); CopyMemory(h + 32, &align, 2);
-    CopyMemory(h + 34, &bits, 2); CopyMemory(h + 36, "data", 4); CopyMemory(h + 40, &dataLen, 4);
+    const int fade = rate / 25;        /* 40 ms de salida, sin chasquido */
+    WavHeader(h, rate, (DWORD)n * 2);
     short *out = (short *)(h + 44);
     for (int i = 0; i < n; ++i) {
-        float v = mix[i] / peak * 0.40f;          /* el mismo volumen que "Suave" */
+        float v = mix[i] / peak * 0.80f;
         if (i > n - fade) v *= (float)(n - i) / fade;
         out[i] = (short)(v * 32767.0f);
     }
     HeapFree(GetProcessHeap(), 0, mix);
+    *size = 44 + (DWORD)n * 2;
     return h;
+}
+
+/* El sonido de notificación de Windows, leído de su .wav para poder bajarle el volumen. */
+static BYTE *LoadWindowsSound(DWORD *size)
+{
+    wchar_t raw[MAX_PATH], path[MAX_PATH];
+    DWORD sz = sizeof(raw);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"AppEvents\\Schemes\\Apps\\.Default\\Notification.Default\\.Current", NULL,
+                     RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND, NULL, raw, &sz) != ERROR_SUCCESS || !raw[0])
+        return NULL;
+    if (!ExpandEnvironmentStringsW(raw, path, MAX_PATH)) return NULL;
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return NULL;
+    const DWORD len = GetFileSize(f, NULL);
+    BYTE *b = len > 44 && len < 8 * 1024 * 1024 ? (BYTE *)HeapAlloc(GetProcessHeap(), 0, len) : NULL;
+    DWORD got = 0;
+    if (b && (!ReadFile(f, b, len, &got, NULL) || got != len || memcmp(b, "RIFF", 4) || memcmp(b + 8, "WAVE", 4))) {
+        HeapFree(GetProcessHeap(), 0, b);
+        b = NULL;
+    }
+    CloseHandle(f);
+    *size = len;
+    return b;
+}
+
+/* Copia del sonido con el volumen aplicado (solo PCM de 16 bits; otro formato, tal cual). */
+static BYTE *s_play;
+static DWORD s_playCap;
+
+static const BYTE *WithVolume(const BYTE *wav, DWORD size, float gain)
+{
+    if (s_playCap < size) {
+        if (s_play) HeapFree(GetProcessHeap(), 0, s_play);
+        s_play = (BYTE *)HeapAlloc(GetProcessHeap(), 0, size);
+        s_playCap = s_play ? size : 0;
+        if (!s_play) return wav;
+    }
+    CopyMemory(s_play, wav, size);
+    WORD fmt = 0, bits = 0;
+    for (DWORD p = 12; p + 8 <= size; ) {
+        DWORD clen;
+        CopyMemory(&clen, s_play + p + 4, 4);
+        if (!memcmp(s_play + p, "fmt ", 4) && p + 24 <= size) { CopyMemory(&fmt, s_play + p + 8, 2); CopyMemory(&bits, s_play + p + 22, 2); }
+        if (!memcmp(s_play + p, "data", 4)) {
+            if (fmt == 1 && bits == 16) {
+                short *d = (short *)(s_play + p + 8);
+                const DWORD count = min(clen, size - p - 8) / 2;
+                for (DWORD i = 0; i < count; ++i) d[i] = (short)(d[i] * gain);
+            }
+            break;
+        }
+        p += 8 + clen + (clen & 1);
+    }
+    return s_play;
 }
 
 void Notch_PlaySound(void)
 {
     static BYTE *s_built[SOUND_COUNT];
+    static DWORD s_size[SOUND_COUNT];
+    static const float kGain[4] = { 0.30f, 0.55f, 0.80f, 1.0f };     /* bajo · medio · alto · máximo */
     const int i = g_cfg.sound;
-    if (i == 1) {
-        PlaySoundW(L"Notification.Default", NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
-    } else if (i == 2) {
-        if (!s_chime) BuildChime();
-        if (s_chime) PlaySoundW((LPCWSTR)s_chime, NULL, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
-    } else if (i >= 3 && i < SOUND_COUNT) {
-        if (!s_built[i]) s_built[i] = BuildSound(&kSounds[i - 3]);
-        if (s_built[i]) PlaySoundW((LPCWSTR)s_built[i], NULL, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+    if (i <= 0 || i >= SOUND_COUNT) return;
+    if (!s_built[i]) s_built[i] = i == 1 ? LoadWindowsSound(&s_size[i]) : BuildSound(&kSounds[i - 2], &s_size[i]);
+    PlaySoundW(NULL, NULL, 0);                       /* el anterior se corta antes de reutilizar el búfer */
+    if (!s_built[i]) {                               /* Windows sin .wav legible: su alias, a su volumen */
+        if (i == 1) PlaySoundW(L"Notification.Default", NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
+        return;
     }
+    const BYTE *w = WithVolume(s_built[i], s_size[i], kGain[max(0, min(3, g_cfg.soundVol))]);
+    PlaySoundW((LPCWSTR)w, NULL, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
 }
 
 /* ───────────────────────── Estados ───────────────────────── */
