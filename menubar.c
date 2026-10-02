@@ -1480,8 +1480,51 @@ static void BlitFade(Canvas *dst, const Canvas *src, int dx, float a)
     }
 }
 
-/* Compone la sección visible; durante la transición, la que sale se desliza a la izquierda
- * y se desvanece mientras entra la otra, como al navegar en iOS. */
+/* Como BlitFade, pero además escalada (k) alrededor de (cx, cy) del origen, bilineal. */
+static void BlitDepth(Canvas *dst, const Canvas *src, float dx, float k, float cx, float cy, float a)
+{
+    if (fabsf(k - 1.0f) < 0.002f) { BlitFade(dst, src, (int)lroundf(dx), a); return; }
+    GdiFlush();
+    const float inv = 1.0f / k;
+    const int a8 = (int)(max(0.0f, min(1.0f, a)) * 256.0f + 0.5f);
+    const int y0 = max(0, (int)floorf(cy - cy * k)), y1 = min(dst->h, (int)ceilf(cy + (src->h - cy) * k));
+    const int x0 = max(0, (int)floorf(dx + cx - cx * k)), x1 = min(dst->w, (int)ceilf(dx + cx + (src->w - cx) * k));
+    for (int y = y0; y < y1; ++y) {
+        const float sy = (y + 0.5f - cy) * inv + cy - 0.5f;
+        const int iy = (int)floorf(sy);
+        if (iy < 0 || iy >= src->h - 1) continue;
+        const int fy = (int)((sy - iy) * 256.0f);
+        DWORD *d = &dst->px[y * dst->w];
+        const DWORD *r0 = &src->px[iy * src->w], *r1 = r0 + src->w;
+        for (int x = x0; x < x1; ++x) {
+            const float sx = (x + 0.5f - dx - cx) * inv + cx - 0.5f;
+            const int ix = (int)floorf(sx);
+            if (ix < 0 || ix >= src->w - 1) continue;
+            const int fx = (int)((sx - ix) * 256.0f);
+            DWORD out = 0;
+            for (int sh = 0; sh < 24; sh += 8) {        /* por canal: B, G, R */
+                const int c00 = (r0[ix] >> sh) & 255, c01 = (r0[ix + 1] >> sh) & 255;
+                const int c10 = (r1[ix] >> sh) & 255, c11 = (r1[ix + 1] >> sh) & 255;
+                const int top = c00 * 256 + (c01 - c00) * fx, bot = c10 * 256 + (c11 - c10) * fx;
+                const int v = (top * 256 + (bot - top) * fy) >> 16;
+                const int bg = (d[x] >> sh) & 255;
+                out |= (DWORD)((bg * (256 - a8) + v * a8) >> 8) << sh;
+            }
+            d[x] = out;
+        }
+    }
+}
+
+static float Smooth(float a, float b, float x)
+{
+    const float t = max(0.0f, min(1.0f, (x - a) / (b - a)));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+/* Compone la sección visible. Al entrar en una sección (ajustes, Wi-Fi, Bluetooth) los
+ * controles se quedan atrás, se encogen un poco y se apagan, y la sección llega desde la
+ * derecha y se asienta; al volver, el gesto al revés: los controles vuelven al frente. Las
+ * dos capas no se mezclan a medias mucho tiempo: una se va antes de que la otra llegue. */
 static void PaintCC(void)
 {
     const int W = CS(CC_W), H = max(1, (int)(C.hcur + 0.5f));
@@ -1490,14 +1533,18 @@ static void PaintCC(void)
         if (!Canvas_Init(&C.cv, W, H)) return;
     }
     CCBackground(&C.cv);
-    const float t = max(0.0f, min(1.0f, C.secT)), slide = W * 0.22f;
+    const float t = max(0.0f, min(1.0f, C.secT));
+    const float e = max(-0.04f, min(1.04f, C.secT));          /* posición: deja un leve asentamiento */
     if (t < 0.999f) {
         PaintControls();
-        if (C.ccv.px) BlitFade(&C.cv, &C.ccv, (int)(-t * slide), 1.0f - t);
+        const float out = 1.0f - Smooth(0.0f, 0.6f, t);
+        if (C.ccv.px && out > 0.004f)
+            BlitDepth(&C.cv, &C.ccv, -e * W * 0.12f, 1.0f - 0.07f * t, W * 0.5f, (float)CS(40), out);
     }
     if (t > 0.001f) {
         const Canvas *sc = C.page == 1 ? Panel_RenderEmbedded() : PaintList();
-        if (sc) BlitFade(&C.cv, sc, (int)((1.0f - t) * slide), t);
+        const float in = Smooth(0.18f, 0.85f, t);
+        if (sc && in > 0.004f) BlitFade(&C.cv, sc, (int)lroundf((1.0f - e) * W * 0.34f), in);
     }
     Pop_Present(&C.pop, &C.cv);
 }
@@ -1519,8 +1566,9 @@ static BOOL CCAdvance(void)
     if (dt > 0.05f) dt = 0.05f;
     const float tT = (float)C.section, tH = (float)(C.section ? (C.page == 1 ? C.setH : C.listH) : CS(CCHeight()));
     for (int k = 0; k < 2; ++k) {
-        CCSpring(&C.secT, &C.secV, tT, dt * 0.5f, 300.0f, 0.92f);
-        CCSpring(&C.hcur, &C.hv, tH, dt * 0.5f, 380.0f, Pop_Zeta());
+        /* contenido y alto con el mismo pulso, para que la ventana y la sección lleguen juntas */
+        CCSpring(&C.secT, &C.secV, tT, dt * 0.5f, 210.0f, 0.84f);
+        CCSpring(&C.hcur, &C.hv, tH, dt * 0.5f, 210.0f, min(1.0f, max(0.72f, Pop_Zeta() + 0.25f)));
     }
     /* escala de los elementos: crecen al señalarlos, se hunden al pulsarlos, con rebote */
     BOOL moving = FALSE;
