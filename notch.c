@@ -214,54 +214,70 @@ static void DrawCornerGlyph(Canvas *c, float x, float y, float g, DWORD rgb)
  * tamaño exacto y se compone píxel a píxel respetando la transparencia. */
 static int IconPx(void) { return NS(18); }
 
+/* Compone un mapa de bits de 32 bpp (alfa premultiplicado o no, según venga) en (x, y),
+ * centrado en s×s. shape: 0 tal cual · 1 esquinas de app · 2 círculo (fotos de perfil). */
+static BOOL BlitIcon(Canvas *c, HBITMAP icon, int x, int y, int s, int shape, float alpha)
+{
+    BITMAP bm;
+    if (!icon || !GetObjectW(icon, sizeof(bm), &bm) || bm.bmWidth <= 0 || bm.bmWidth > 512 || abs(bm.bmHeight) > 512) return FALSE;
+    const int w = bm.bmWidth, h = abs(bm.bmHeight);
+    DWORD *px = (DWORD *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)w * h * 4);
+    BITMAPINFO bi;
+    ZeroMemory(&bi, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;     /* top-down, sea como sea el original */
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    if (!px || GetDIBits(c->dc, icon, 0, h, px, &bi, DIB_RGB_COLORS) != h) { if (px) HeapFree(GetProcessHeap(), 0, px); return FALSE; }
+    /* ¿alpha premultiplicado? (algunas apps lo dan así y otras no) */
+    BOOL premult = TRUE, anyAlpha = FALSE;
+    for (int i = 0; i < w * h; ++i) {
+        const DWORD v = px[i], a = v >> 24;
+        if (a) anyAlpha = TRUE;
+        if (((v >> 16) & 255) > a || ((v >> 8) & 255) > a || (v & 255) > a) premult = FALSE;
+    }
+    GdiFlush();
+    const int ox = x + (s - w) / 2, oy = y + (s - h) / 2;
+    for (int yy = 0; yy < h; ++yy)
+        for (int xx = 0; xx < w; ++xx) {
+            const DWORD v = px[yy * w + xx];
+            const int a = anyAlpha ? (int)(v >> 24) : 255;
+            if (!a) continue;
+            DWORD rgb = v & 0xFFFFFF;
+            if (premult && anyAlpha && a < 255) {
+                rgb = (DWORD)min(255, (int)((v >> 16) & 255) * 255 / a) << 16
+                    | (DWORD)min(255, (int)((v >> 8) & 255) * 255 / a) << 8
+                    | (DWORD)min(255, (int)(v & 255) * 255 / a);
+            }
+            float k = a / 255.0f * alpha;
+            if (shape == 1) k *= Gfx_Cov(Gfx_SdRRect(xx + 0.5f, yy + 0.5f, 0, 0, (float)w, (float)h, min(w, h) * 0.24f));
+            else if (shape == 2) k *= Gfx_Cov(hypotf(xx + 0.5f - w * 0.5f, yy + 0.5f - h * 0.5f) - min(w, h) * 0.5f);
+            Gfx_Blend(c, ox + xx, oy + yy, rgb, k);
+        }
+    HeapFree(GetProcessHeap(), 0, px);
+    return TRUE;
+}
+
+/* Icono del aviso. Los de sitios web, como en Windows, traen dos imágenes: la del sitio y,
+ * a veces, la del remitente (foto de perfil). Con las dos, como en iOS: la foto redonda y el
+ * icono del sitio de insignia en su esquina; con una, esa; sin ninguna, la inicial. */
 static void DrawAppIcon(Canvas *c, int bx, int by, int box, LPCWSTR aumid, LPCWSTR app, LPCWSTR logo, float alpha)
 {
     const int s = IconPx(), x = bx + (box - s) / 2, y = by + (box - s) / 2;
-    /* aviso de una app web con su propio icono: ese, con esquinas suaves como una app */
-    HBITMAP icon = g_cfg.siteIcons && logo && logo[0] ? Wn_LogoIcon(logo, s) : NULL;
-    const BOOL rounded = icon != NULL;
-    if (!icon) icon = aumid && aumid[0] ? Wn_AppIcon(aumid, s) : NULL;
-    BITMAP bm;
-    if (icon && GetObjectW(icon, sizeof(bm), &bm) && bm.bmWidth > 0 && bm.bmWidth <= 512 && abs(bm.bmHeight) <= 512) {
-        const int w = bm.bmWidth, h = abs(bm.bmHeight);
-        DWORD *px = (DWORD *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)w * h * 4);
-        BITMAPINFO bi;
-        ZeroMemory(&bi, sizeof(bi));
-        bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bi.bmiHeader.biWidth = w;
-        bi.bmiHeader.biHeight = -h;     /* top-down, sea como sea el original */
-        bi.bmiHeader.biPlanes = 1;
-        bi.bmiHeader.biBitCount = 32;
-        if (px && GetDIBits(c->dc, icon, 0, h, px, &bi, DIB_RGB_COLORS) == h) {
-            /* ¿alpha premultiplicado? (algunas apps lo dan así y otras no) */
-            BOOL premult = TRUE, anyAlpha = FALSE;
-            for (int i = 0; i < w * h; ++i) {
-                const DWORD v = px[i], a = v >> 24;
-                if (a) anyAlpha = TRUE;
-                if (((v >> 16) & 255) > a || ((v >> 8) & 255) > a || (v & 255) > a) premult = FALSE;
-            }
-            GdiFlush();
-            const int ox = x + (s - w) / 2, oy = y + (s - h) / 2;
-            for (int yy = 0; yy < h; ++yy)
-                for (int xx = 0; xx < w; ++xx) {
-                    const DWORD v = px[yy * w + xx];
-                    const int a = anyAlpha ? (int)(v >> 24) : 255;
-                    if (!a) continue;
-                    DWORD rgb = v & 0xFFFFFF;
-                    if (premult && anyAlpha && a < 255) {
-                        rgb = (DWORD)min(255, (int)((v >> 16) & 255) * 255 / a) << 16
-                            | (DWORD)min(255, (int)((v >> 8) & 255) * 255 / a) << 8
-                            | (DWORD)min(255, (int)(v & 255) * 255 / a);
-                    }
-                    float k = a / 255.0f * alpha;
-                    if (rounded) k *= Gfx_Cov(Gfx_SdRRect(xx + 0.5f, yy + 0.5f, 0, 0, (float)w, (float)h, min(w, h) * 0.24f));
-                    Gfx_Blend(c, ox + xx, oy + yy, rgb, k);
-                }
-            HeapFree(GetProcessHeap(), 0, px);
-            return;
+    const BOOL site = Wn_IsSite(aumid);
+    HBITMAP photo = g_cfg.siteIcons && logo && logo[0] ? Wn_LogoIcon(logo, s) : NULL;
+    if (photo && BlitIcon(c, photo, x, y, s, 2, alpha)) {
+        const int bs = max(8, s * 9 / 20), bxx = x + s - bs + NS(3), byy = y + s - bs + NS(3);
+        HBITMAP badge = aumid && aumid[0] ? Wn_AppIcon(aumid, bs) : NULL;
+        if (badge) {
+            Gfx_FillCircle(c, bxx + bs * 0.5f, byy + bs * 0.5f, bs * 0.5f + (float)NS(2) * 0.75f, N.look.bg, alpha);   /* aro */
+            BlitIcon(c, badge, bxx, byy, bs, site ? 1 : 0, alpha);
         }
-        if (px) HeapFree(GetProcessHeap(), 0, px);
+        return;
     }
+    HBITMAP icon = aumid && aumid[0] ? Wn_AppIcon(aumid, s) : NULL;
+    if (BlitIcon(c, icon, x, y, s, site ? 1 : 0, alpha)) return;
     /* sin icono: cuadrado redondeado con la inicial */
     Gfx_FillRRect(c, (float)x, (float)y, (float)s, (float)s, s * 0.28f, N.look.accent, alpha);
     wchar_t ini[2] = { app && app[0] ? app[0] : L'?', 0 };

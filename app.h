@@ -253,7 +253,8 @@ void Wn_Activate(const WinNote *w, int action, LPCWSTR reply);   /* action -1 = 
 void Wn_RestoreBannersSync(void);
 void Wn_RestoreBanners(void);           /* deshace los ShowBanner=0 de versiones anteriores */
 HBITMAP Wn_AppIcon(LPCWSTR aumid, int px);  /* icono 32 bpp al tamaño exacto; lo posee la caché */
-HBITMAP Wn_LogoIcon(LPCWSTR path, int px);
+HBITMAP Wn_LogoIcon(LPCWSTR path, int px);  /* el icono propio de un aviso (PNG, JPG, ICO…); ídem */
+BOOL    Wn_IsSite(LPCWSTR aumid);           /* aviso de un sitio web (lo entrega el navegador) */
 
 /* sonidos de notificación (notch.c): 0 silencio · 1 Windows · 2… los propios */
 #define SOUND_COUNT 26

@@ -29,6 +29,8 @@ typedef struct {
     HBITMAP icon;
     int     iconPx;         /* tamaño con el que se pidió el icono */
     BOOL    iconTried;
+    wchar_t siteIcon[MAX_PATH];     /* sitio web: su icono, el que registró el navegador */
+    BOOL    siteTried;
 } AppInfo;
 
 static sqlite3  *s_db;
@@ -65,6 +67,30 @@ static void FallbackName(const wchar_t *aumid, wchar_t *out, int cap)
 static BOOL IsSiteNote(const wchar_t *aumid)
 {
     return wcsstr(aumid, L"!http") || wcsstr(aumid, L"!chrome-extension://");
+}
+BOOL Wn_IsSite(LPCWSTR aumid) { return aumid && IsSiteNote(aumid); }
+
+/* ms-appdata:///local/… de una app empaquetada (Edge lo es): su carpeta LocalState (o
+ * RoamingState, TempState) dentro de %LOCALAPPDATA%\Packages\<familia del paquete>. */
+static BOOL AppDataPath(const wchar_t *aumid, const wchar_t *uri, wchar_t *out)
+{
+    static const struct { LPCWSTR seg, dir; } kMap[] = { { L"local/", L"LocalState" }, { L"roaming/", L"RoamingState" }, { L"temp/", L"TempState" } };
+    if (CompareStringOrdinal(uri, 14, L"ms-appdata:///", 14, TRUE) != CSTR_EQUAL) return FALSE;
+    const wchar_t *rest = uri + 14, *bang = wcschr(aumid, L'!');
+    if (!bang || bang - aumid >= 120 || wcsstr(rest, L"..") || wcschr(rest, L':')) return FALSE;
+    for (int k = 0; k < 3; ++k) {
+        const int n = lstrlenW(kMap[k].seg);
+        if (CompareStringOrdinal(rest, n, kMap[k].seg, n, TRUE) != CSTR_EQUAL) continue;
+        wchar_t pkg[128], base[MAX_PATH];
+        lstrcpynW(pkg, aumid, (int)(bang - aumid) + 1);
+        if (!GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH)) return FALSE;
+        if (lstrlenW(base) + lstrlenW(pkg) + lstrlenW(rest) + 32 >= MAX_PATH) return FALSE;
+        wsprintfW(out, L"%s\\Packages\\%s\\%s\\%s", base, pkg, kMap[k].dir, rest + n);
+        for (wchar_t *p = out; *p; ++p) if (*p == L'/') *p = L'\\';
+        const DWORD at = GetFileAttributesW(out);
+        return at != INVALID_FILE_ATTRIBUTES && !(at & FILE_ATTRIBUTE_DIRECTORY);
+    }
+    return FALSE;
 }
 
 /* Etiqueta principal del dominio: web.whatsapp.com → whatsapp, bbva.com.mx → bbva. */
@@ -268,6 +294,7 @@ static void ParseLogo(const wchar_t *xml, WinNote *w)
         if (!Attr(p + 1, e, L"placement", v, 48) || lstrcmpiW(v, L"appLogoOverride")) continue;
         if (!Attr(p + 1, e, L"src", src, MAX_PATH * 2)) continue;
         const wchar_t *s = src;
+        if (AppDataPath(w->aumid, src, w->logo)) return;            /* Edge: dentro de su paquete */
         if (CompareStringOrdinal(s, 8, L"file:///", 8, TRUE) == CSTR_EQUAL) s += 8;
         else if (!(s[0] && s[1] == L':' && (s[2] == L'\\' || s[2] == L'/'))) continue;   /* nada de http ni ms-appx */
         /* %XX (UTF-8) y barras de URL a ruta de Windows */
@@ -508,7 +535,24 @@ HBITMAP Wn_AppIcon(LPCWSTR aumid, int px)
     if (a->icon) { DeleteObject(a->icon); a->icon = NULL; }
     a->iconTried = TRUE;
     a->iconPx = px;
-    if (IsSiteNote(aumid)) return NULL;     /* sitios web: inicial del sitio, no el logo del navegador */
+    if (IsSiteNote(aumid)) {    /* sitios web: su icono (el que registró el navegador), no el del navegador */
+        if (!g_cfg.siteIcons) return NULL;
+        if (!a->siteTried && s_db) {
+            a->siteTried = TRUE;
+            static const char *kSql = "SELECT a.AssetValue FROM HandlerAssets a JOIN NotificationHandler h ON h.RecordId = a.HandlerId "
+                                      "WHERE h.PrimaryId = ?1 AND a.AssetKey = 'IconUri' LIMIT 1";
+            sqlite3_stmt *st = NULL;
+            if (sqlite3_prepare_v2(s_db, kSql, -1, &st, NULL) == SQLITE_OK) {
+                sqlite3_bind_text16(st, 1, aumid, -1, SQLITE_TRANSIENT);
+                if (sqlite3_step(st) == SQLITE_ROW) {
+                    const wchar_t *uri = (const wchar_t *)sqlite3_column_text16(st, 0);
+                    if (uri && !AppDataPath(aumid, uri, a->siteIcon)) a->siteIcon[0] = 0;
+                }
+                sqlite3_finalize(st);
+            }
+        }
+        return a->siteIcon[0] ? Wn_LogoIcon(a->siteIcon, px) : NULL;
+    }
 
     wchar_t path[200];
     if (lstrlenW(aumid) >= 170) return NULL;

@@ -69,7 +69,7 @@ static const ItemDef kNotch[] = {
     { IT_TOGGLE,  K_NOTCH,   L"Avisos tipo notch" },
     { IT_TOGGLE,  K_MIRROR,  L"Notificaciones de Windows en el notch" },
     { IT_TOGGLE,  K_BANNERS, L"Notificaciones ofuscadas" },
-    { IT_TOGGLE,  K_SITEICON, L"Icono de las apps web", L"En avisos del navegador, el del sitio si lo trae; si no, su inicial" },
+    { IT_TOGGLE,  K_SITEICON, L"Icono de las apps web", L"Avisos del navegador: el icono del sitio y la foto del remitente" },
     { IT_TOGGLE,  K_EDGE,    L"Mini notch al pasar por arriba" },
     { IT_TOGGLE,  K_SHOTS,   L"Capturas en el notch" },
     { IT_DIVIDER, -1 },
