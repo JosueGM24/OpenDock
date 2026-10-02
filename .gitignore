@@ -1,0 +1,9 @@
+# Compilados
+*.exe
+*.res
+*.obj
+*.pdb
+*.ilk
+
+# Restos de herramientas
+*.stackdump

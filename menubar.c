@@ -1,0 +1,1602 @@
+/*
+ * menubar.c — barra superior estilo macOS y centro de control.
+ *
+ * Barra: una franja fina en el borde superior del monitor principal, registrada como
+ * AppBar (SHAppBarMessage): Windows le reserva el espacio y las ventanas maximizadas
+ * quedan debajo, así nunca tapa sus botones. Izquierda: logo + app activa. Derecha:
+ * volumen, Wi-Fi, batería, fecha/hora y el botón del centro de control. Se oculta sola
+ * con apps a pantalla completa.
+ *
+ * Centro de control: fichas (Wi-Fi, batería, No molestar, notificaciones) y
+ * deslizadores reales de brillo (WMI) y volumen (Core Audio).
+ *
+ * "Ocultar reloj de Windows" usa el ajuste oficial ShowSystrayDateTimeValueName y se
+ * restaura al quitar la barra, al salir y al desinstalar.
+ */
+#define COBJMACROS
+#include "app.h"
+#include <shellapi.h>
+#include <dwmapi.h>
+#include <mmdeviceapi.h>
+#include <endpointvolume.h>
+#include <wlanapi.h>
+#include <wbemcli.h>
+#include <bluetoothapis.h>
+#include <math.h>
+#include "resource.h"
+
+#define BAR_CLASS       L"CornerRadius.MenuBar"
+#define CC_CLASS        L"CornerRadius.ControlCenter"
+#define WM_BAR_APPBAR   (WM_APP + 60)
+#define TIMER_CLOCK     1
+#define TIMER_STATUS    2
+#define BAR_H           28      /* alto lógico de la barra */
+#define CC_W            340     /* el mismo ancho que los ajustes, que viven dentro */
+
+#define ADVANCED_KEY    L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced"
+#define CLOCK_VALUE     L"ShowSystrayDateTimeValueName"
+
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+
+/* GUID propios: no todos están en libuuid de mingw */
+static const GUID kCLSID_MMDeviceEnumerator = { 0xBCDE0395, 0xE52F, 0x467C, { 0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E } };
+static const GUID kIID_IMMDeviceEnumerator  = { 0xA95664D2, 0x9614, 0x4F35, { 0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6 } };
+static const GUID kIID_IAudioEndpointVolume = { 0x5CDF2C82, 0x841E, 0x4546, { 0x97, 0x22, 0x0C, 0xF7, 0x40, 0x78, 0x22, 0x9A } };
+
+enum { BH_NONE, BH_LOGO, BH_APP, BH_VOL, BH_WIFI, BH_BATT, BH_CLOCK, BH_CC, BH_COUNT };
+
+typedef struct {
+    DWORD bg, fg, fg2, tile, tileOn, track, accent;
+    BOOL  light;
+} BarLook;
+
+static struct {
+    HWND    hwnd;
+    UINT    dpi;
+    RECT    mon;
+    int     h;
+    Canvas  cv;
+    HFONT   fBold, fText, fIcon;
+    BarLook look;
+    BOOL    registered, fullscreen;
+    RECT    hit[BH_COUNT];
+    int     pressed;
+    wchar_t app[64];
+    int     lastMinute;
+
+    /* estado del sistema */
+    int     battery;            /* 0..100, -1 sin batería */
+    BOOL    charging;
+    int     wifi;               /* -1 sin conexión inalámbrica, 0..100 calidad */
+    wchar_t ssid[64];
+    float   volume;
+    BOOL    muted;
+    IAudioEndpointVolume *ep;
+    HANDLE  wlan;
+} B;
+
+static int BS(int v) { return MulDiv(v, (int)B.dpi, 96); }
+
+/* ───────────────────────── Aspecto ───────────────────────── */
+static void LoadBarLook(void)
+{
+    Theme th;
+    Theme_Load(&th);
+    BarLook *l = &B.look;
+    l->light = g_cfg.material == MAT_SYSTEM && !th.dark;
+    if (l->light) {
+        l->bg = 0xF2F2F7; l->fg = 0x000000; l->fg2 = 0x3C3C43; l->tile = 0xFFFFFF; l->track = 0xD1D1D6;
+    } else {
+        l->bg = g_cfg.material == MAT_OLED ? 0x000000 : 0x1C1C1E;
+        l->fg = 0xFFFFFF; l->fg2 = 0xC7C7CC; l->tile = 0x2C2C2E; l->track = 0x48484A;
+    }
+    const int a = max(0, min(ACCENT_COUNT - 1, g_cfg.accent));
+    l->accent = a ? kAccentPresets[a] : (l->light ? th.accent : th.accentOnBlack);
+    l->tileOn = l->accent;
+}
+
+/* ───────────────────────── Vidrio ─────────────────────────
+ * Con el material "Vidrio" la barra se pinta sobre lo que hay detrás (fondo de escritorio
+ * o ventanas), capturado a 1/4, desenfocado y teñido, igual que el notch y el dock. La
+ * barra queda fuera de captura para no verse a sí misma. */
+#define BACK_SCALE 4
+static Canvas s_back;
+static DWORD  s_backHash;
+
+static BOOL BarGlass(void) { return g_cfg.material == MAT_GLASS && !B.look.light; }
+
+static BOOL CaptureBarBack(void)
+{
+    if (!B.hwnd || !BarGlass()) return FALSE;
+    const int sw = max(1, (B.mon.right - B.mon.left) / BACK_SCALE), sh = max(1, (B.h + BACK_SCALE - 1) / BACK_SCALE);
+    if (s_back.w != sw || s_back.h != sh) {
+        Canvas_Free(&s_back);
+        if (!Canvas_Init(&s_back, sw, sh)) return FALSE;
+    }
+    HDC screen = GetDC(NULL);
+    SetStretchBltMode(s_back.dc, HALFTONE);
+    SetBrushOrgEx(s_back.dc, 0, 0, NULL);
+    StretchBlt(s_back.dc, 0, 0, sw, sh, screen, B.mon.left, B.mon.top, sw * BACK_SCALE, sh * BACK_SCALE, SRCCOPY);
+    ReleaseDC(NULL, screen);
+    GdiFlush();
+    DWORD hash = 2166136261u;
+    for (int i = 0; i < sw * sh; ++i) hash = (hash ^ (s_back.px[i] & 0xFFFFFF)) * 16777619u;
+    const BOOL changed = hash != s_backHash;
+    s_backHash = hash;
+    for (int i = 0; i < 2; ++i) Gfx_BoxBlur(s_back.px, sw, sh, max(1, BS(16) / BACK_SCALE));
+    for (int i = 0; i < sw * sh; ++i) {           /* vibrancia */
+        const DWORD v = s_back.px[i];
+        const int R = (v >> 16) & 255, G = (v >> 8) & 255, Bl = v & 255, Y = (R * 77 + G * 151 + Bl * 28) >> 8;
+        s_back.px[i] = (DWORD)max(0, min(255, Y + (R - Y) * 3 / 2)) << 16 |
+                       (DWORD)max(0, min(255, Y + (G - Y) * 3 / 2)) << 8 |
+                       (DWORD)max(0, min(255, Y + (Bl - Y) * 3 / 2));
+    }
+    return changed;
+}
+
+static void PaintGlass(Canvas *c, DWORD tint)
+{
+    GdiFlush();
+    for (int y = 0; y < c->h; ++y) {
+        const float fy = (y + 0.5f) / BACK_SCALE - 0.5f;
+        const int y0 = max(0, min(s_back.h - 1, (int)floorf(fy))), y1 = min(s_back.h - 1, y0 + 1);
+        const float ty = max(0.0f, min(1.0f, fy - y0));
+        for (int x = 0; x < c->w; ++x) {
+            const float fx = (x + 0.5f) / BACK_SCALE - 0.5f;
+            const int x0 = max(0, min(s_back.w - 1, (int)floorf(fx))), x1 = min(s_back.w - 1, x0 + 1);
+            const float tx = max(0.0f, min(1.0f, fx - x0));
+            const DWORD *p = s_back.px;
+            const DWORD b = Gfx_Mix(Gfx_Mix(p[y0 * s_back.w + x0], p[y0 * s_back.w + x1], tx),
+                                    Gfx_Mix(p[y1 * s_back.w + x0], p[y1 * s_back.w + x1], tx), ty);
+            c->px[y * c->w + x] = Gfx_Mix(b, tint, 0.52f) & 0xFFFFFF;
+        }
+    }
+}
+
+static void BarApplyCapture(void)
+{
+    if (B.hwnd)
+        SetWindowDisplayAffinity(B.hwnd, g_cfg.hideCapture || BarGlass() ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
+}
+
+/* ───────────────────────── Estado del sistema ───────────────────────── */
+static void ReadBattery(void)
+{
+    SYSTEM_POWER_STATUS ps;
+    B.battery = -1;
+    B.charging = FALSE;
+    if (!GetSystemPowerStatus(&ps) || (ps.BatteryFlag & 128) || ps.BatteryLifePercent > 100) return;
+    B.battery = ps.BatteryLifePercent;
+    B.charging = ps.ACLineStatus == 1;
+}
+
+static void ReadWifi(void)
+{
+    B.wifi = -1;
+    B.ssid[0] = 0;
+    DWORD ver = 0;
+    if (!B.wlan && WlanOpenHandle(2, NULL, &ver, &B.wlan) != ERROR_SUCCESS) { B.wlan = NULL; return; }
+    PWLAN_INTERFACE_INFO_LIST list = NULL;
+    if (WlanEnumInterfaces(B.wlan, NULL, &list) != ERROR_SUCCESS || !list) return;
+    for (DWORD i = 0; i < list->dwNumberOfItems; ++i) {
+        if (list->InterfaceInfo[i].isState != wlan_interface_state_connected) continue;
+        PWLAN_CONNECTION_ATTRIBUTES ca = NULL;
+        DWORD sz = 0;
+        WLAN_OPCODE_VALUE_TYPE vt;
+        if (WlanQueryInterface(B.wlan, &list->InterfaceInfo[i].InterfaceGuid, wlan_intf_opcode_current_connection,
+                               NULL, &sz, (PVOID *)&ca, &vt) == ERROR_SUCCESS && ca) {
+            B.wifi = (int)ca->wlanAssociationAttributes.wlanSignalQuality;
+            const DOT11_SSID *s = &ca->wlanAssociationAttributes.dot11Ssid;
+            const int n = MultiByteToWideChar(CP_UTF8, 0, (const char *)s->ucSSID, (int)min(s->uSSIDLength, 32), B.ssid, 63);
+            B.ssid[max(0, n)] = 0;
+            WlanFreeMemory(ca);
+            break;
+        }
+    }
+    WlanFreeMemory(list);
+}
+
+static BOOL OpenVolume(void)
+{
+    if (B.ep) return TRUE;
+    IMMDeviceEnumerator *en = NULL;
+    IMMDevice *dev = NULL;
+    if (FAILED(CoCreateInstance(&kCLSID_MMDeviceEnumerator, NULL, CLSCTX_INPROC_SERVER, &kIID_IMMDeviceEnumerator, (void **)&en)))
+        return FALSE;
+    if (SUCCEEDED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(en, eRender, eConsole, &dev))) {
+        IMMDevice_Activate(dev, &kIID_IAudioEndpointVolume, CLSCTX_INPROC_SERVER, NULL, (void **)&B.ep);
+        IMMDevice_Release(dev);
+    }
+    IMMDeviceEnumerator_Release(en);
+    return B.ep != NULL;
+}
+
+static void ReadVolume(void)
+{
+    if (!OpenVolume()) { B.volume = -1; return; }
+    float v = 0;
+    BOOL m = FALSE;
+    if (FAILED(IAudioEndpointVolume_GetMasterVolumeLevelScalar(B.ep, &v))) {
+        IAudioEndpointVolume_Release(B.ep);     /* el dispositivo cambió: reabrir la próxima vez */
+        B.ep = NULL;
+        B.volume = -1;
+        return;
+    }
+    IAudioEndpointVolume_GetMute(B.ep, &m);
+    B.volume = v;
+    B.muted = m;
+}
+
+static void SetVolume(float v)
+{
+    if (!OpenVolume()) return;
+    v = max(0.0f, min(1.0f, v));
+    IAudioEndpointVolume_SetMasterVolumeLevelScalar(B.ep, v, NULL);
+    if (B.muted && v > 0) IAudioEndpointVolume_SetMute(B.ep, FALSE, NULL);
+    B.volume = v;
+    if (v > 0) B.muted = FALSE;
+}
+
+static void ToggleMute(void)
+{
+    if (!OpenVolume()) return;
+    B.muted = !B.muted;
+    IAudioEndpointVolume_SetMute(B.ep, B.muted, NULL);
+}
+
+/* Nombre "humano" de la app en primer plano (descripción del ejecutable). */
+static void ForegroundAppName(wchar_t *out, int cap)
+{
+    out[0] = 0;
+    HWND w = GetForegroundWindow();
+    if (!w) return;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    if (pid == GetCurrentProcessId()) return;
+    HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!p) return;
+    wchar_t path[MAX_PATH];
+    DWORD n = MAX_PATH;
+    const BOOL ok = QueryFullProcessImageNameW(p, 0, path, &n);
+    CloseHandle(p);
+    if (!ok) return;
+
+    const wchar_t *base = path;
+    for (const wchar_t *q = path; *q; ++q) if (*q == L'\\') base = q + 1;
+    if (!lstrcmpiW(base, L"explorer.exe")) {
+        wchar_t cls[64];
+        GetClassNameW(w, cls, 64);
+        lstrcpynW(out, !lstrcmpW(cls, L"CabinetWClass") ? L"Explorador" : L"Escritorio", cap);
+        return;
+    }
+    if (!lstrcmpiW(base, L"ApplicationFrameHost.exe")) {   /* apps de la Store: el título es el nombre */
+        GetWindowTextW(w, out, cap);
+        return;
+    }
+    DWORD h = 0;
+    const DWORD sz = GetFileVersionInfoSizeW(path, &h);
+    if (sz && sz < 4 * 1024 * 1024) {
+        BYTE *buf = (BYTE *)HeapAlloc(GetProcessHeap(), 0, sz);
+        if (buf && GetFileVersionInfoW(path, 0, sz, buf)) {
+            struct { WORD lang, cp; } *tr = NULL;
+            UINT len = 0;
+            if (VerQueryValueW(buf, L"\\VarFileInfo\\Translation", (void **)&tr, &len) && len >= 4) {
+                wchar_t q[64];
+                wchar_t *desc = NULL;
+                wsprintfW(q, L"\\StringFileInfo\\%04x%04x\\FileDescription", tr->lang, tr->cp);
+                if (VerQueryValueW(buf, q, (void **)&desc, &len) && len > 1 && desc[0]) lstrcpynW(out, desc, cap);
+            }
+        }
+        if (buf) HeapFree(GetProcessHeap(), 0, buf);
+    }
+    if (!out[0]) {
+        lstrcpynW(out, base, cap);
+        wchar_t *dot = wcsrchr(out, L'.');
+        if (dot) *dot = 0;
+    }
+}
+
+/* ───────────────────────── Iconos vectoriales ─────────────────────────
+ * Diseñados en el lienzo "Iconos de la barra" sobre una caja de 24×24 unidades y
+ * pintados aquí con el mismo trazado: cada píxel se lleva al espacio del icono y se
+ * mide su distancia con signo a cada forma → antialiasado a cualquier tamaño. */
+typedef struct { float x, y; } V2;
+
+/* Distancia con signo a un polígono (negativa dentro). */
+static float SdPoly(V2 p, const V2 *v, int n)
+{
+    float d = 1e9f;
+    BOOL in = FALSE;
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+        const float ex = v[i].x - v[j].x, ey = v[i].y - v[j].y, wx = p.x - v[j].x, wy = p.y - v[j].y;
+        float t = (wx * ex + wy * ey) / (ex * ex + ey * ey);
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const float dx = wx - ex * t, dy = wy - ey * t;
+        d = min(d, dx * dx + dy * dy);
+        if ((v[i].y > p.y) != (v[j].y > p.y) && p.x < (v[j].x - v[i].x) * (p.y - v[i].y) / (v[j].y - v[i].y) + v[i].x) in = !in;
+    }
+    return in ? -sqrtf(d) : sqrtf(d);
+}
+
+/* Gira p alrededor de (cx, cy); deg > 0 = horario en pantalla (como CSS rotate). */
+static V2 Rot(V2 p, float cx, float cy, float deg)
+{
+    const float a = deg * 0.01745329f, cs = cosf(a), sn = sinf(a), x = p.x - cx, y = p.y - cy;
+    V2 r = { cx + x * cs - y * sn, cy + x * sn + y * cs };
+    return r;
+}
+
+static float SdSeg(V2 p, float ax, float ay, float bx, float by)
+{
+    const float ex = bx - ax, ey = by - ay, wx = p.x - ax, wy = p.y - ay;
+    float t = (wx * ex + wy * ey) / (ex * ex + ey * ey);
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    return hypotf(wx - ex * t, wy - ey * t);
+}
+
+/* Arco de radio r con centro (cx, cy) entre los ángulos a0..a1 (radianes, pantalla). */
+static float SdArc(V2 p, float cx, float cy, float r, float a0, float a1)
+{
+    const float dx = p.x - cx, dy = p.y - cy, ang = atan2f(dy, dx);
+    if (ang >= a0 && ang <= a1) return fabsf(hypotf(dx, dy) - r);
+    return min(hypotf(p.x - (cx + r * cosf(a0)), p.y - (cy + r * sinf(a0))),
+               hypotf(p.x - (cx + r * cosf(a1)), p.y - (cy + r * sinf(a1))));
+}
+
+/* Recorre la caja del icono: (cx, cy) centro en px, size = 24 unidades en px. */
+#define ICON_LOOP(cx, cy, size) \
+    const float u_ = (size) / 24.0f; GdiFlush(); \
+    for (int py = (int)((cy) - (size) * 0.5f) - 1; py <= (int)((cy) + (size) * 0.5f) + 1; ++py) \
+        for (int px = (int)((cx) - (size) * 0.5f) - 1; px <= (int)((cx) + (size) * 0.5f) + 1; ++px) { \
+            if (px < 0 || py < 0 || px >= c->w || py >= c->h) continue; \
+            const V2 q = { (px + 0.5f - (cx)) / u_ + 12.0f, (py + 0.5f - (cy)) / u_ + 12.0f };
+#define ICON_END }
+#define COV(d) Gfx_Cov((d) * u_)
+
+/* Ajustes (D1): engrane de 6 dientes de esquinas suaves, girado −30° (dientes arriba y abajo). */
+static const V2 kGear[] = {
+    { 18.578f, 9.786f }, { 21.226f, 9.734f }, { 21.226f, 14.266f }, { 18.578f, 14.214f },
+    { 17.206f, 16.590f }, { 18.575f, 18.857f }, { 14.650f, 21.123f }, { 13.372f, 18.803f },
+    { 10.628f, 18.803f }, { 9.350f, 21.123f }, { 5.425f, 18.857f }, { 6.794f, 16.590f },
+    { 5.422f, 14.214f }, { 2.774f, 14.266f }, { 2.774f, 9.734f }, { 5.422f, 9.786f },
+    { 6.794f, 7.410f }, { 5.425f, 5.143f }, { 9.350f, 2.877f }, { 10.628f, 5.197f },
+    { 13.372f, 5.197f }, { 14.650f, 2.877f }, { 18.575f, 5.143f }, { 17.206f, 7.410f }
+};
+static void DrawGear(Canvas *c, float cx, float cy, float size, DWORD rgb)
+{
+    ICON_LOOP(cx, cy, size)
+        const V2 g = Rot(q, 12, 12, 30.0f);          /* inverso del giro de −30° */
+        const float sd = max(SdPoly(g, kGear, (int)(sizeof(kGear) / sizeof(kGear[0]))) - 1.1f,
+                             3.0f - hypotf(g.x - 12, g.y - 12));
+        const float a = COV(sd);
+        if (a > 0) Gfx_Blend(c, px, py, rgb, a);
+    ICON_END
+}
+
+/* Wi-Fi (W1): punto y dos arcos gruesos, inclinado 50° (15° del diseño + 35° del ajuste).
+ * lit = arcos encendidos (0..2); off = sin conexión (todo tenue). */
+static void DrawWifi(Canvas *c, float cx, float cy, float size, int lit, BOOL off, DWORD fg)
+{
+    ICON_LOOP(cx, cy, size)
+        const V2 w = Rot(Rot(q, 12, 12, -35.0f), 12, 15, -15.0f);
+        const float a0 = -2.35619f, a1 = -0.78540f;  /* −135° … −45°: el abanico hacia arriba */
+        const float dDot = hypotf(w.x - 12, w.y - 19.4f) - 1.7f;
+        const float dA1 = SdArc(w, 12, 20, 5.2f, a0, a1) - 1.3f, dA2 = SdArc(w, 12, 20, 9.6f, a0, a1) - 1.3f;
+        float a = COV(dDot) * (off ? 0.28f : 1.0f);
+        a = max(a, COV(dA1) * (!off && lit >= 1 ? 1.0f : 0.28f));
+        a = max(a, COV(dA2) * (!off && lit >= 2 ? 1.0f : 0.28f));
+        if (a > 0) Gfx_Blend(c, px, py, fg, a);
+    ICON_END
+}
+
+/* Batería (B1): contorno fino, relleno dentro y el número calado (color del fondo sobre el
+ * relleno, del texto sobre lo vacío). Cargando: rayo en lugar del número, relleno verde. */
+static const V2 kBolt[] = { { 12, 7.6f }, { 8.6f, 12.6f }, { 11.6f, 12.6f }, { 10.6f, 16.4f }, { 14.4f, 11.2f }, { 11.4f, 11.2f }, { 12.2f, 7.6f } };
+static void DrawBattery(Canvas *c, float cx, float cy, float size, int pct, BOOL charging, BOOL number, DWORD fg, DWORD knock)
+{
+    pct = max(0, min(100, pct));
+    const float fillR = 3.35f + 1.4f + 13.9f * pct / 100.0f;
+    const DWORD col = charging ? 0x30D158 : pct <= 20 ? 0xFF453A : fg;
+
+    /* el número se rasteriza una vez como máscara de cobertura */
+    Canvas m = { 0 };
+    const float uu = size / 24.0f;
+    if (number && !charging && Canvas_Init(&m, (int)ceilf(size) + 2, (int)ceilf(size) + 2)) {
+        static HFONT f; static int fpx;
+        const int want = max(6, (int)(7.8f * uu + 0.5f));
+        if (!f || fpx != want) { if (f) DeleteObject(f); f = Gfx_Font(Gfx_UiFace(), want, FW_BOLD, ANTIALIASED_QUALITY); fpx = want; }
+        wchar_t t[8];
+        wsprintfW(t, L"%d", pct);
+        Canvas_Clear(&m, 0);
+        Gfx_Text(&m, f, t, (int)(3.35f * uu) + 1, (int)(8.35f * uu) + 1, (int)(15.3f * uu + 0.5f), (int)(7.3f * uu + 0.5f), 0xFFFFFF,
+                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        GdiFlush();
+    }
+    const int mx0 = (int)(cx - size * 0.5f) - 1, my0 = (int)(cy - size * 0.5f) - 1;
+
+    ICON_LOOP(cx, cy, size)
+        /* contorno y botón (tenues) */
+        /* contorno con el mismo peso que los arcos del Wi-Fi y el altavoz */
+        const float dBody = fabsf(Gfx_SdRRect(q.x, q.y, 1.5f, 6.5f, 19, 11, 3.8f)) - 0.85f;
+        const float dNub = SdSeg(q, 22.6f, 10.3f, 22.6f, 13.7f) - 1.0f;
+        const float ao = max(COV(dBody), COV(dNub));
+        if (ao > 0) Gfx_Blend(c, px, py, fg, ao);
+        /* relleno, recortado a la cavidad */
+        const float dIn = Gfx_SdRRect(q.x, q.y, 3.35f, 8.35f, 15.3f, 7.3f, 2.0f);
+        const float af = COV(max(dIn, q.x - fillR));
+        if (af > 0) Gfx_Blend(c, px, py, col, af);
+        /* número o rayo, calado sobre el relleno */
+        float at = 0;
+        if (charging) at = COV(SdPoly(q, kBolt, 7));
+        else if (m.px) {
+            const int ix = px - mx0, iy = py - my0;
+            if (ix >= 0 && iy >= 0 && ix < m.w && iy < m.h) at = ((m.px[iy * m.w + ix] >> 8) & 255) / 255.0f;
+        }
+        if (at > 0) {
+            const float inFill = COV(max(dIn, q.x - fillR));
+            Gfx_Blend(c, px, py, Gfx_Mix(fg, charging ? 0xFFFFFF : knock, inFill), at);
+        }
+    ICON_END
+    Canvas_Free(&m);
+}
+
+/* Sonido (S4b suave): bloque de altavoz que se abre en cono con una curva continua, y dos
+ * arcos gruesos como los del Wi-Fi. lit = arcos encendidos; muted = aspa en lugar de arcos.
+ * El contorno es el trazado del lienzo, muestreado. */
+static const V2 kSpeaker[] = {
+    { 1.200f, 10.600f }, { 1.246f, 10.132f }, { 1.383f, 9.682f }, { 1.604f, 9.267f },
+    { 1.903f, 8.903f }, { 2.267f, 8.604f }, { 2.682f, 8.383f }, { 3.132f, 8.246f },
+    { 3.600f, 8.200f }, { 4.600f, 8.200f }, { 5.051f, 8.156f }, { 5.464f, 8.034f },
+    { 5.845f, 7.846f }, { 6.199f, 7.605f }, { 6.531f, 7.325f }, { 6.846f, 7.019f },
+    { 7.150f, 6.700f }, { 7.448f, 6.381f }, { 7.745f, 6.075f }, { 8.046f, 5.795f },
+    { 8.357f, 5.554f }, { 8.683f, 5.366f }, { 9.029f, 5.244f }, { 9.400f, 5.200f },
+    { 9.400f, 5.200f }, { 9.630f, 5.246f }, { 9.824f, 5.376f }, { 9.954f, 5.570f },
+    { 10.000f, 5.800f }, { 10.000f, 18.200f }, { 9.954f, 18.430f }, { 9.824f, 18.624f },
+    { 9.630f, 18.754f }, { 9.400f, 18.800f }, { 9.029f, 18.756f }, { 8.683f, 18.634f },
+    { 8.357f, 18.446f }, { 8.046f, 18.205f }, { 7.745f, 17.925f }, { 7.448f, 17.619f },
+    { 7.150f, 17.300f }, { 6.846f, 16.981f }, { 6.531f, 16.675f }, { 6.199f, 16.395f },
+    { 5.845f, 16.154f }, { 5.464f, 15.966f }, { 5.051f, 15.844f }, { 4.600f, 15.800f },
+    { 3.600f, 15.800f }, { 3.600f, 15.800f }, { 3.132f, 15.754f }, { 2.682f, 15.617f },
+    { 2.267f, 15.396f }, { 1.903f, 15.097f }, { 1.604f, 14.733f }, { 1.383f, 14.318f },
+    { 1.246f, 13.868f }, { 1.200f, 13.400f }
+};
+
+static void DrawSound(Canvas *c, float cx, float cy, float size, int lit, BOOL muted, DWORD fg)
+{
+    ICON_LOOP(cx, cy, size)
+        float a = COV(SdPoly(q, kSpeaker, (int)(sizeof(kSpeaker) / sizeof(kSpeaker[0]))));
+        if (muted) {
+            a = max(a, COV(min(SdSeg(q, 14.8f, 9.6f, 19.6f, 14.4f), SdSeg(q, 19.6f, 9.6f, 14.8f, 14.4f)) - 1.1f));
+        } else {
+            a = max(a, COV(SdArc(q, 9.6f, 12, 4.6f, -0.78540f, 0.78540f) - 1.3f) * (lit >= 1 ? 1.0f : 0.28f));
+            a = max(a, COV(SdArc(q, 9.6f, 12, 9.0f, -0.78540f, 0.78540f) - 1.3f) * (lit >= 2 ? 1.0f : 0.28f));
+        }
+        if (a > 0) Gfx_Blend(c, px, py, fg, a);
+    ICON_END
+}
+
+/* Tamaño unificado: cada icono se recorta a su tinta real (medida en el lienzo) y se escala
+ * a la misma altura óptica; la batería, más ancha, algo más baja, como en macOS. */
+typedef struct { float x0, y0, x1, y1, opt; } Ink;
+static const Ink kInkGear  = { 1.78f, 1.67f, 22.22f, 22.33f, 1.00f };
+static const Ink kInkWifi  = { 5.21f, 6.81f, 17.35f, 19.80f, 0.98f };
+static const Ink kInkBatt  = { 0.65f, 5.65f, 23.60f, 18.35f, 0.86f };
+static const Ink kInkSound = { 1.20f, 4.34f, 19.90f, 19.66f, 1.00f };
+
+/* Coloca el icono con su tinta terminando en `right`: devuelve el ancho de tinta y el
+ * centro y tamaño de caja (24 unidades) con los que hay que dibujarlo. */
+static float PlaceIcon(const Ink *k, float right, float midY, float h, float *cx, float *cy, float *size)
+{
+    const float u = h * k->opt / (k->y1 - k->y0), w = (k->x1 - k->x0) * u;
+    *size = 24.0f * u;
+    *cx = right - w * 0.5f - ((k->x0 + k->x1) * 0.5f - 12.0f) * u;
+    *cy = midY - ((k->y0 + k->y1) * 0.5f - 12.0f) * u;
+    return w;
+}
+
+static int WifiArcs(void)  { return B.wifi >= 60 ? 2 : B.wifi >= 30 ? 1 : 0; }
+
+static void DrawLogo(Canvas *c, float x, float y, float g, DWORD rgb)
+{
+    const float th = max(1.5f, BS(2) * 0.9f), o = th;
+    GdiFlush();
+    for (int py = (int)y; py < (int)(y + g); ++py)
+        for (int px = (int)x; px < (int)(x + g); ++px) {
+            const float d = fabsf(Gfx_SdRRect(px + 0.5f, py + 0.5f, x + o, y + o, g * 2, g * 2, g * 0.75f));
+            Gfx_Blend(c, px, py, rgb, Gfx_Cov(d - th * 0.5f));
+        }
+}
+
+/* ───────────────────────── Barra: dibujo ───────────────────────── */
+static void FormatClock(wchar_t *out, int cap)
+{
+    SYSTEMTIME st;
+    wchar_t date[48], time[32];
+    GetLocalTime(&st);
+    GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, 0, &st, L"ddd d MMM", date, 48, NULL);
+    GetTimeFormatEx(LOCALE_NAME_USER_DEFAULT, TIME_NOSECONDS, &st, NULL, time, 32);
+    for (wchar_t *p = date; *p; ++p) if (*p == L'.') { MoveMemory(p, p + 1, (lstrlenW(p + 1) + 1) * sizeof(wchar_t)); --p; }
+    CharUpperBuffW(date, 1);
+    wsprintfW(out, L"%s  %s", date, time);
+    out[cap - 1] = 0;
+}
+
+static void PaintBar(HDC target)
+{
+    RECT rc;
+    GetClientRect(B.hwnd, &rc);
+    if (!B.cv.dc || B.cv.w != rc.right || B.cv.h != rc.bottom) {
+        Canvas_Free(&B.cv);
+        if (!Canvas_Init(&B.cv, rc.right, rc.bottom)) return;
+    }
+    Canvas *c = &B.cv;
+    const BarLook *L = &B.look;
+    const int H = rc.bottom, cy = H / 2;
+    if (BarGlass() && (s_back.px || CaptureBarBack())) PaintGlass(c, L->bg);
+    else Canvas_Clear(c, L->bg);
+    ZeroMemory(B.hit, sizeof(B.hit));
+
+    /* izquierda: logo + app activa */
+    int x = BS(16);
+    const float g = (float)BS(14);
+    DrawLogo(c, (float)x, cy - g * 0.5f, g, L->fg);
+    SetRect(&B.hit[BH_LOGO], 0, 0, x + (int)g + BS(8), H);
+    x += (int)g + BS(14);
+    if (B.app[0]) {
+        const int w = min(Gfx_TextWidth(B.fBold, B.app), BS(320));
+        Gfx_Text(c, B.fBold, B.app, x, 0, w + 2, H, L->fg, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+    }
+
+    /* derecha (de derecha a izquierda): centro de control, hora, batería, Wi-Fi, volumen */
+    int r = rc.right - BS(16);
+    const float ih = (float)BS(14), gap = (float)BS(16);    /* altura óptica y separación */
+    float icx, icy, isz, iw;
+    iw = PlaceIcon(&kInkGear, (float)r, (float)cy, ih, &icx, &icy, &isz);
+    DrawGear(c, icx, icy, isz, L->fg);
+    SetRect(&B.hit[BH_CC], r - (int)iw - BS(8), 0, r + BS(8), H);
+    r -= (int)iw + BS(18);
+
+    wchar_t clock[96];
+    FormatClock(clock, 96);
+    const int tw = Gfx_TextWidth(B.fBold, clock);        /* en negrita: se lee de un vistazo */
+    Gfx_Text(c, B.fBold, clock, r - tw, 0, tw + 2, H, L->fg, DT_SINGLELINE | DT_VCENTER);
+    SetRect(&B.hit[BH_CLOCK], r - tw - BS(6), 0, r + BS(6), H);
+    r -= tw + BS(18);
+
+    if (B.battery >= 0) {       /* el porcentaje va dentro de la batería */
+        iw = PlaceIcon(&kInkBatt, (float)r, (float)cy, ih, &icx, &icy, &isz);
+        DrawBattery(c, icx, icy, isz, B.battery, B.charging, TRUE, L->fg, L->bg);
+        SetRect(&B.hit[BH_BATT], r - (int)iw - BS(4), 0, r + BS(6), H);
+        r -= (int)(iw + gap);
+    }
+
+    iw = PlaceIcon(&kInkWifi, (float)r, (float)cy, ih, &icx, &icy, &isz);
+    DrawWifi(c, icx, icy, isz, WifiArcs(), B.wifi < 0, L->fg);
+    SetRect(&B.hit[BH_WIFI], r - (int)iw - BS(4), 0, r + BS(6), H);
+    r -= (int)(iw + gap);
+
+    if (B.volume >= 0) {
+        const BOOL mute = B.muted || B.volume <= 0.001f;
+        iw = PlaceIcon(&kInkSound, (float)r, (float)cy, ih, &icx, &icy, &isz);
+        DrawSound(c, icx, icy, isz, B.volume < 0.5f ? 1 : 2, mute, L->fg);
+        SetRect(&B.hit[BH_VOL], r - (int)iw - BS(4), 0, r + BS(6), H);
+    }
+
+    BitBlt(target, 0, 0, c->w, c->h, c->dc, 0, 0, SRCCOPY);
+}
+
+/* ───────────────────────── Centro de control ───────────────────────── */
+enum { CH_NONE, CH_WIFI, CH_BT, CH_BATT, CH_DND, CH_NOTIF, CH_BRIGHT, CH_VOL, CH_VOLICON, CH_HIDEBAR, CH_SETTINGS, CH_COUNT };
+
+static struct {
+    HWND   hwnd;
+    Canvas cv;
+    HFONT  fTitle, fSub, fIcon, fIconBig;
+    int    bt;                  /* Bluetooth: -1 sin radio · 0 apagado · 1 encendido */
+    /* movimiento: escala de cada elemento (hover / pulsado), "pop" de los iconos de los
+     * deslizadores y su relleno, todos con el rebote configurado */
+    int    hot, press;
+    float  hs[CH_COUNT], hsv[CH_COUNT];
+    float  is[2], isv[2];       /* 0 pantalla · 1 sonido */
+    float  fill[2], fillv[2];
+    Canvas el, ico;             /* lienzos de paso para componer escalado */
+    wchar_t btDev[64];          /* primer dispositivo conectado */
+    RECT   hit[CH_COUNT];
+    int    dragging;            /* CH_BRIGHT / CH_VOL mientras se arrastra */
+    int    brightness;          /* -1 = no disponible */
+    DWORD  closedAt;
+    Pop    pop;                 /* abre/cierra con el rebote del notch */
+    PopGlass glass;
+    int    ox, oy;              /* origen del contenido en pantalla */
+    /* dos secciones: 0 controles · 1 ajustes de CornerRadius (panel.c alojado) */
+    int    section, setH;
+    float  secT, secV;          /* transición entre secciones (0..1) */
+    float  hcur, hv;            /* alto animado del contenido */
+    Canvas ccv;                 /* la sección de controles */
+    LARGE_INTEGER last;
+} C;
+
+/* ── brillo por WMI, en un hilo propio (cada llamada tarda decenas de ms) ── */
+static volatile LONG s_brightTarget = -1;
+static HANDLE        s_brightEvent;
+static volatile LONG s_brightCurrent = -1;
+
+static BOOL WmiConnect(IWbemServices **svc)
+{
+    IWbemLocator *loc = NULL;
+    *svc = NULL;
+    if (FAILED(CoCreateInstance(&CLSID_WbemLocator, NULL, CLSCTX_INPROC_SERVER, &IID_IWbemLocator, (void **)&loc)))
+        return FALSE;
+    BSTR ns = SysAllocString(L"ROOT\\WMI");
+    HRESULT hr = IWbemLocator_ConnectServer(loc, ns, NULL, NULL, NULL, 0, NULL, NULL, svc);
+    SysFreeString(ns);
+    IWbemLocator_Release(loc);
+    if (FAILED(hr)) return FALSE;
+    CoSetProxyBlanket((IUnknown *)*svc, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, NULL, RPC_C_AUTHN_LEVEL_CALL,
+                      RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE);
+    return TRUE;
+}
+
+static int WmiReadBrightness(IWbemServices *svc)
+{
+    IEnumWbemClassObject *en = NULL;
+    BSTR lang = SysAllocString(L"WQL"), q = SysAllocString(L"SELECT CurrentBrightness FROM WmiMonitorBrightness");
+    int value = -1;
+    if (SUCCEEDED(IWbemServices_ExecQuery(svc, lang, q, WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, NULL, &en))) {
+        IWbemClassObject *obj = NULL;
+        ULONG got = 0;
+        if (SUCCEEDED(IEnumWbemClassObject_Next(en, 2000, 1, &obj, &got)) && got) {
+            VARIANT v;
+            VariantInit(&v);
+            if (SUCCEEDED(IWbemClassObject_Get(obj, L"CurrentBrightness", 0, &v, NULL, NULL))) {
+                if (v.vt == VT_UI1) value = v.bVal;
+                else if (v.vt == VT_I4) value = v.lVal;
+            }
+            VariantClear(&v);
+            IWbemClassObject_Release(obj);
+        }
+        IEnumWbemClassObject_Release(en);
+    }
+    SysFreeString(lang);
+    SysFreeString(q);
+    return value;
+}
+
+static void WmiSetBrightness(IWbemServices *svc, int value)
+{
+    IEnumWbemClassObject *en = NULL;
+    BSTR lang = SysAllocString(L"WQL"), q = SysAllocString(L"SELECT * FROM WmiMonitorBrightnessMethods");
+    BSTR cls = SysAllocString(L"WmiMonitorBrightnessMethods"), method = SysAllocString(L"WmiSetBrightness");
+    if (SUCCEEDED(IWbemServices_ExecQuery(svc, lang, q, WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, NULL, &en))) {
+        IWbemClassObject *inst = NULL, *klass = NULL, *sig = NULL, *args = NULL;
+        ULONG got = 0;
+        if (SUCCEEDED(IEnumWbemClassObject_Next(en, 2000, 1, &inst, &got)) && got &&
+            SUCCEEDED(IWbemServices_GetObject(svc, cls, 0, NULL, &klass, NULL)) &&
+            SUCCEEDED(IWbemClassObject_GetMethod(klass, method, 0, &sig, NULL)) &&
+            SUCCEEDED(IWbemClassObject_SpawnInstance(sig, 0, &args))) {
+            VARIANT path, t, b;
+            VariantInit(&path);
+            VariantInit(&t);
+            VariantInit(&b);
+            t.vt = VT_I4;  t.lVal = 0;
+            b.vt = VT_UI1; b.bVal = (BYTE)max(0, min(100, value));
+            IWbemClassObject_Put(args, L"Timeout", 0, &t, 0);
+            IWbemClassObject_Put(args, L"Brightness", 0, &b, 0);
+            if (SUCCEEDED(IWbemClassObject_Get(inst, L"__PATH", 0, &path, NULL, NULL)) && path.vt == VT_BSTR)
+                IWbemServices_ExecMethod(svc, path.bstrVal, method, 0, NULL, args, NULL, NULL);
+            VariantClear(&path);
+        }
+        if (args)  IWbemClassObject_Release(args);
+        if (sig)   IWbemClassObject_Release(sig);
+        if (klass) IWbemClassObject_Release(klass);
+        if (inst)  IWbemClassObject_Release(inst);
+        IEnumWbemClassObject_Release(en);
+    }
+    SysFreeString(lang); SysFreeString(q); SysFreeString(cls); SysFreeString(method);
+}
+
+static DWORD WINAPI BrightnessWorker(LPVOID unused)
+{
+    (void)unused;
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    IWbemServices *svc = NULL;
+    if (WmiConnect(&svc)) s_brightCurrent = WmiReadBrightness(svc);
+    for (;;) {
+        WaitForSingleObject(s_brightEvent, INFINITE);
+        const LONG target = InterlockedExchange(&s_brightTarget, -1);
+        if (!svc && !WmiConnect(&svc)) continue;
+        if (target >= 0) WmiSetBrightness(svc, target);
+        else s_brightCurrent = WmiReadBrightness(svc);
+    }
+    return 0;
+}
+
+static void Brightness_Request(int value)     /* value < 0: solo releer */
+{
+    if (!s_brightEvent) {
+        s_brightEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+        HANDLE t = s_brightEvent ? CreateThread(NULL, 0, BrightnessWorker, NULL, 0, NULL) : NULL;
+        if (t) CloseHandle(t);
+    }
+    if (value >= 0) InterlockedExchange(&s_brightTarget, value);
+    if (s_brightEvent) SetEvent(s_brightEvent);
+}
+
+static int CS(int v) { return BS(v); }
+
+static void OpenUri(LPCWSTR uri)
+{
+    wchar_t exe[MAX_PATH], cmd[MAX_PATH + 128];
+    GetWindowsDirectoryW(exe, MAX_PATH - 16);
+    lstrcatW(exe, L"\\explorer.exe");
+    wsprintfW(cmd, L"\"%s\" %s", exe, uri);
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
+    if (CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+}
+
+/* ───────────────────────── Centro de control: diseño ─────────────────────────
+ * Como el de macOS: tarjeta de conectividad (Wi-Fi y Bluetooth), fichas de No molestar y
+ * notificaciones, batería, deslizadores con su valor y dos botones al pie. */
+#define CC_PAD   14
+#define CC_GAP   10
+#define CC_TILE  58
+#define CC_BATT  60
+#define CC_SROW  54
+#define CC_FOOT  34
+
+static void ReadBluetooth(void)
+{
+    C.bt = -1;
+    C.btDev[0] = 0;
+    BLUETOOTH_FIND_RADIO_PARAMS fp = { sizeof(fp) };
+    HANDLE radio = NULL;
+    HBLUETOOTH_RADIO_FIND f = BluetoothFindFirstRadio(&fp, &radio);
+    if (!f) return;
+    BluetoothFindRadioClose(f);
+    C.bt = BluetoothIsConnectable(radio) ? 1 : 0;
+    if (C.bt == 1) {            /* sin búsqueda: solo los ya conectados */
+        BLUETOOTH_DEVICE_SEARCH_PARAMS sp = { sizeof(sp) };
+        sp.fReturnConnected = TRUE;
+        sp.hRadio = radio;
+        BLUETOOTH_DEVICE_INFO di = { sizeof(di) };
+        HBLUETOOTH_DEVICE_FIND df = BluetoothFindFirstDevice(&sp, &di);
+        if (df) {
+            do { if (di.fConnected) { lstrcpynW(C.btDev, di.szName, 64); break; } } while (BluetoothFindNextDevice(df, &di));
+            BluetoothFindDeviceClose(df);
+        }
+    }
+    CloseHandle(radio);
+}
+
+static int CCHeight(void)
+{
+    const int sliders = (C.brightness >= 0 ? 2 : 1) * CC_SROW + 10;
+    return CC_PAD + (2 * CC_TILE + CC_GAP) + CC_GAP + CC_BATT + CC_GAP + sliders + CC_GAP + CC_FOOT + CC_PAD;
+}
+
+/* Fondo del material común (lo comparten las dos secciones). */
+static void CCBackground(Canvas *c)
+{
+    if (B.look.light)                    Canvas_Clear(c, 0xE5E5EA);
+    else if (g_cfg.material == MAT_GLASS) Pop_PaintGlass(c, &C.glass, C.ox, C.oy, 0x1C1C1E, 0.58f);
+    else                                  Canvas_Clear(c, g_cfg.material == MAT_OLED ? 0x000000 : 0x161618);
+}
+
+static DWORD CardColor(void) { return B.look.light ? 0xFFFFFF : g_cfg.material == MAT_OLED ? 0x1C1C1E : 0x2C2C2E; }
+
+static void Card(Canvas *c, RECT r)
+{
+    Gfx_FillRRect(c, (float)r.left, (float)r.top, (float)(r.right - r.left), (float)(r.bottom - r.top), (float)CS(16),
+                  CardColor(), 1.0f);
+}
+
+/* Botón redondo con icono: de color de acento cuando está activo. */
+static void Bubble(Canvas *c, float cx, float cy, float d, BOOL on, int kind, LPCWSTR glyph)
+{
+    const BarLook *L = &B.look;
+    Gfx_FillCircle(c, cx, cy, d * 0.5f, on ? L->tileOn : (L->light ? 0xE5E5EA : 0x3A3A3C), 1.0f);
+    const DWORD ic = on ? 0xFFFFFF : L->fg;
+    if (kind == 1) DrawWifi(c, cx, cy, d * 0.62f, WifiArcs(), B.wifi < 0, ic);
+    else Gfx_Text(c, C.fIcon, glyph, (int)(cx - d * 0.5f), (int)(cy - d * 0.5f), (int)d, (int)d, ic, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void TwoLines(Canvas *c, int x, int y, int w, int h, LPCWSTR title, LPCWSTR sub)
+{
+    const BarLook *L = &B.look;
+    Gfx_Text(c, C.fTitle, title, x, y + h / 2 - CS(17), w, CS(18), L->fg, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+    Gfx_Text(c, C.fSub, sub, x, y + h / 2 + CS(1), w, CS(16), L->fg2, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+}
+
+
+/* Deslizador: etiqueta y valor arriba; pista gruesa con el icono dentro (que hace "pop"). */
+static RECT SliderTrack(RECT r)
+{
+    RECT t = { r.left, r.top + CS(22) - CS(6), r.right, r.top + CS(22) + CS(26) + CS(6) };
+    return t;
+}
+
+static void DrawSliderRow(Canvas *c, RECT r, int k)
+{
+    const BarLook *L = &B.look;
+    const float v = max(0.0f, min(1.0f, C.fill[k]));
+    const float real = k ? (B.muted ? 0.0f : max(0.0f, B.volume)) : C.brightness / 100.0f;
+    LPCWSTR glyph = k ? (B.muted ? L"\xE74F" : L"\xE767") : L"\xE706";
+    wchar_t val[16];
+    wsprintfW(val, L"%d %%", (int)(max(0.0f, min(1.0f, real)) * 100.0f + 0.5f));
+    Gfx_Text(c, C.fTitle, k ? L"Sonido" : L"Pantalla", r.left, r.top, r.right - r.left, CS(18), L->fg, DT_SINGLELINE | DT_VCENTER);
+    Gfx_Text(c, C.fSub, val, r.left, r.top, r.right - r.left, CS(18), L->fg2, DT_SINGLELINE | DT_VCENTER | DT_RIGHT);
+    const float x = (float)r.left, y = (float)(r.top + CS(22)), w = (float)(r.right - r.left), h = (float)CS(26);
+    const DWORD fillc = L->light ? 0x1C1C1E : 0xFFFFFF, inkc = L->light ? 0xFFFFFF : 0x1C1C1E;
+    Gfx_FillRRect(c, x, y, w, h, h * 0.5f, L->light ? 0xE5E5EA : 0x3A3A3C, 1.0f);
+    Gfx_FillRRect(c, x, y, max(h, w * v), h, h * 0.5f, fillc, 1.0f);
+    /* icono con su escala animada: solo su trazo (máscara), sin cuadro de fondo */
+    const int ib = (int)h;
+    if (C.ico.w != ib || C.ico.h != ib) { Canvas_Free(&C.ico); Canvas_Init(&C.ico, ib, ib); }
+    if (C.ico.px) {
+        Canvas_Clear(&C.ico, 0);
+        Gfx_Text(&C.ico, C.fIcon, glyph, 0, 0, ib, ib, 0xFFFFFF, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        GdiFlush();
+        const float sc = max(0.6f, C.is[k]), icx = x + CS(4) + ib * 0.5f, icy = y + ib * 0.5f, half = ib * sc * 0.5f;
+        for (int py = (int)(icy - half) - 1; py <= (int)(icy + half) + 1; ++py)
+            for (int px = (int)(icx - half) - 1; px <= (int)(icx + half) + 1; ++px) {
+                if (px < 0 || py < 0 || px >= c->w || py >= c->h) continue;
+                const float sx = (px + 0.5f - icx) / sc + ib * 0.5f - 0.5f, sy = (py + 0.5f - icy) / sc + ib * 0.5f - 0.5f;
+                const int ix = (int)floorf(sx), iy = (int)floorf(sy);
+                if (ix < -1 || iy < -1 || ix >= ib || iy >= ib) continue;
+                const float fx = sx - ix, fy = sy - iy;
+                float a = 0;
+                for (int q = 0; q < 4; ++q) {
+                    const int qx = ix + (q & 1), qy = iy + (q >> 1);
+                    if (qx < 0 || qy < 0 || qx >= ib || qy >= ib) continue;
+                    const float wq = ((q & 1) ? fx : 1 - fx) * ((q >> 1) ? fy : 1 - fy);
+                    a += ((C.ico.px[qy * ib + qx] >> 8) & 255) / 255.0f * wq;
+                }
+                /* sobre el relleno, color de tinta; fuera de él (relleno corto), el del texto */
+                if (a > 0.004f) Gfx_Blend(c, px, py, px + 0.5f < x + max(h, w * v) ? inkc : L->fg, min(1.0f, a));
+            }
+    }
+}
+
+static void DrawConnRow(Canvas *c, RECT rr, int k)
+{
+    const float bd = (float)CS(30), cy = (rr.top + rr.bottom) * 0.5f, cx = rr.left + CS(8) + bd * 0.5f;
+    const int tx = (int)(cx + bd * 0.5f) + CS(10), tw = rr.right - tx - CS(6);
+    if (!k) {
+        Bubble(c, cx, cy, bd, B.wifi >= 0, 1, NULL);
+        TwoLines(c, tx, rr.top, tw, rr.bottom - rr.top, L"Wi\x2011" L"Fi", B.wifi >= 0 ? B.ssid : L"Sin conexión");
+    } else {
+        Bubble(c, cx, cy, bd, C.bt == 1, 0, L"\xE702");
+        TwoLines(c, tx, rr.top, tw, rr.bottom - rr.top, L"Bluetooth",
+                 C.bt < 0 ? L"No disponible" : C.bt == 0 ? L"Desactivado" : C.btDev[0] ? C.btDev : L"Activado");
+    }
+}
+
+static void DrawTileCard(Canvas *c, RECT r, int k)
+{
+    wchar_t sub[64];
+    const float bd = (float)CS(30), cy = (r.top + r.bottom) * 0.5f, cx = r.left + CS(12) + bd * 0.5f;
+    const int tx = (int)(cx + bd * 0.5f) + CS(10), tw = r.right - tx - CS(10);
+    Card(c, r);
+    if (!k) {
+        Bubble(c, cx, cy, bd, FALSE, 0, L"\xE708");
+        TwoLines(c, tx, r.top, tw, r.bottom - r.top, L"No molestar", L"Ajustes");
+    } else {
+        wsprintfW(sub, g_cfg.mirror ? L"%d en el notch" : L"Desactivadas", Wn_Count());
+        Bubble(c, cx, cy, bd, g_cfg.mirror && Wn_Count() > 0, 0, L"\xEA8F");
+        TwoLines(c, tx, r.top, tw, r.bottom - r.top, L"Notificaciones", sub);
+    }
+}
+
+static void DrawBattCard(Canvas *c, RECT r, int k)
+{
+    (void)k;
+    const BarLook *L = &B.look;
+    const float bw = (float)CS(40), cy = (r.top + r.bottom) * 0.5f;
+    Card(c, r);
+    DrawBattery(c, r.left + CS(14) + bw * 0.5f, cy, bw, max(0, B.battery), B.charging, FALSE, L->fg, CardColor());
+    Gfx_Text(c, C.fTitle, L"Batería", r.left + CS(14) + (int)bw + CS(12), r.top, CS(180), r.bottom - r.top, L->fg,
+             DT_SINGLELINE | DT_VCENTER);
+    if (B.battery >= 0) {
+        wchar_t pct[16];
+        wsprintfW(pct, L"%d %%", B.battery);
+        Gfx_Text(c, C.fIconBig, pct, r.left, r.top, r.right - r.left - CS(16), r.bottom - r.top, L->fg, DT_SINGLELINE | DT_VCENTER | DT_RIGHT);
+    }
+}
+
+static void DrawFootBtn(Canvas *c, RECT r, int k)
+{
+    const BarLook *L = &B.look;
+    Gfx_FillRRect(c, (float)r.left, (float)r.top, (float)(r.right - r.left), (float)(r.bottom - r.top), (r.bottom - r.top) * 0.5f,
+                  k ? L->tileOn : CardColor(), 1.0f);
+    Gfx_Text(c, C.fSub, k ? L"Ajustes  \x203A" : L"Ocultar barra", r.left, r.top, r.right - r.left, r.bottom - r.top,
+             k ? 0xFFFFFF : L->fg, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+}
+
+/* Un elemento con su escala animada: se pinta en un lienzo de paso (con lo que haya debajo)
+ * y se compone escalado sobre su sitio; en reposo se pinta directo. El color no cambia. */
+static void Element(Canvas *dst, int id, RECT r, void (*draw)(Canvas *, RECT, int), int k)
+{
+    const float s = C.hs[id];
+    if (fabsf(s - 1.0f) < 0.002f) { draw(dst, r, k); return; }
+    const int w = r.right - r.left, h = r.bottom - r.top;
+    if (w < 2 || h < 2) return;
+    if (C.el.w != w || C.el.h != h) { Canvas_Free(&C.el); if (!Canvas_Init(&C.el, w, h)) { draw(dst, r, k); return; } }
+    GdiFlush();
+    for (int y = 0; y < h; ++y) {
+        const int sy = r.top + y;
+        if (sy < 0 || sy >= dst->h) continue;
+        CopyMemory(&C.el.px[y * w], &dst->px[sy * dst->w + max(0, (int)r.left)], (SIZE_T)min(w, dst->w - max(0, (int)r.left)) * 4);
+    }
+    RECT lr = { 0, 0, w, h };
+    draw(&C.el, lr, k);
+    GdiFlush();
+    Gfx_BlitScaled(dst, &C.el, (r.left + r.right) * 0.5f, (r.top + r.bottom) * 0.5f, s);
+}
+
+static void PaintControls(void)
+{
+    RECT rc = { 0, 0, CS(CC_W), CS(CCHeight()) };
+    if (!C.ccv.dc || C.ccv.w != rc.right || C.ccv.h != rc.bottom) {
+        Canvas_Free(&C.ccv);
+        if (!Canvas_Init(&C.ccv, rc.right, rc.bottom)) return;
+    }
+    Canvas *c = &C.ccv;
+    ZeroMemory(C.hit, sizeof(C.hit));
+    CCBackground(c);
+
+    const int pad = CS(CC_PAD), gap = CS(CC_GAP), colW = (rc.right - 2 * pad - gap) / 2, th = CS(CC_TILE);
+    int y = pad;
+    RECT r;
+
+    /* conectividad: una tarjeta con dos filas (cada fila crece por su cuenta) */
+    SetRect(&r, pad, y, pad + colW, y + 2 * th + gap);
+    Card(c, r);
+    const int rowH = (r.bottom - r.top) / 2;
+    for (int k = 0; k < 2; ++k) {
+        RECT rr = { r.left + CS(4), r.top + k * rowH + CS(2), r.right - CS(4), r.top + (k + 1) * rowH - CS(2) };
+        const int id = k ? CH_BT : CH_WIFI;
+        Element(c, id, rr, DrawConnRow, k);
+        C.hit[id] = rr;
+    }
+    /* fichas */
+    for (int k = 0; k < 2; ++k) {
+        SetRect(&r, pad + colW + gap, y + k * (th + gap), rc.right - pad, y + k * (th + gap) + th);
+        const int id = k ? CH_NOTIF : CH_DND;
+        Element(c, id, r, DrawTileCard, k);
+        C.hit[id] = r;
+    }
+    y += 2 * th + gap + gap;
+
+    SetRect(&r, pad, y, rc.right - pad, y + CS(CC_BATT));
+    Element(c, CH_BATT, r, DrawBattCard, 0);
+    C.hit[CH_BATT] = r;
+    y += CS(CC_BATT) + gap;
+
+    /* deslizadores en una tarjeta */
+    const int ns = C.brightness >= 0 ? 2 : 1;
+    SetRect(&r, pad, y, rc.right - pad, y + ns * CS(CC_SROW) + CS(10));
+    Card(c, r);
+    int sy = r.top + CS(10);
+    for (int k = C.brightness >= 0 ? 0 : 1; k < 2; ++k) {
+        RECT sr = { r.left + CS(14), sy, r.right - CS(14), sy + CS(CC_SROW) - CS(4) };
+        const int id = k ? CH_VOL : CH_BRIGHT;
+        Element(c, id, sr, DrawSliderRow, k);
+        C.hit[id] = SliderTrack(sr);
+        if (k) { C.hit[CH_VOLICON] = C.hit[CH_VOL]; C.hit[CH_VOLICON].right = C.hit[CH_VOLICON].left + CS(32); }
+        sy += CS(CC_SROW);
+    }
+    y = r.bottom + gap;
+
+    /* pie */
+    for (int k = 0; k < 2; ++k) {
+        SetRect(&r, k ? pad + colW + gap : pad, y, k ? rc.right - pad : pad + colW, y + CS(CC_FOOT));
+        const int id = k ? CH_SETTINGS : CH_HIDEBAR;
+        Element(c, id, r, DrawFootBtn, k);
+        C.hit[id] = r;
+    }
+}
+
+/* Copia src sobre dst desplazada dx px, con opacidad a. */
+static void BlitFade(Canvas *dst, const Canvas *src, int dx, float a)
+{
+    GdiFlush();
+    const int rows = min(dst->h, src->h);
+    for (int y = 0; y < rows; ++y) {
+        DWORD *d = &dst->px[y * dst->w];
+        const DWORD *sr = &src->px[y * src->w];
+        for (int x = max(0, dx); x < min(dst->w, src->w + dx); ++x)
+            d[x] = a >= 0.999f ? sr[x - dx] : Gfx_Mix(d[x], sr[x - dx], a);
+    }
+}
+
+/* Compone la sección visible; durante la transición, la que sale se desliza a la izquierda
+ * y se desvanece mientras entra la otra, como al navegar en iOS. */
+static void PaintCC(void)
+{
+    const int W = CS(CC_W), H = max(1, (int)(C.hcur + 0.5f));
+    if (!C.cv.dc || C.cv.w != W || C.cv.h != H) {
+        Canvas_Free(&C.cv);
+        if (!Canvas_Init(&C.cv, W, H)) return;
+    }
+    CCBackground(&C.cv);
+    const float t = max(0.0f, min(1.0f, C.secT)), slide = W * 0.22f;
+    if (t < 0.999f) {
+        PaintControls();
+        if (C.ccv.px) BlitFade(&C.cv, &C.ccv, (int)(-t * slide), 1.0f - t);
+    }
+    if (t > 0.001f) {
+        const Canvas *sc = Panel_RenderEmbedded();
+        if (sc) BlitFade(&C.cv, sc, (int)((1.0f - t) * slide), t);
+    }
+    Pop_Present(&C.pop, &C.cv);
+}
+
+static void CCSpring(float *x, float *v, float target, float dt, float k, float z)
+{
+    const float acc = (target - *x) * k - *v * 2.0f * sqrtf(k) * z;
+    *v += acc * dt; *x += *v * dt;
+}
+
+/* Un paso de la transición entre secciones y del alto (con el rebote configurado). */
+static void CCAdvance(void)
+{
+    LARGE_INTEGER t, f;
+    QueryPerformanceCounter(&t);
+    QueryPerformanceFrequency(&f);
+    float dt = (float)(t.QuadPart - C.last.QuadPart) / (float)f.QuadPart;
+    C.last = t;
+    if (dt > 0.05f) dt = 0.05f;
+    const float tT = (float)C.section, tH = (float)(C.section ? C.setH : CS(CCHeight()));
+    for (int k = 0; k < 2; ++k) {
+        CCSpring(&C.secT, &C.secV, tT, dt * 0.5f, 300.0f, 0.92f);
+        CCSpring(&C.hcur, &C.hv, tH, dt * 0.5f, 380.0f, Pop_Zeta());
+    }
+    /* escala de los elementos: crecen al señalarlos, se hunden al pulsarlos, con rebote */
+    BOOL moving = FALSE;
+    const float z = Pop_Zeta();
+    for (int id = 1; id < CH_COUNT; ++id) {
+        const BOOL btn = id == CH_HIDEBAR || id == CH_SETTINGS, row = id == CH_WIFI || id == CH_BT;
+        const BOOL slider = id == CH_VOL || id == CH_BRIGHT;
+        float tg = 1.0f;
+        if (C.dragging == id)  tg = 1.035f;
+        else if (C.press == id) tg = 0.95f;
+        else if (C.hot == id)   tg = btn ? 1.05f : row || slider ? 1.025f : 1.035f;
+        const float b0 = C.hs[id];
+        for (int k = 0; k < 2; ++k) CCSpring(&C.hs[id], &C.hsv[id], tg, dt * 0.5f, 420.0f, z);
+        if (fabsf(C.hs[id] - tg) < 0.0006f && fabsf(C.hsv[id]) < 0.01f) { C.hs[id] = tg; C.hsv[id] = 0; }
+        if (fabsf(C.hs[id] - b0) > 0.00005f) moving = TRUE;
+    }
+    /* deslizadores: el relleno sigue al valor y el icono vuelve de su "pop" */
+    for (int k = 0; k < 2; ++k) {
+        const float real = k ? (B.muted ? 0.0f : max(0.0f, B.volume)) : max(0, C.brightness) / 100.0f;
+        const float f0 = C.fill[k], i0 = C.is[k];
+        for (int j = 0; j < 2; ++j) {
+            CCSpring(&C.fill[k], &C.fillv[k], real, dt * 0.5f, 320.0f, max(0.55f, z));
+            CCSpring(&C.is[k], &C.isv[k], 1.0f, dt * 0.5f, 380.0f, z);
+        }
+        if (fabsf(C.fill[k] - real) < 0.0005f && fabsf(C.fillv[k]) < 0.005f) { C.fill[k] = real; C.fillv[k] = 0; }
+        if (fabsf(C.is[k] - 1.0f) < 0.0008f && fabsf(C.isv[k]) < 0.01f) { C.is[k] = 1.0f; C.isv[k] = 0; }
+        if (fabsf(C.fill[k] - f0) > 0.00005f || fabsf(C.is[k] - i0) > 0.00005f) moving = TRUE;
+    }
+    const BOOL done = !moving && fabsf(C.secT - tT) < 0.002f && fabsf(C.secV) < 0.02f && fabsf(C.hcur - tH) < 0.4f && fabsf(C.hv) < 2.0f;
+    if (done) {
+        C.secT = tT; C.secV = 0; C.hcur = tH; C.hv = 0;
+        if (!C.section && Panel_IsEmbedded()) Panel_Unembed();     /* de vuelta en controles */
+    }
+    Pop_Hold(&C.pop, !done);
+}
+
+static void CCKick(void)
+{
+    QueryPerformanceCounter(&C.last);
+    Pop_Hold(&C.pop, TRUE);
+}
+
+static void CC_GoSettings(int tab)
+{
+    C.setH = Panel_Embed(C.hwnd, B.dpi, tab, &C.glass, C.ox, C.oy);
+    C.section = 1;
+    C.dragging = 0;
+    CCKick();
+}
+
+void CC_ShowControls(void)
+{
+    if (!C.hwnd) return;
+    C.section = 0;
+    CCKick();
+}
+
+void CC_SettingsResized(int h)
+{
+    C.setH = h;
+    if (C.hwnd) CCKick();
+}
+
+BOOL Bar_IsOn(void) { return B.hwnd && !B.fullscreen; }
+
+
+static int CCHitTest(int x, int y)
+{
+    POINT p = { x, y };
+    for (int i = CH_COUNT - 1; i > CH_NONE; --i)
+        if (PtInRect(&C.hit[i], p)) return i;
+    return CH_NONE;
+}
+
+static void SliderValue(int which, int x)
+{
+    const RECT *r = &C.hit[which];
+    const float v = max(0.0f, min(1.0f, (float)(x - r->left) / max(1, (int)(r->right - r->left))));
+    const int k = which == CH_VOL ? 1 : 0;
+    const float before = k ? (B.muted ? 0.0f : B.volume) : C.brightness / 100.0f;
+    if (which == CH_VOL) SetVolume(v);
+    else { C.brightness = (int)(v * 100.0f + 0.5f); Brightness_Request(C.brightness); }
+    /* el icono responde al cambio: crece hacia donde va el valor y rebota */
+    C.isv[k] += (v > before ? 1.0f : -0.6f) * min(8.0f, 2.0f + fabsf(v - before) * 60.0f);
+    CCKick();
+    InvalidateRect(C.hwnd, NULL, FALSE);
+    if (B.hwnd) InvalidateRect(B.hwnd, NULL, FALSE);
+}
+
+static void CC_Close(void) { if (C.hwnd) Pop_Close(&C.pop); }
+void CC_CloseAll(void) { CC_Close(); }
+
+static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m >= WM_MOUSEFIRST && m <= WM_MOUSELAST && m != WM_MOUSEWHEEL && m != WM_MOUSEHWHEEL) l = Pop_Mouse(&C.pop, l);
+    /* en la sección de ajustes, ratón, teclado y temporizadores son del panel alojado */
+    if (Panel_IsEmbedded() && ((m == WM_TIMER && Panel_IsTimer(w)) ||
+        (C.section == 1 && ((m >= WM_MOUSEFIRST && m <= WM_MOUSELAST) || m == WM_MOUSELEAVE || m == WM_KEYDOWN || m == WM_CAPTURECHANGED))))
+        return Panel_HostInput(h, m, w, l);
+    switch (m) {
+    case WM_ERASEBKGND: return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        BeginPaint(h, &ps);
+        PaintCC();
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_NCHITTEST: return Pop_NcHit(&C.pop, l);
+    case WM_POPFRAME:
+        Pop_Step(&C.pop);
+        if (!C.hwnd) return 0;              /* se terminó de cerrar */
+        CCAdvance();
+        PaintCC();
+        return 0;
+    case WM_ACTIVATE:
+        if (LOWORD(w) == WA_INACTIVE) CC_Close();
+        return 0;
+    case WM_KEYDOWN:
+        if (w == VK_ESCAPE) PostMessageW(h, WM_CLOSE, 0, 0);
+        return 0;
+    case WM_LBUTTONDOWN: {
+        const int hit = CCHitTest((short)LOWORD(l), (short)HIWORD(l));
+        C.press = hit == CH_VOLICON ? CH_VOL : hit;
+        CCKick();
+        if (hit == CH_VOL || hit == CH_BRIGHT) {
+            C.dragging = hit;
+            SetCapture(h);
+            SliderValue(hit, (short)LOWORD(l));
+        }
+        return 0;
+    }
+    case WM_MOUSEMOVE: {
+        if (C.dragging) { SliderValue(C.dragging, (short)LOWORD(l)); return 0; }
+        int hv = CCHitTest((short)LOWORD(l), (short)HIWORD(l));
+        if (hv == CH_VOLICON) hv = CH_VOL;
+        if (hv != C.hot) {
+            C.hot = hv;
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 };
+            TrackMouseEvent(&tme);
+            CCKick();
+        }
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        C.hot = C.press = 0;
+        CCKick();
+        return 0;
+    case WM_LBUTTONUP: {
+        C.press = 0;
+        CCKick();
+        if (C.dragging) { C.dragging = 0; ReleaseCapture(); return 0; }
+        switch (CCHitTest((short)LOWORD(l), (short)HIWORD(l))) {
+        case CH_WIFI:     CC_Close(); OpenUri(L"ms-settings:network-wifi"); break;
+        case CH_BT:       CC_Close(); OpenUri(L"ms-settings:bluetooth"); break;
+        case CH_BATT:     CC_Close(); OpenUri(L"ms-settings:batterysaver"); break;
+        case CH_DND:      CC_Close(); OpenUri(L"ms-settings:notifications"); break;
+        case CH_NOTIF:    CC_Close(); Notch_OpenCenter(); break;
+        case CH_VOLICON:  ToggleMute(); C.isv[1] += 7.0f; CCKick(); if (B.hwnd) InvalidateRect(B.hwnd, NULL, FALSE); break;
+        case CH_HIDEBAR:  CC_Close(); App_SetMenuBar(FALSE, TRUE); break;
+        case CH_SETTINGS: CC_GoSettings(0); break;
+        }
+        return 0;
+    }
+    case WM_CAPTURECHANGED:
+        C.dragging = 0;
+        return 0;
+    case WM_MOUSEWHEEL: {
+        const BOOL up = GET_WHEEL_DELTA_WPARAM(w) > 0;
+        SetVolume((B.muted ? 0 : B.volume) + (up ? 0.05f : -0.05f));
+        C.isv[1] += up ? 4.0f : -2.5f;
+        CCKick();
+        if (B.hwnd) InvalidateRect(B.hwnd, NULL, FALSE);
+        return 0;
+    }
+    case WM_CLOSE:
+        CC_Close();
+        return 0;
+    case WM_DESTROY: {
+        Panel_Unembed();
+        Pop_Destroyed(&C.pop);
+        Pop_FreeGlass(&C.glass);
+        Canvas_Free(&C.cv);
+        Canvas_Free(&C.ccv);
+        Canvas_Free(&C.el);
+        Canvas_Free(&C.ico);
+        C.section = 0;
+        HFONT *all[] = { &C.fTitle, &C.fSub, &C.fIcon, &C.fIconBig };
+        for (int i = 0; i < 4; ++i) if (*all[i]) { DeleteObject(*all[i]); *all[i] = NULL; }
+        C.hwnd = NULL;
+        C.closedAt = GetTickCount();
+        return 0;
+    }
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+/* Abre el centro de control. Estilo "Notch": pegado al borde de la barra, con hombros, se
+ * despliega hacia abajo como el panel de notificaciones del notch. "Flotante": tarjeta
+ * separada que crece desde el engrane. Las dos con el rebote configurado. */
+static void CC_Open(int section, int tab)
+{
+    if (C.hwnd) DestroyWindow(C.hwnd);
+    ReadVolume();
+    ReadWifi();
+    ReadBattery();
+    ReadBluetooth();
+    C.brightness = s_brightCurrent;
+    C.hot = C.press = 0;
+    for (int i = 0; i < CH_COUNT; ++i) { C.hs[i] = 1.0f; C.hsv[i] = 0; }
+    C.fill[0] = max(0, C.brightness) / 100.0f; C.fill[1] = B.muted ? 0.0f : max(0.0f, B.volume);
+    C.fillv[0] = C.fillv[1] = 0; C.is[0] = C.is[1] = 1.0f; C.isv[0] = C.isv[1] = 0;
+    Brightness_Request(-1);                             /* refresca para la próxima vez */
+
+    LPCWSTR ui = Gfx_UiFace(), ic = Gfx_IconFace();
+    C.fTitle = Gfx_Font(ui, CS(13), FW_SEMIBOLD, CLEARTYPE_QUALITY);
+    C.fSub   = Gfx_Font(ui, CS(12), FW_NORMAL,   CLEARTYPE_QUALITY);
+    C.fIcon  = Gfx_Font(ic, CS(14), FW_NORMAL,   CLEARTYPE_QUALITY);
+    C.fIconBig = Gfx_Font(ui, CS(20), FW_BOLD, CLEARTYPE_QUALITY);     /* el porcentaje de batería */
+    const BOOL attached = !g_cfg.floating;
+    const int w = CS(CC_W), h = CS(CCHeight());
+    C.ox = B.mon.right - w - (attached ? CS(14) : CS(8));
+    C.oy = B.mon.top + B.h + (attached ? 0 : CS(8));
+    /* vidrio: lo que hay detrás en toda la columna (los ajustes son más altos) */
+    if (g_cfg.material == MAT_GLASS) Pop_CaptureGlass(&C.glass, C.ox, C.oy, w, B.mon.bottom - C.oy, CS(28));
+    C.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED, CC_CLASS, L"Centro de control", WS_POPUP,
+                             C.ox, C.oy, w, h, NULL, NULL, g_inst, NULL);
+    if (!C.hwnd) return;
+    if (g_cfg.hideCapture) SetWindowDisplayAffinity(C.hwnd, WDA_EXCLUDEFROMCAPTURE);
+    if (attached) {
+        /* como el panel de notificaciones del notch: nace de una pastilla bajo el engrane
+         * (margen amplio para que el rebote no se recorte) */
+        Pop_Open(&C.pop, C.hwnd, CS(44), (float)CS(24), 0.95f, 0.0f);
+        Pop_SetAttached(&C.pop, (float)CS(8), (float)CS(150));
+    } else {
+        Pop_Open(&C.pop, C.hwnd, CS(18), (float)CS(18), 0.94f, 0.0f);  /* flotante: sale del engrane */
+    }
+    C.section = section;
+    C.secT = (float)section; C.secV = 0;
+    if (section) C.setH = Panel_Embed(C.hwnd, B.dpi, tab, &C.glass, C.ox, C.oy);
+    C.hcur = (float)(section ? C.setH : h); C.hv = 0;
+    QueryPerformanceCounter(&C.last);
+    Pop_SetBounds(&C.pop, C.ox, C.oy, w, (int)C.hcur);
+    PaintCC();
+    ShowWindow(C.hwnd, SW_SHOWNA);
+    SetForegroundWindow(C.hwnd);
+}
+
+static void CC_Toggle(void)
+{
+    if (C.hwnd && !C.pop.closing) { CC_Close(); return; }
+    if (!C.hwnd && GetTickCount() - C.closedAt < 300) return;     /* el clic en la barra ya lo cerró */
+    CC_Open(0, 0);
+}
+
+/* Ajustes de CornerRadius: una sección del centro de control, no otra ventana. */
+void CC_OpenSettings(int tab)
+{
+    if (C.hwnd && !C.pop.closing) { CC_GoSettings(tab); SetForegroundWindow(C.hwnd); return; }
+    CC_Open(1, tab);
+}
+
+/* ───────────────────────── Barra: ventana ───────────────────────── */
+static void MakeBarFonts(void)
+{
+    HFONT *all[] = { &B.fBold, &B.fText, &B.fIcon };
+    for (int i = 0; i < 3; ++i) if (*all[i]) DeleteObject(*all[i]);
+    LPCWSTR ui = Gfx_UiFace();
+    B.fBold = Gfx_Font(ui, BS(13), FW_BOLD, CLEARTYPE_QUALITY);
+    B.fText = Gfx_Font(ui, BS(13), FW_NORMAL, CLEARTYPE_QUALITY);
+    B.fIcon = Gfx_Font(Gfx_IconFace(), BS(14), FW_NORMAL, CLEARTYPE_QUALITY);
+}
+
+static void BarPosition(void)
+{
+    APPBARDATA abd = { sizeof(abd) };
+    abd.hWnd = B.hwnd;
+    abd.uEdge = ABE_TOP;
+    abd.rc = B.mon;
+    abd.rc.bottom = B.mon.top + B.h;
+    SHAppBarMessage(ABM_QUERYPOS, &abd);
+    abd.rc.bottom = abd.rc.top + B.h;
+    SHAppBarMessage(ABM_SETPOS, &abd);
+    SetWindowPos(B.hwnd, HWND_TOPMOST, abd.rc.left, abd.rc.top, abd.rc.right - abd.rc.left, B.h,
+                 SWP_NOACTIVATE | (B.fullscreen ? 0 : SWP_SHOWWINDOW));
+    InvalidateRect(B.hwnd, NULL, FALSE);
+}
+
+static void BarMeasure(void)
+{
+    HMONITOR m = MonitorFromPoint((POINT){ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi = { sizeof(mi) };
+    GetMonitorInfoW(m, &mi);
+    B.mon = mi.rcMonitor;
+    B.dpi = MonitorDpi(m);
+    B.h = BS(BAR_H);
+    LoadBarLook();
+    MakeBarFonts();
+}
+
+static void RefreshStatus(void)
+{
+    ReadBattery();
+    ReadWifi();
+    ReadVolume();
+    ForegroundAppName(B.app, 64);
+}
+
+static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    switch (m) {
+    case WM_ERASEBKGND: return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(h, &ps);
+        PaintBar(dc);
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+    case WM_BAR_APPBAR:
+        if (w == ABN_POSCHANGED) BarPosition();
+        else if (w == ABN_FULLSCREENAPP) {          /* juegos, vídeo, presentaciones: fuera */
+            B.fullscreen = (BOOL)l;
+            ShowWindow(h, B.fullscreen ? SW_HIDE : SW_SHOWNOACTIVATE);
+            if (g_ctrl) PostMessageW(g_ctrl, WM_BARCHANGED, 0, 0);
+            if (!B.fullscreen) SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        return 0;
+    case WM_WINDOWPOSCHANGED: {
+        APPBARDATA abd = { sizeof(abd) };
+        abd.hWnd = h;
+        SHAppBarMessage(ABM_WINDOWPOSCHANGED, &abd);
+        break;
+    }
+    case WM_LBUTTONDOWN: {
+        POINT p = { (short)LOWORD(l), (short)HIWORD(l) };
+        B.pressed = BH_NONE;
+        for (int i = 1; i < BH_COUNT; ++i) if (PtInRect(&B.hit[i], p)) B.pressed = i;
+        return 0;
+    }
+    case WM_LBUTTONUP: {
+        POINT p = { (short)LOWORD(l), (short)HIWORD(l) };
+        int hit = BH_NONE;
+        for (int i = 1; i < BH_COUNT; ++i) if (PtInRect(&B.hit[i], p)) hit = i;
+        if (hit != B.pressed) return 0;
+        switch (hit) {
+        case BH_LOGO:  Panel_ShowTab(0); break;
+        case BH_CLOCK: Notch_OpenCenter(); break;
+        case BH_VOL: case BH_WIFI: case BH_BATT: case BH_CC: CC_Toggle(); break;
+        }
+        return 0;
+    }
+    case WM_MOUSEWHEEL:     /* rueda sobre la barra = volumen, como en muchas barras de macOS */
+        SetVolume((B.muted ? 0 : B.volume) + (GET_WHEEL_DELTA_WPARAM(w) > 0 ? 0.04f : -0.04f));
+        InvalidateRect(h, NULL, FALSE);
+        return 0;
+    case WM_TIMER:
+        if (w == TIMER_CLOCK) {
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            if (st.wMinute != B.lastMinute) { B.lastMinute = st.wMinute; InvalidateRect(h, NULL, FALSE); }
+            /* vidrio: si cambió lo que hay detrás (ventana arrastrada, fondo nuevo), repintar */
+            if (BarGlass() && CaptureBarBack()) InvalidateRect(h, NULL, FALSE);
+        } else if (w == TIMER_STATUS) {
+            ReadBattery();
+            ReadWifi();
+            ReadVolume();
+            InvalidateRect(h, NULL, FALSE);
+        }
+        return 0;
+    case WM_POWERBROADCAST:
+        ReadBattery();
+        InvalidateRect(h, NULL, FALSE);
+        return TRUE;
+    case WM_SETTINGCHANGE:
+        LoadBarLook();
+        InvalidateRect(h, NULL, FALSE);
+        return 0;
+    case WM_DESTROY: {
+        KillTimer(h, TIMER_CLOCK);
+        KillTimer(h, TIMER_STATUS);
+        if (B.registered) {
+            APPBARDATA abd = { sizeof(abd) };
+            abd.hWnd = h;
+            SHAppBarMessage(ABM_REMOVE, &abd);      /* las ventanas recuperan el espacio */
+            B.registered = FALSE;
+        }
+        Canvas_Free(&B.cv);
+        Canvas_Free(&s_back);
+        s_backHash = 0;
+        B.hwnd = NULL;
+        return 0;
+    }
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+/* ───────────────────────── Reloj de Windows ───────────────────────── */
+static void BroadcastTray(void)
+{
+    DWORD_PTR r;
+    SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"TraySettings", SMTO_ABORTIFHUNG, 1000, &r);
+}
+
+void Bar_ApplyClock(BOOL hide)
+{
+    HKEY k;
+    const BOOL already = RegGetValueW(HKEY_CURRENT_USER, REG_KEY, L"ClockHidden", RRF_RT_REG_DWORD, NULL, NULL, NULL) == ERROR_SUCCESS;
+    if (hide == already) return;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, ADVANCED_KEY, 0, NULL, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS)
+        return;
+    if (hide) {
+        DWORD prev = 0xFFFFFFFF, sz = sizeof(prev);
+        if (RegQueryValueExW(k, CLOCK_VALUE, NULL, NULL, (BYTE *)&prev, &sz) != ERROR_SUCCESS) prev = 0xFFFFFFFF;
+        const DWORD zero = 0;
+        RegSetValueExW(k, CLOCK_VALUE, 0, REG_DWORD, (const BYTE *)&zero, sizeof(zero));
+        HKEY mine;
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &mine, NULL) == ERROR_SUCCESS) {
+            RegSetValueExW(mine, L"ClockHidden", 0, REG_DWORD, (const BYTE *)&prev, sizeof(prev));
+            RegCloseKey(mine);
+        }
+    } else {
+        DWORD prev = 0xFFFFFFFF, sz = sizeof(prev);
+        RegGetValueW(HKEY_CURRENT_USER, REG_KEY, L"ClockHidden", RRF_RT_REG_DWORD, NULL, &prev, &sz);
+        if (prev == 0xFFFFFFFF) RegDeleteValueW(k, CLOCK_VALUE);
+        else RegSetValueExW(k, CLOCK_VALUE, 0, REG_DWORD, (const BYTE *)&prev, sizeof(prev));
+        HKEY mine;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_KEY, 0, KEY_SET_VALUE, &mine) == ERROR_SUCCESS) {
+            RegDeleteValueW(mine, L"ClockHidden");
+            RegCloseKey(mine);
+        }
+    }
+    RegCloseKey(k);
+    BroadcastTray();
+}
+
+/* ───────────────────────── API ───────────────────────── */
+void Bar_Register(void)
+{
+    WNDCLASSEXW wc = { sizeof(wc) };
+    wc.lpfnWndProc   = BarProc;
+    wc.hInstance     = g_inst;
+    wc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
+    wc.lpszClassName = BAR_CLASS;
+    RegisterClassExW(&wc);
+
+    WNDCLASSEXW cc = { sizeof(cc) };
+    cc.style         = CS_DROPSHADOW;
+    cc.lpfnWndProc   = CCProc;
+    cc.hInstance     = g_inst;
+    cc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
+    cc.lpszClassName = CC_CLASS;
+    RegisterClassExW(&cc);
+}
+
+/* Muestra u oculta la barra según g_cfg (y el reloj de Windows con ella). */
+void Bar_Apply(void)
+{
+    if (!g_cfg.menubar) {
+        CC_Close();
+        if (B.hwnd) DestroyWindow(B.hwnd);
+        Bar_ApplyClock(FALSE);
+        return;
+    }
+    if (!B.hwnd) {
+        BarMeasure();
+        RefreshStatus();
+        B.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, BAR_CLASS, L"CornerRadius", WS_POPUP,
+                                 B.mon.left, B.mon.top, B.mon.right - B.mon.left, B.h, NULL, NULL, g_inst, NULL);
+        if (!B.hwnd) return;
+        APPBARDATA abd = { sizeof(abd) };
+        abd.hWnd = B.hwnd;
+        abd.uCallbackMessage = WM_BAR_APPBAR;
+        B.registered = SHAppBarMessage(ABM_NEW, &abd) != 0;
+        BarApplyCapture();
+        BarPosition();
+        SetTimer(B.hwnd, TIMER_CLOCK, 1000, NULL);
+        SetTimer(B.hwnd, TIMER_STATUS, 10000, NULL);
+        Brightness_Request(-1);
+    } else {
+        LoadBarLook();
+        InvalidateRect(B.hwnd, NULL, FALSE);
+    }
+    Bar_ApplyClock(g_cfg.hideClock);
+}
+
+/* Cambió el material, el acento o "ocultar en capturas". */
+void Bar_StyleChanged(void)
+{
+    if (!B.hwnd) return;
+    LoadBarLook();
+    BarApplyCapture();
+    s_backHash = 0;
+    Canvas_Free(&s_back);
+    InvalidateRect(B.hwnd, NULL, FALSE);
+    if (C.hwnd) InvalidateRect(C.hwnd, NULL, FALSE);
+}
+
+/* Cambios de resolución, escala o monitores. */
+void Bar_Reposition(void)
+{
+    if (!B.hwnd) return;
+    BarMeasure();
+    BarPosition();
+}
+
+void Bar_ForegroundChanged(void)
+{
+    if (!B.hwnd) return;
+    wchar_t name[64];
+    ForegroundAppName(name, 64);
+    if (name[0] && lstrcmpW(name, B.app)) {
+        lstrcpynW(B.app, name, 64);
+        InvalidateRect(B.hwnd, NULL, FALSE);
+    }
+}
+
+/* Alto que ocupa la barra en el monitor indicado (0 si no está en él). */
+int Bar_HeightOn(const RECT *mon)
+{
+    if (!B.hwnd || B.fullscreen || !EqualRect(mon, &B.mon)) return 0;
+    return B.h;
+}
+
+void Bar_Raise(void)
+{
+    if (B.hwnd && !B.fullscreen)
+        SetWindowPos(B.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+}
+
+void Bar_Destroy(void)
+{
+    if (C.hwnd) DestroyWindow(C.hwnd);      /* al salir, sin animación */
+    if (B.hwnd) DestroyWindow(B.hwnd);
+    if (B.ep) { IAudioEndpointVolume_Release(B.ep); B.ep = NULL; }
+    if (B.wlan) { WlanCloseHandle(B.wlan, NULL); B.wlan = NULL; }
+    HFONT *all[] = { &B.fBold, &B.fText, &B.fIcon };
+    for (int i = 0; i < 3; ++i) if (*all[i]) { DeleteObject(*all[i]); *all[i] = NULL; }
+}

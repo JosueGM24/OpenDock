@@ -1,0 +1,129 @@
+# CornerRadius
+
+Esquinas redondeadas por software para la pantalla de tu laptop (Windows 10/11).
+Dibuja una máscara negra antialiasada en cada esquina de cada monitor. En pantallas
+OLED el negro equivale a píxel apagado; en LCD se ve igual de negro que el bisel.
+
+## Uso
+Ejecuta `CornerRadius.exe`. La primera vez se abre la **configuración**; pulsa
+**Instalar en este equipo** y queda fija: se copia a `%LOCALAPPDATA%\Programs\CornerRadius`,
+arranca con Windows, aparece en el menú Inicio y se desinstala desde
+Configuración → Aplicaciones. No necesita permisos de administrador.
+
+- Clic en el icono de la bandeja → configuración · clic derecho → menú.
+- Volver a abrir el .exe (o buscar "CornerRadius" en Inicio) también abre la configuración.
+
+| Atajo | Acción |
+|---|---|
+| Ctrl+Alt+R | Activar / desactivar |
+| Ctrl+Alt+RePág / AvPág | Radio +2 / −2 px |
+
+En el panel: rueda del ratón o flechas = radio ±1, Espacio = activar, Esc = cerrar.
+
+CLI: `--radius 16` · `--settings` · `--exit` · `--uninstall`
+
+## Avisos tipo notch
+En vez de las notificaciones de Windows, los cambios (atajos, instalación…) se muestran
+en una "isla" negra que crece desde el borde superior y se recoge sola.
+- Arrástrala: pegada arriba es un notch; suéltala más abajo y queda flotante. Recuerda la posición.
+- Clic = abrir configuración. Con el ratón encima no se cierra.
+- No aparece con juegos o presentaciones a pantalla completa. Se desactiva en el panel.
+
+**Centro de notificaciones**: clic en el notch → baja un panel con tus notificaciones
+reales de Windows (WhatsApp, Teams, correo…): icono, app, hora, título y texto.
+Clic en una = abrir la app · × = quitarla de la lista · "Borrar" · engranaje = ajustes.
+Se leen en solo lectura de la base local de Windows (`wpndatabase.db`); nada sale del equipo.
+
+**Mini notch**: lleva el cursor al borde superior y aparece una pastilla que te sigue con
+rebote y se imanta al centro (y a la posición guardada). Déjalo quieto un instante y se
+abre la vista rápida con el contador; clic = centro de notificaciones.
+
+**Notificaciones ofuscadas**: en vez del contenido, llega un notch pequeñito con una
+campanita que se balancea y un contador; clic = abrir el centro con el detalle.
+Para que Windows no muestre además su banner de la esquina, activa su **No molestar**
+(las notificaciones siguen llegando al centro de Windows y al notch). CornerRadius ya no
+toca `ShowBanner` en el registro: Windows no lo relee en vivo. Al arrancar deshace los
+cambios que hicieron versiones anteriores.
+
+**Sonido**: al llegar una notificación al notch puede sonar el sonido de Windows o un
+"ding" suave propio (sintetizado, sin archivos), aunque tengas No molestar activado.
+
+**Estilo**: "Notch" (pegado al borde superior) o "Flotante" (una tarjeta separada del borde).
+
+**Diseño** (pestaña Notch): material OLED / vidrio translúcido / sistema (claro u oscuro),
+tamaño compacto / normal / grande, rebote suave / normal / bouncy, y acento (Windows o 6 colores).
+
+**Capturas en el notch**: al hacer Win+Shift+S / ImpPant aparece "Captura copiada" con
+miniatura y tamaño; si además se guarda en *Capturas de pantalla*, clic = abrir el archivo.
+Solo reacciona a imágenes sin ventana dueña (Recortes) o de ShareX/Greenshot/Lightshot,
+no a "copiar imagen" de un navegador. El DIB del portapapeles se valida antes de leerlo.
+Para quitar el aviso propio de Windows: Configuración → Sistema → Notificaciones → Recortes → desactivar.
+
+## Barra superior estilo Apple
+Panel → General → "Barra superior estilo Apple" (o Ctrl+Alt+B, o el menú de la bandeja).
+Una franja fina arriba, como la de macOS, con el notch en medio: logo (abre ajustes), app
+activa, volumen, Wi‑Fi, batería, fecha/hora (abre el centro de notificaciones) y el
+**centro de control** (Wi‑Fi, batería, No molestar, notificaciones, brillo y volumen reales).
+Se registra como AppBar: Windows le reserva el espacio y las ventanas maximizadas quedan
+debajo. Se oculta sola con apps a pantalla completa. Con "Ocultar reloj de Windows" se quita
+la hora de la barra de tareas (ajuste oficial, se restaura al quitar la barra o salir).
+
+## Material común
+Panel → General → **Material** (OLED · Vidrio · Sistema) se aplica a la vez al notch, la
+barra superior y el dock: OLED es negro puro; Vidrio desenfoca lo que hay detrás (cada uno
+con su vidrio propio, por eso con Vidrio quedan fuera de capturas); Sistema sigue el tema
+claro/oscuro de Windows.
+
+## Dock inferior estilo Apple
+Panel → pestaña **Dock** (o Ctrl+Alt+D, o el menú de la bandeja; clic derecho en el dock abre
+sus ajustes). Un dock flotante abajo con tus apps **ancladas** a la barra de tareas más las
+que tengas **abiertas**: una barrita blanca corta marca las que corren y una larga y brillante
+la que está al frente. Al pasar el cursor, el icono bajo él crece (1,5×) y los vecinos un poco,
+con rebote; el dock sigue centrado y crece simétrico. Como el Dock de macOS, reserva su
+franja: las ventanas maximizadas terminan encima de él en vez de quedar tapadas. Al abrir Inicio o Buscar (tecla Windows) el dock
+baja y se desvanece: Windows dibuja ese menú pegado a su propia barra y no se puede mover.
+Clic: abre la app con tres saltos que se van apagando, o la enfoca con un salto corto si ya
+está abierta (clic de nuevo la minimiza). Los iconos se cargan una vez a alta resolución y se
+guardan en caché; todo se lanza vía explorer.exe (sin extensiones de shell en el proceso).
+
+Ajustes: **desenfoque del fondo** (no · suave · intenso; vidrio propio como el del notch, por
+eso con desenfoque el dock queda fuera de capturas), **opacidad** (30 · 55 · 75 · 92 %) y
+**tamaño de iconos** (pequeño · mediano · grande · enorme).
+"Desactivar barra de tareas": la de Windows desaparece mientras el dock está activo (se pone
+en autoocultar y se ocultan sus ventanas) y vuelve tal cual al quitarlo, al salir o al
+desinstalar. Se oculta solo a pantalla completa.
+
+## Seguridad
+- **Sin red, sin telemetría, sin admin** (`asInvoker`). Todo vive en `HKCU`.
+- **Mitigaciones de proceso** al arrancar: DLLs solo desde System32 (anti DLL-hijacking
+  desde Descargas), bloqueo de imágenes remotas/baja integridad, sin puntos de extensión
+  heredados (AppInit), sin código dinámico, solo fuentes del sistema, solo binarios
+  firmados por Microsoft, heap que termina ante corrupción.
+- **Binario endurecido**: ASLR de alta entropía, DEP, stack protector
+  (MSVC además: CFG y CET shadow stack).
+- Configuración validada al leerla; `--cleanup` nunca borra rutas recibidas por CLI.
+- La copia instalada se escribe byte a byte, sin el `Zone.Identifier` de la descarga.
+
+### Quitar el aviso de SmartScreen
+Solo se consigue **firmando** el exe con un certificado de confianza pública
+(ver `sign.ps1`; lo más barato es Azure Artifact Signing, ~10 USD/mes). Además conviene:
+1. Enviar el exe a Microsoft como falso positivo: https://www.microsoft.com/wdsi/filesubmission
+2. Publicar el SHA-256 junto a cada descarga (`sign.ps1` genera `CornerRadius.exe.sha256`).
+3. No empaquetar con UPX ni similares (dispara heurísticas de antivirus).
+
+## Detalles técnicos
+- Win32 puro en C, estático (~1,7 MB: incluye SQLite para leer las notificaciones).
+- Módulos: `corner_radius.c` (esquinas, bandeja), `panel.c`, `notch.c`, `winnotif.c`, `install.c`, `gfx.c` (SDF).
+- 4 ventanas layered por monitor, click-through, topmost, fuera de Alt+Tab; se reutilizan al cambiar el radio (sin parpadeo).
+- DPI Per-Monitor V2; excluidas de capturas (`WDA_EXCLUDEFROMCAPTURE`).
+- Se reconstruye al cambiar resolución, escala, monitores o al reiniciar explorer.
+
+## Limitaciones conocidas
+- Juegos en pantalla completa *exclusiva* pueden taparlo (borderless sí funciona).
+- Windows 11 esconde iconos nuevos de la bandeja en `^`; para fijarlo: Configuración →
+  Personalización → Barra de tareas → Otros iconos → CornerRadius.
+- Al desinstalar queda `%TEMP%\CornerRadius-uninstall.exe` (el ayudante que borra la carpeta).
+
+## Compilar
+- MSYS2 / Linux / WSL: `./build.sh` (mingw-w64)
+- Windows: `build.bat` desde Developer Command Prompt (MSVC)
