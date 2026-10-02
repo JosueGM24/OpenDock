@@ -417,11 +417,25 @@ static void DrawBattery(Canvas *c, float cx, float cy, float size, int pct, BOOL
         wchar_t t[8];
         wsprintfW(t, L"%d", pct);
         Canvas_Clear(&m, 0);
-        Gfx_Text(&m, f, t, (int)(3.35f * uu) + 1, (int)(8.35f * uu) + 1, (int)(15.3f * uu + 0.5f), (int)(7.3f * uu + 0.5f), 0xFFFFFF,
-                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        Gfx_Text(&m, f, t, 0, 0, m.w, m.h, 0xFFFFFF, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         GdiFlush();
     }
-    const int mx0 = (int)(cx - size * 0.5f) - 1, my0 = (int)(cy - size * 0.5f) - 1;
+    int mx0 = (int)(cx - size * 0.5f) - 1, my0 = (int)(cy - size * 0.5f) - 1;
+    if (m.px) {
+        /* la caja de la fuente deja aire distinto arriba y abajo: se centra la tinta de los
+         * dígitos en la cavidad (centro en x = 11 unidades, y = 12) */
+        int bx0 = m.w, by0 = m.h, bx1 = -1, by1 = -1;
+        for (int yy = 0; yy < m.h; ++yy)
+            for (int xx = 0; xx < m.w; ++xx)
+                if (((m.px[yy * m.w + xx] >> 8) & 255) > 60) {
+                    bx0 = min(bx0, xx); bx1 = max(bx1, xx); by0 = min(by0, yy); by1 = max(by1, yy);
+                }
+        if (bx1 >= 0) {
+            const float inkx = (bx0 + bx1 + 1) * 0.5f, inky = (by0 + by1 + 1) * 0.5f;
+            mx0 = (int)lroundf(cx - uu - inkx);
+            my0 = (int)lroundf(cy - inky);
+        }
+    }
 
     ICON_LOOP(cx, cy, size)
         /* contorno y botón (tenues) */
@@ -530,7 +544,7 @@ static void FormatClock(wchar_t *out, int cap)
     out[cap - 1] = 0;
 }
 
-static float BarScale(int id) { return B.bs[id] > 0.1f ? B.bs[id] : 1.0f; }
+static float BarScale(int id) { return B.bs[id] > 0.1f ? max(0.8f, min(1.3f, B.bs[id])) : 1.0f; }
 
 static void BarKick(void)
 {
@@ -544,7 +558,7 @@ void Bar_PulseVolume(BOOL up)
 {
     if (!B.hwnd) return;
     if (B.bs[BH_VOL] < 0.1f) B.bs[BH_VOL] = 1.0f;
-    B.bsv[BH_VOL] += up ? 2.6f : -1.6f;
+    B.bsv[BH_VOL] = up ? max(B.bsv[BH_VOL], 2.2f) : min(B.bsv[BH_VOL], -1.4f);
     BarKick();
 }
 
@@ -617,7 +631,7 @@ static void PaintBar(HDC target)
 
     if (B.battery >= 0) {       /* el porcentaje va dentro de la batería */
         iw = PlaceIcon(&kInkBatt, (float)r, (float)cy, ih, &icx, &icy, &isz);
-        DrawBattery(c, icx, icy, isz * BarScale(BH_BATT), B.battery, B.charging, TRUE, L->fg, L->bg);
+        DrawBattery(c, icx, icy, isz * BarScale(BH_BATT), B.battery, B.charging, g_cfg.battPct, L->fg, L->bg);
         SetRect(&B.hit[BH_BATT], r - (int)iw - BS(4), 0, r + BS(6), H);
         r -= (int)(iw + gap);
     }
@@ -899,7 +913,7 @@ static void DrawSliderRow(Canvas *c, RECT r, int k)
         Canvas_Clear(&C.ico, 0);
         Gfx_Text(&C.ico, C.fIcon, glyph, 0, 0, ib, ib, 0xFFFFFF, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         GdiFlush();
-        const float sc = max(0.6f, C.is[k]), icx = x + CS(4) + ib * 0.5f, icy = y + ib * 0.5f, half = ib * sc * 0.5f;
+        const float sc = max(0.85f, min(1.25f, C.is[k])), icx = x + CS(4) + ib * 0.5f, icy = y + ib * 0.5f, half = ib * sc * 0.5f;
         for (int py = (int)(icy - half) - 1; py <= (int)(icy + half) + 1; ++py)
             for (int px = (int)(icx - half) - 1; px <= (int)(icx + half) + 1; ++px) {
                 if (px < 0 || py < 0 || px >= c->w || py >= c->h) continue;
@@ -922,8 +936,9 @@ static void DrawSliderRow(Canvas *c, RECT r, int k)
 
 static void DrawConnRow(Canvas *c, RECT rr, int k)
 {
-    const float bd = (float)CS(30), cy = (rr.top + rr.bottom) * 0.5f, cx = rr.left + CS(8) + bd * 0.5f;
-    const int tx = (int)(cx + bd * 0.5f) + CS(10), tw = rr.right - tx - CS(6);
+    const float b0 = (float)CS(30), bd = b0 * C.hs[k ? CH_BT : CH_WIFI];
+    const float cy = (rr.top + rr.bottom) * 0.5f, cx = rr.left + CS(8) + b0 * 0.5f;
+    const int tx = (int)(cx + b0 * 0.5f) + CS(10), tw = rr.right - tx - CS(6);
     if (!k) {
         Bubble(c, cx, cy, bd, B.wifi >= 0, 1, NULL);
         TwoLines(c, tx, rr.top, tw, rr.bottom - rr.top, L"Wi\x2011" L"Fi", B.wifi >= 0 ? B.ssid : L"Sin conexión");
@@ -1018,7 +1033,7 @@ static void PaintControls(void)
     for (int k = 0; k < 2; ++k) {
         RECT rr = { r.left + CS(4), r.top + k * rowH + CS(2), r.right - CS(4), r.top + (k + 1) * rowH - CS(2) };
         const int id = k ? CH_BT : CH_WIFI;
-        Element(c, id, rr, DrawConnRow, k);
+        DrawConnRow(c, rr, k);
         C.hit[id] = rr;
     }
     /* fichas */
@@ -1355,7 +1370,8 @@ static void CCAdvance(void)
         float tg = 1.0f;
         if (C.dragging == id)  tg = 1.02f;
         else if (C.press == id) tg = 0.97f;
-        else if (C.hot == id)   tg = btn ? 1.03f : row || slider ? 1.012f : 1.02f;
+        else if (C.hot == id)   tg = btn ? 1.03f : row ? 1.12f : slider ? 1.012f : 1.02f;     /* filas: su icono */
+        if (row && C.press == id) tg = 0.9f;
         const float b0 = C.hs[id];
         for (int k = 0; k < 2; ++k) CCSpring(&C.hs[id], &C.hsv[id], tg, dt * 0.5f, 420.0f, z);
         if (fabsf(C.hs[id] - tg) < 0.0006f && fabsf(C.hsv[id]) < 0.01f) { C.hs[id] = tg; C.hsv[id] = 0; }
@@ -1431,7 +1447,9 @@ static void SliderValue(int which, int x)
     if (which == CH_VOL) SetVolume(v);
     else { C.brightness = (int)(v * 100.0f + 0.5f); Brightness_Request(C.brightness); }
     /* el icono responde al cambio: crece hacia donde va el valor y rebota */
-    C.isv[k] += (v > before ? 1.0f : -0.6f) * min(3.5f, 1.2f + fabsf(v - before) * 30.0f);
+    /* un empujón por cambio, no acumulativo: arrastrar no lo dispara */
+    const float kick = v > before ? 2.2f : -1.4f;
+    C.isv[k] = kick > 0 ? max(C.isv[k], kick) : min(C.isv[k], kick);
     if (k) Bar_PulseVolume(v > before);
     CCKick();
     InvalidateRect(C.hwnd, NULL, FALSE);
@@ -1537,7 +1555,7 @@ static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
         case CH_BATT:     CC_Close(); OpenUri(L"ms-settings:batterysaver"); break;
         case CH_DND:      CC_Close(); OpenUri(L"ms-settings:notifications"); break;
         case CH_NOTIF:    CC_Close(); Notch_OpenCenter(); break;
-        case CH_VOLICON:  ToggleMute(); C.isv[1] += 3.0f; CCKick(); Bar_PulseVolume(TRUE); break;
+        case CH_VOLICON:  ToggleMute(); C.isv[1] = max(C.isv[1], 2.4f); CCKick(); Bar_PulseVolume(TRUE); break;
         case CH_HIDEBAR:  CC_Close(); App_SetMenuBar(FALSE, TRUE); break;
         case CH_SETTINGS: CC_GoSettings(0); break;
         }
@@ -1549,7 +1567,7 @@ static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_MOUSEWHEEL: {
         const BOOL up = GET_WHEEL_DELTA_WPARAM(w) > 0;
         SetVolume((B.muted ? 0 : B.volume) + (up ? 0.05f : -0.05f));
-        C.isv[1] += up ? 2.2f : -1.4f;
+        C.isv[1] = up ? max(C.isv[1], 2.2f) : min(C.isv[1], -1.4f);
         CCKick();
         Bar_PulseVolume(up);
         return 0;

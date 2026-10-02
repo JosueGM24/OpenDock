@@ -28,7 +28,7 @@
 
 /* Opciones (claves de los elementos) */
 enum {
-    K_RADIUS, K_HIDECAP, K_STARTUP, K_BAR, K_CLOCK, K_DOCK, K_DOCKTB, K_DBLUR, K_DOPAC, K_DICON,
+    K_RADIUS, K_HIDECAP, K_STARTUP, K_BAR, K_CLOCK, K_BATTPCT, K_DOCK, K_DOCKTB, K_DBLUR, K_DOPAC, K_DICON,
     K_NOTCH, K_MIRROR, K_BANNERS, K_EDGE, K_SHOTS,
     K_SOUND, K_STYLE, K_MATERIAL, K_SIZE, K_BOUNCE, K_ACCENT, K_TEST,
     K_COUNT
@@ -51,6 +51,7 @@ static const ItemDef kGeneral[] = {
     { IT_DIVIDER, -1 },
     { IT_TOGGLE,  K_BAR,     L"Barra superior estilo Apple", L"Hora, batería, Wi\x2011" L"Fi y centro de control \x00B7 Ctrl+Alt+B" },
     { IT_TOGGLE,  K_CLOCK,   L"Ocultar reloj de Windows", L"Mientras la barra superior está activa" },
+    { IT_TOGGLE,  K_BATTPCT, L"Porcentaje en la batería", L"El número dentro del icono de la barra" },
 };
 
 static const ItemDef kDock[] = {
@@ -121,6 +122,7 @@ static BOOL ToggleValue(int key)
     case K_STARTUP: return Inst_IsStartup();
     case K_BAR:     return g_cfg.menubar;
     case K_CLOCK:   return g_cfg.hideClock;
+    case K_BATTPCT: return g_cfg.battPct;
     case K_DOCK:    return g_cfg.dock;
     case K_DOCKTB:  return g_cfg.dockHideTaskbar;
     case K_NOTCH:   return g_cfg.notch;
@@ -135,7 +137,7 @@ static BOOL ToggleValue(int key)
 /* Las opciones del notch dependen del interruptor general de avisos. */
 static BOOL ItemEnabled(int key)
 {
-    if (key == K_CLOCK) return g_cfg.menubar;
+    if (key == K_CLOCK || key == K_BATTPCT) return g_cfg.menubar;
     if (key == K_MATERIAL) return TRUE;
     if (key == K_DOCKTB || key == K_DBLUR || key == K_DOPAC || key == K_DICON) return g_cfg.dock;
     return key < K_MIRROR || key == K_BANNERS || g_cfg.notch;
@@ -557,6 +559,7 @@ static void Activate(int hit)
     case K_STARTUP:  Inst_SetStartup(!Inst_IsStartup(), NULL); Panel_Refresh(); return;
     case K_BAR:      App_SetMenuBar(!g_cfg.menubar, FALSE); return;
     case K_CLOCK:    App_SetHideClock(!g_cfg.hideClock); return;
+    case K_BATTPCT:  g_cfg.battPct = !g_cfg.battPct; Cfg_Save(); Bar_StyleChanged(); Panel_Refresh(); return;
     case K_DOCK:     App_SetDock(!g_cfg.dock, FALSE); return;
     case K_DOCKTB:   g_cfg.dockHideTaskbar = !g_cfg.dockHideTaskbar; Cfg_Save(); Dock_Apply(); Panel_Refresh(); return;
     case K_DBLUR:    g_cfg.dockBlur = sub;    Cfg_Save(); Dock_ConfigChanged(); Panel_Refresh(); return;
