@@ -32,6 +32,8 @@
 #define TIMER_STATUS    2
 #define TIMER_BANIM     3       /* muelles de los iconos de la barra */
 #define TIMER_TRAY      4       /* abrir la bandeja de Windows: Win+B y luego Entrar */
+#define TIMER_WIFIQ     5       /* releer el Wi-Fi tras un aviso (agrupa ráfagas) */
+#define WM_BAR_STATUS   (WM_APP + 61)   /* aviso de Windows: 1 = volumen, 2 = Wi-Fi */
 #define BAR_H           28      /* alto lógico de la barra */
 #define CC_W            340     /* el mismo ancho que los ajustes, que viven dentro */
 
@@ -49,6 +51,9 @@
 static const GUID kCLSID_MMDeviceEnumerator = { 0xBCDE0395, 0xE52F, 0x467C, { 0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E } };
 static const GUID kIID_IMMDeviceEnumerator  = { 0xA95664D2, 0x9614, 0x4F35, { 0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6 } };
 static const GUID kIID_IAudioEndpointVolume = { 0x5CDF2C82, 0x841E, 0x4546, { 0x97, 0x22, 0x0C, 0xF7, 0x40, 0x78, 0x22, 0x9A } };
+static const GUID kIID_IAudioEndpointVolumeCallback = { 0x657804FA, 0xD6AD, 0x4496, { 0x8A, 0x60, 0x35, 0x27, 0x52, 0xAF, 0x4F, 0x89 } };
+static const GUID kIID_IUnknown = { 0x00000000, 0x0000, 0x0000, { 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+static const GUID kGUID_BatteryPercent = { 0xA7AD8041, 0xB45A, 0x4CAE, { 0x87, 0xA3, 0xEE, 0xCB, 0xB4, 0x68, 0xA9, 0xE1 } };
 
 enum { BH_NONE, BH_LOGO, BH_APP, BH_VOL, BH_WIFI, BH_BATT, BH_CLOCK, BH_CC, BH_TRAY, BH_COUNT };
 
@@ -72,6 +77,13 @@ static struct {
     int     trayStep;
     float   bs[BH_COUNT], bsv[BH_COUNT];    /* su escala animada (vectorial: crece nítido) */
     LARGE_INTEGER blast;
+    /* gestos de estado: silencio (am), nivel del altavoz (vl), ondas (rip), Wi-Fi (wl),
+     * carga (bc) y nivel de la batería (bf), cada uno con su muelle */
+    float   am, amv, vl, vlv, rip, ripv, wl, wlv, bc, bcv, bf, bfv;
+    BOOL    synced, sMute, sWifi, sCharge;
+    float   sVol;
+    int     sBatt;
+    HPOWERNOTIFY battNotify;
     wchar_t app[64];
     int     lastMinute;
 
@@ -181,12 +193,32 @@ static void ReadBattery(void)
     B.charging = ps.ACLineStatus == 1;
 }
 
+/* Avisos del Wi-Fi (conectado, desconectado, cambio de señal): llegan en otro hilo y solo
+ * dejan un mensaje; el escaneo de la lista no cuenta. */
+static void WINAPI WlanNotify(PWLAN_NOTIFICATION_DATA d, PVOID ctx)
+{
+    (void)ctx;
+    if (!d || !B.hwnd) return;
+    const DWORD k = d->NotificationCode;
+    if ((d->NotificationSource == WLAN_NOTIFICATION_SOURCE_ACM &&
+         (k == wlan_notification_acm_connection_complete || k == wlan_notification_acm_disconnected ||
+          k == wlan_notification_acm_interface_arrival || k == wlan_notification_acm_interface_removal)) ||
+        (d->NotificationSource == WLAN_NOTIFICATION_SOURCE_MSM &&
+         (k == wlan_notification_msm_signal_quality_change || k == wlan_notification_msm_connected ||
+          k == wlan_notification_msm_disconnected)))
+        PostMessageW(B.hwnd, WM_BAR_STATUS, 2, 0);
+}
+
 static void ReadWifi(void)
 {
     B.wifi = -1;
     B.ssid[0] = 0;
     DWORD ver = 0;
-    if (!B.wlan && WlanOpenHandle(2, NULL, &ver, &B.wlan) != ERROR_SUCCESS) { B.wlan = NULL; return; }
+    if (!B.wlan) {
+        if (WlanOpenHandle(2, NULL, &ver, &B.wlan) != ERROR_SUCCESS) { B.wlan = NULL; return; }
+        WlanRegisterNotification(B.wlan, WLAN_NOTIFICATION_SOURCE_ACM | WLAN_NOTIFICATION_SOURCE_MSM, TRUE,
+                                 WlanNotify, NULL, NULL, NULL);
+    }
     PWLAN_INTERFACE_INFO_LIST list = NULL;
     if (WlanEnumInterfaces(B.wlan, NULL, &list) != ERROR_SUCCESS || !list) return;
     for (DWORD i = 0; i < list->dwNumberOfItems; ++i) {
@@ -207,6 +239,31 @@ static void ReadWifi(void)
     WlanFreeMemory(list);
 }
 
+/* Avisos de Core Audio: el volumen o el silencio cambiaron (teclas del teclado, otra app). */
+static HRESULT STDMETHODCALLTYPE VcQuery(IAudioEndpointVolumeCallback *self, REFIID r, void **out)
+{
+    if (IsEqualIID(r, &kIID_IUnknown) || IsEqualIID(r, &kIID_IAudioEndpointVolumeCallback)) { *out = self; return S_OK; }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE VcRef(IAudioEndpointVolumeCallback *self) { (void)self; return 1; }
+static HRESULT STDMETHODCALLTYPE VcNotify(IAudioEndpointVolumeCallback *self, PAUDIO_VOLUME_NOTIFICATION_DATA d)
+{
+    (void)self; (void)d;
+    if (B.hwnd) PostMessageW(B.hwnd, WM_BAR_STATUS, 1, 0);
+    return S_OK;
+}
+static IAudioEndpointVolumeCallbackVtbl s_vcVtbl = { VcQuery, VcRef, VcRef, VcNotify };
+static IAudioEndpointVolumeCallback s_volCb = { &s_vcVtbl };
+
+static void CloseVolume(void)
+{
+    if (!B.ep) return;
+    IAudioEndpointVolume_UnregisterControlChangeNotify(B.ep, &s_volCb);
+    IAudioEndpointVolume_Release(B.ep);
+    B.ep = NULL;
+}
+
 static BOOL OpenVolume(void)
 {
     if (B.ep) return TRUE;
@@ -219,6 +276,7 @@ static BOOL OpenVolume(void)
         IMMDevice_Release(dev);
     }
     IMMDeviceEnumerator_Release(en);
+    if (B.ep) IAudioEndpointVolume_RegisterControlChangeNotify(B.ep, &s_volCb);
     return B.ep != NULL;
 }
 
@@ -228,8 +286,7 @@ static void ReadVolume(void)
     float v = 0;
     BOOL m = FALSE;
     if (FAILED(IAudioEndpointVolume_GetMasterVolumeLevelScalar(B.ep, &v))) {
-        IAudioEndpointVolume_Release(B.ep);     /* el dispositivo cambió: reabrir la próxima vez */
-        B.ep = NULL;
+        CloseVolume();                          /* el dispositivo cambió: reabrir la próxima vez */
         B.volume = -1;
         return;
     }
@@ -385,17 +442,22 @@ static void DrawGear(Canvas *c, float cx, float cy, float size, DWORD rgb)
 }
 
 /* Wi-Fi (W1): punto y dos arcos gruesos, inclinado 50° (15° del diseño + 35° del ajuste).
- * lit = arcos encendidos (0..2); off = sin conexión (todo tenue). */
-static void DrawWifi(Canvas *c, float cx, float cy, float size, int lit, BOOL off, DWORD fg)
+ * lv = cuánto está encendido, continuo: 0 sin conexión (todo tenue), 1 el punto, 2 el primer
+ * arco, 3 los dos. Animado, al conectar se encienden en cascada desde el punto. */
+static float Lit(float lv, int i) { return 0.28f + 0.72f * max(0.0f, min(1.0f, lv - i)); }
+static void DrawWifi(Canvas *c, float cx, float cy, float size, float lv, DWORD fg)
 {
+    const float l0 = Lit(lv, 0), l1 = Lit(lv, 1), l2 = Lit(lv, 2);
+    /* cada pieza crece un poco justo mientras se enciende */
+    const float g1 = 0.5f * sinf(3.14159f * max(0.0f, min(1.0f, lv - 1))), g2 = 0.5f * sinf(3.14159f * max(0.0f, min(1.0f, lv - 2)));
     ICON_LOOP(cx, cy, size)
         const V2 w = Rot(Rot(q, 12, 12, -35.0f), 12, 15, -15.0f);
         const float a0 = -2.35619f, a1 = -0.78540f;  /* −135° … −45°: el abanico hacia arriba */
         const float dDot = hypotf(w.x - 12, w.y - 19.4f) - 1.7f;
-        const float dA1 = SdArc(w, 12, 20, 5.2f, a0, a1) - 1.3f, dA2 = SdArc(w, 12, 20, 9.6f, a0, a1) - 1.3f;
-        float a = COV(dDot) * (off ? 0.28f : 1.0f);
-        a = max(a, COV(dA1) * (!off && lit >= 1 ? 1.0f : 0.28f));
-        a = max(a, COV(dA2) * (!off && lit >= 2 ? 1.0f : 0.28f));
+        const float dA1 = SdArc(w, 12, 20, 5.2f + g1, a0, a1) - 1.3f, dA2 = SdArc(w, 12, 20, 9.6f + g2, a0, a1) - 1.3f;
+        float a = COV(dDot) * l0;
+        a = max(a, COV(dA1) * l1);
+        a = max(a, COV(dA2) * l2);
         if (a > 0) Gfx_Blend(c, px, py, fg, a);
     ICON_END
 }
@@ -403,16 +465,20 @@ static void DrawWifi(Canvas *c, float cx, float cy, float size, int lit, BOOL of
 /* Batería (B1): contorno fino, relleno dentro y el número calado (color del fondo sobre el
  * relleno, del texto sobre lo vacío). Cargando: rayo en lugar del número, relleno verde. */
 static const V2 kBolt[] = { { 12, 7.6f }, { 8.6f, 12.6f }, { 11.6f, 12.6f }, { 10.6f, 16.4f }, { 14.4f, 11.2f }, { 11.4f, 11.2f }, { 12.2f, 7.6f } };
-static void DrawBattery(Canvas *c, float cx, float cy, float size, int pct, BOOL charging, BOOL number, DWORD fg, DWORD knock)
+/* fill = nivel dibujado (animado, 0..100), pct = el número; chg = 0..1 cuánto se ve la carga
+ * (animado: el rayo entra con rebote, el relleno pasa a verde y el número se desvanece). */
+static void DrawBattery(Canvas *c, float cx, float cy, float size, float fill, int pct, float chg, BOOL number, DWORD fg, DWORD knock)
 {
     pct = max(0, min(100, pct));
-    const float fillR = 3.35f + 1.4f + 13.9f * pct / 100.0f;
-    const DWORD col = charging ? 0x30D158 : pct <= 20 ? 0xFF453A : fg;
+    fill = max(0.0f, min(100.0f, fill));
+    const float ch = max(0.0f, min(1.0f, chg)), bs = max(0.01f, chg);    /* bs: escala del rayo */
+    const float fillR = 3.35f + 1.4f + 13.9f * fill / 100.0f;
+    const DWORD col = Gfx_Mix(pct <= 20 ? 0xFF453A : fg, 0x30D158, ch);
 
     /* el número se rasteriza una vez como máscara de cobertura */
     Canvas m = { 0 };
     const float uu = size / 24.0f;
-    if (number && !charging && Canvas_Init(&m, (int)ceilf(size) + 2, (int)ceilf(size) + 2)) {
+    if (number && ch < 0.99f && Canvas_Init(&m, (int)ceilf(size) + 2, (int)ceilf(size) + 2)) {
         static HFONT f; static int fpx;
         const int want = max(6, (int)(7.8f * uu + 0.5f));
         if (!f || fpx != want) { if (f) DeleteObject(f); f = Gfx_Font(Gfx_UiFace(), want, FW_BOLD, ANTIALIASED_QUALITY); fpx = want; }
@@ -450,16 +516,20 @@ static void DrawBattery(Canvas *c, float cx, float cy, float size, int pct, BOOL
         const float dIn = Gfx_SdRRect(q.x, q.y, 3.35f, 8.35f, 15.3f, 7.3f, 2.0f);
         const float af = COV(max(dIn, q.x - fillR));
         if (af > 0) Gfx_Blend(c, px, py, col, af);
-        /* número o rayo, calado sobre el relleno */
-        float at = 0;
-        if (charging) at = COV(SdPoly(q, kBolt, 7));
-        else if (m.px) {
-            const int ix = px - mx0, iy = py - my0;
-            if (ix >= 0 && iy >= 0 && ix < m.w && iy < m.h) at = ((m.px[iy * m.w + ix] >> 8) & 255) / 255.0f;
+        /* número y rayo, calados sobre el relleno; se cruzan al enchufar o desenchufar */
+        float at = 0, ab = 0;
+        if (chg > 0.01f) {
+            const V2 qb = { (q.x - 11.5f) / bs + 11.5f, (q.y - 12.0f) / bs + 12.0f };
+            ab = COV(SdPoly(qb, kBolt, 7) * bs);
         }
-        if (at > 0) {
+        if (m.px && ch < 0.99f) {
+            const int ix = px - mx0, iy = py - my0;
+            if (ix >= 0 && iy >= 0 && ix < m.w && iy < m.h) at = ((m.px[iy * m.w + ix] >> 8) & 255) / 255.0f * (1.0f - ch);
+        }
+        if (at > 0 || ab > 0) {
             const float inFill = COV(max(dIn, q.x - fillR));
-            Gfx_Blend(c, px, py, Gfx_Mix(fg, charging ? 0xFFFFFF : knock, inFill), at);
+            if (at > 0) Gfx_Blend(c, px, py, Gfx_Mix(fg, knock, inFill), at);
+            if (ab > 0) Gfx_Blend(c, px, py, Gfx_Mix(fg, 0xFFFFFF, inFill), ab);
         }
     ICON_END
     Canvas_Free(&m);
@@ -486,15 +556,24 @@ static const V2 kSpeaker[] = {
     { 1.246f, 13.868f }, { 1.200f, 13.400f }
 };
 
-static void DrawSound(Canvas *c, float cx, float cy, float size, int lit, BOOL muted, DWORD fg)
+/* lv = arcos encendidos (continuo, 0..2); mute = 0..1 cuánto se ve el silencio (animado: las
+ * ondas se recogen hacia el altavoz y el aspa entra girando); rip = onda al cambiar el
+ * volumen (las ondas se abren al subir y se encogen al bajar). */
+static void DrawSound(Canvas *c, float cx, float cy, float size, float lv, float mute, float rip, DWORD fg)
 {
+    const float mc = max(0.0f, min(1.0f, mute)), xs = max(0.01f, mute), keep = 1.0f - mc;
+    const float shrink = 1.0f - 0.45f * mc, rp = max(-1.6f, min(1.8f, rip));
+    const float r1 = 4.6f * shrink + rp * 0.55f, r2 = 9.0f * shrink + rp;
+    const float l1 = Lit(lv, 0) * keep, l2 = Lit(lv, 1) * keep;
     ICON_LOOP(cx, cy, size)
         float a = COV(SdPoly(q, kSpeaker, (int)(sizeof(kSpeaker) / sizeof(kSpeaker[0]))));
-        if (muted) {
-            a = max(a, COV(min(SdSeg(q, 14.8f, 9.6f, 19.6f, 14.4f), SdSeg(q, 19.6f, 9.6f, 14.8f, 14.4f)) - 1.1f));
-        } else {
-            a = max(a, COV(SdArc(q, 9.6f, 12, 4.6f, -0.78540f, 0.78540f) - 1.3f) * (lit >= 1 ? 1.0f : 0.28f));
-            a = max(a, COV(SdArc(q, 9.6f, 12, 9.0f, -0.78540f, 0.78540f) - 1.3f) * (lit >= 2 ? 1.0f : 0.28f));
+        if (mute > 0.01f) {
+            const V2 x = Rot((V2){ (q.x - 17.2f) / xs + 17.2f, (q.y - 12.0f) / xs + 12.0f }, 17.2f, 12.0f, -90.0f * keep);
+            a = max(a, COV((min(SdSeg(x, 14.8f, 9.6f, 19.6f, 14.4f), SdSeg(x, 19.6f, 9.6f, 14.8f, 14.4f)) - 1.1f) * xs) * mc);
+        }
+        if (keep > 0.01f) {
+            a = max(a, COV(SdArc(q, 9.6f, 12, r1, -0.78540f, 0.78540f) - 1.3f) * l1);
+            a = max(a, COV(SdArc(q, 9.6f, 12, r2, -0.78540f, 0.78540f) - 1.3f) * l2);
         }
         if (a > 0) Gfx_Blend(c, px, py, fg, a);
     ICON_END
@@ -531,6 +610,9 @@ static void DrawChevron(Canvas *c, float cx, float cy, float size, DWORD fg)
 static const Ink kInkTray = { 5.15f, 7.65f, 18.85f, 15.85f, 0.62f };
 
 static int WifiArcs(void)  { return B.wifi >= 60 ? 2 : B.wifi >= 30 ? 1 : 0; }
+static float WifiLit(void) { return B.wifi < 0 ? 0.0f : 1.0f + WifiArcs(); }
+static BOOL  VolMuted(void) { return B.volume >= 0 && (B.muted || B.volume <= 0.001f); }
+static float VolLit(void)  { return VolMuted() ? 0.0f : B.volume < 0.5f ? 1.0f : 2.0f; }
 
 static void DrawLogo(Canvas *c, float x, float y, float g, DWORD rgb)
 {
@@ -566,13 +648,66 @@ static void BarKick(void)
     SetTimer(B.hwnd, TIMER_BANIM, 10, NULL);
 }
 
-/* Al cambiar el volumen (rueda, centro de control) el altavoz da un "pop". */
+static void Bump(int id, float v)
+{
+    if (B.bs[id] < 0.1f) B.bs[id] = 1.0f;
+    B.bsv[id] = v > 0 ? max(B.bsv[id], v) : min(B.bsv[id], v);
+}
+
+/* Cada cambio de estado tiene su gesto: el altavoz tacha o suelta las ondas y las abre o
+ * encoge con el volumen; el Wi-Fi enciende sus arcos en cascada; la batería se llena o
+ * vacía con suavidad y el rayo entra con rebote. Venga de donde venga el cambio (teclas,
+ * rueda, centro de control, Windows). */
+static void BarSync(void)
+{
+    if (!B.hwnd) return;
+    const BOOL mute = VolMuted(), wifi = B.wifi >= 0;
+    if (!B.synced) {                     /* al arrancar: el estado tal cual, sin animar */
+        B.synced = TRUE;
+        B.am = mute ? 1.0f : 0.0f; B.vl = VolLit(); B.wl = WifiLit();
+        B.bc = B.charging ? 1.0f : 0.0f; B.bf = (float)max(0, B.battery);
+        B.sMute = mute; B.sVol = B.volume; B.sWifi = wifi; B.sCharge = B.charging; B.sBatt = B.battery;
+        return;
+    }
+    BOOL kick = FALSE;
+    if (mute != B.sMute) { Bump(BH_VOL, 2.6f); kick = TRUE; }
+    else if (!mute && B.volume >= 0 && fabsf(B.volume - B.sVol) > 0.004f) {
+        const BOOL up = B.volume > B.sVol;
+        Bump(BH_VOL, up ? 1.6f : -1.1f);
+        B.ripv = up ? max(B.ripv, 20.0f) : min(B.ripv, -15.0f);
+        kick = TRUE;
+    }
+    if (wifi != B.sWifi) { Bump(BH_WIFI, wifi ? 2.2f : -1.6f); kick = TRUE; }
+    if (B.charging != B.sCharge) { Bump(BH_BATT, B.charging ? 2.6f : -1.4f); kick = TRUE; }
+    else if (!B.charging && B.battery >= 0 && B.sBatt > 20 && B.battery <= 20) { Bump(BH_BATT, -2.0f); kick = TRUE; }
+    B.sMute = mute; B.sVol = B.volume; B.sWifi = wifi; B.sCharge = B.charging; B.sBatt = B.battery;
+    if (kick || fabsf(B.vl - VolLit()) > 0.001f || fabsf(B.wl - WifiLit()) > 0.001f ||
+        fabsf(B.bf - (float)max(0, B.battery)) > 0.01f) BarKick();
+}
+
+/* Al cambiar el volumen (rueda, centro de control) el altavoz da un "pop" y sus ondas se
+ * mueven; en el tope (0 o 100 %) también, para que se note el gesto. */
 void Bar_PulseVolume(BOOL up)
 {
     if (!B.hwnd) return;
-    if (B.bs[BH_VOL] < 0.1f) B.bs[BH_VOL] = 1.0f;
-    B.bsv[BH_VOL] = up ? max(B.bsv[BH_VOL], 2.2f) : min(B.bsv[BH_VOL], -1.4f);
-    BarKick();
+    const float before = B.sVol;
+    const BOOL wasMute = B.sMute;
+    BarSync();
+    if (fabsf(B.volume - before) <= 0.004f && wasMute == B.sMute) {
+        Bump(BH_VOL, up ? 1.6f : -1.1f);
+        BarKick();
+    }
+}
+
+static BOOL Spring(float *x, float *v, float tg, float k, float z, float dt, float eps)
+{
+    for (int i = 0; i < 2; ++i) {
+        const float a = (tg - *x) * k - *v * 2.0f * sqrtf(k) * z;
+        *v += a * dt * 0.5f;
+        *x += *v * dt * 0.5f;
+    }
+    if (fabsf(*x - tg) < eps && fabsf(*v) < eps * 10.0f) { *x = tg; *v = 0; return FALSE; }
+    return TRUE;
 }
 
 static void BarAnimate(void)
@@ -596,6 +731,13 @@ static void BarAnimate(void)
         if (fabsf(B.bs[id] - tg) < 0.001f && fabsf(B.bsv[id]) < 0.01f) { B.bs[id] = tg; B.bsv[id] = 0; }
         else moving = TRUE;
     }
+    /* gestos de estado: el silencio y la carga con el rebote configurado; los niveles suaves */
+    moving |= Spring(&B.am, &B.amv, VolMuted() ? 1.0f : 0.0f, 380.0f, z, dt, 0.002f);
+    moving |= Spring(&B.vl, &B.vlv, VolLit(), 200.0f, max(z, 0.8f), dt, 0.002f);
+    moving |= Spring(&B.rip, &B.ripv, 0.0f, 330.0f, 0.3f, dt, 0.004f);
+    moving |= Spring(&B.wl, &B.wlv, WifiLit(), 70.0f, max(z, 0.85f), dt, 0.002f);
+    moving |= Spring(&B.bc, &B.bcv, B.charging ? 1.0f : 0.0f, 360.0f, z, dt, 0.002f);
+    moving |= Spring(&B.bf, &B.bfv, (float)max(0, B.battery), 40.0f, 1.0f, dt, 0.05f);
     InvalidateRect(B.hwnd, NULL, FALSE);
     if (!moving) KillTimer(B.hwnd, TIMER_BANIM);
 }
@@ -644,20 +786,19 @@ static void PaintBar(HDC target)
 
     if (B.battery >= 0) {       /* el porcentaje va dentro de la batería */
         iw = PlaceIcon(&kInkBatt, (float)r, (float)cy, ih, &icx, &icy, &isz);
-        DrawBattery(c, icx, icy, isz * BarScale(BH_BATT), B.battery, B.charging, g_cfg.battPct, L->fg, L->bg);
+        DrawBattery(c, icx, icy, isz * BarScale(BH_BATT), B.bf, B.battery, B.bc, g_cfg.battPct, L->fg, L->bg);
         SetRect(&B.hit[BH_BATT], r - (int)iw - BS(4), 0, r + BS(6), H);
         r -= (int)(iw + gap);
     }
 
     iw = PlaceIcon(&kInkWifi, (float)r, (float)cy, ih, &icx, &icy, &isz);
-    DrawWifi(c, icx, icy, isz * BarScale(BH_WIFI), WifiArcs(), B.wifi < 0, L->fg);
+    DrawWifi(c, icx, icy, isz * BarScale(BH_WIFI), B.wl, L->fg);
     SetRect(&B.hit[BH_WIFI], r - (int)iw - BS(4), 0, r + BS(6), H);
     r -= (int)(iw + gap);
 
     if (B.volume >= 0) {
-        const BOOL mute = B.muted || B.volume <= 0.001f;
         iw = PlaceIcon(&kInkSound, (float)r, (float)cy, ih, &icx, &icy, &isz);
-        DrawSound(c, icx, icy, isz * BarScale(BH_VOL), B.volume < 0.5f ? 1 : 2, mute, L->fg);
+        DrawSound(c, icx, icy, isz * BarScale(BH_VOL), B.vl, B.am, B.rip, L->fg);
         SetRect(&B.hit[BH_VOL], r - (int)iw - BS(4), 0, r + BS(6), H);
         r -= (int)(iw + gap);
     }
@@ -892,7 +1033,7 @@ static void Bubble(Canvas *c, float cx, float cy, float d, BOOL on, int kind, LP
     const BarLook *L = &B.look;
     Gfx_FillCircle(c, cx, cy, d * 0.5f, on ? L->tileOn : (L->light ? 0xE5E5EA : 0x3A3A3C), 1.0f);
     const DWORD ic = on ? 0xFFFFFF : L->fg;
-    if (kind == 1) DrawWifi(c, cx, cy, d * 0.62f, WifiArcs(), B.wifi < 0, ic);
+    if (kind == 1) DrawWifi(c, cx, cy, d * 0.62f, WifiLit(), ic);
     else Gfx_Text(c, C.fIcon, glyph, (int)(cx - d * 0.5f), (int)(cy - d * 0.5f), (int)d, (int)d, ic, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -990,7 +1131,8 @@ static void DrawBattCard(Canvas *c, RECT r, int k)
     const BarLook *L = &B.look;
     const float bw = (float)CS(40), cy = (r.top + r.bottom) * 0.5f;
     Card(c, r);
-    DrawBattery(c, r.left + CS(14) + bw * 0.5f, cy, bw, max(0, B.battery), B.charging, FALSE, L->fg, CardColor());
+    DrawBattery(c, r.left + CS(14) + bw * 0.5f, cy, bw, (float)max(0, B.battery), max(0, B.battery), B.charging ? 1.0f : 0.0f,
+                FALSE, L->fg, CardColor());
     Gfx_Text(c, C.fTitle, L"Batería", r.left + CS(14) + (int)bw + CS(12), r.top, CS(180), r.bottom - r.top, L->fg,
              DT_SINGLELINE | DT_VCENTER);
     if (B.battery >= 0) {
@@ -1240,7 +1382,7 @@ static const Canvas *PaintList(void)
             const WNet *w = &s_nets[i];
             on = w->connected;
             Gfx_FillCircle(c, cx, cy, bd * 0.5f, on ? L->tileOn : (L->light ? 0xE5E5EA : 0x3A3A3C), 1.0f);
-            DrawWifi(c, cx, cy, bd * 0.62f, w->q >= 60 ? 2 : w->q >= 30 ? 1 : 0, FALSE, on ? 0xFFFFFF : L->fg);
+            DrawWifi(c, cx, cy, bd * 0.62f, w->q >= 60 ? 3.0f : w->q >= 30 ? 2.0f : 1.0f, on ? 0xFFFFFF : L->fg);
             name = w->ssid;
             lstrcpyW(sb, on ? L"Conectado" : w->prof[0] ? L"Red conocida" : w->secure ? L"Protegida" : L"Abierta");
             sub = sb;
@@ -1521,6 +1663,7 @@ static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
             if (C.section == 1 && C.page == 2) {
                 ReadNetworks();
                 ReadWifi();
+                BarSync();
                 C.listH = CS(ListHeight());
                 CCKick();
             }
@@ -1629,6 +1772,7 @@ static void CC_Open(int section, int tab)
     ReadWifi();
     ReadBattery();
     ReadBluetooth();
+    BarSync();
     C.brightness = s_brightCurrent;
     C.hot = C.press = 0;
     for (int i = 0; i < CH_COUNT; ++i) { C.hs[i] = 1.0f; C.hsv[i] = 0; }
@@ -1850,15 +1994,29 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 SendInput(2, in, sizeof(INPUT));
                 KillTimer(h, TIMER_TRAY);
             }
-        } else if (w == TIMER_STATUS) {
+        } else if (w == TIMER_STATUS) {         /* repaso de seguridad: lo normal llega por avisos */
             ReadBattery();
             ReadWifi();
             ReadVolume();
+            BarSync();
+            InvalidateRect(h, NULL, FALSE);
+        } else if (w == TIMER_WIFIQ) {
+            KillTimer(h, TIMER_WIFIQ);
+            ReadWifi();
+            BarSync();
             InvalidateRect(h, NULL, FALSE);
         }
         return 0;
-    case WM_POWERBROADCAST:
+    case WM_BAR_STATUS:
+        if (w == 1) {                           /* volumen o silencio: al momento */
+            ReadVolume();
+            BarSync();
+            InvalidateRect(h, NULL, FALSE);
+        } else SetTimer(h, TIMER_WIFIQ, 250, NULL);
+        return 0;
+    case WM_POWERBROADCAST:                     /* enchufar, desenchufar, cambio de porcentaje */
         ReadBattery();
+        BarSync();
         InvalidateRect(h, NULL, FALSE);
         return TRUE;
     case WM_SETTINGCHANGE:
@@ -1870,6 +2028,9 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
         KillTimer(h, TIMER_STATUS);
         KillTimer(h, TIMER_BANIM);
         KillTimer(h, TIMER_TRAY);
+        KillTimer(h, TIMER_WIFIQ);
+        if (B.battNotify) { UnregisterPowerSettingNotification(B.battNotify); B.battNotify = NULL; }
+        B.synced = FALSE;
         if (B.registered) {
             APPBARDATA abd = { sizeof(abd) };
             abd.hWnd = h;
@@ -1966,7 +2127,9 @@ void Bar_Apply(void)
         BarApplyCapture();
         BarPosition();
         ArmClock(B.hwnd);
-        SetTimer(B.hwnd, TIMER_STATUS, 10000, NULL);
+        SetTimer(B.hwnd, TIMER_STATUS, 30000, NULL);
+        B.battNotify = RegisterPowerSettingNotification(B.hwnd, &kGUID_BatteryPercent, DEVICE_NOTIFY_WINDOW_HANDLE);
+        BarSync();
         Brightness_Request(-1);
     } else {
         LoadBarLook();
@@ -2023,8 +2186,8 @@ void Bar_Destroy(void)
 {
     if (C.hwnd) DestroyWindow(C.hwnd);      /* al salir, sin animación */
     if (B.hwnd) DestroyWindow(B.hwnd);
-    if (B.ep) { IAudioEndpointVolume_Release(B.ep); B.ep = NULL; }
-    if (B.wlan) { WlanCloseHandle(B.wlan, NULL); B.wlan = NULL; }
+    CloseVolume();
+    if (B.wlan) { WlanCloseHandle(B.wlan, NULL); B.wlan = NULL; }     /* también quita sus avisos */
     HFONT *all[] = { &B.fBold, &B.fText, &B.fIcon };
     for (int i = 0; i < 3; ++i) if (*all[i]) { DeleteObject(*all[i]); *all[i] = NULL; }
 }
