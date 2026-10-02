@@ -133,6 +133,13 @@ Solo se consigue **firmando** el exe con un certificado de confianza pública
 - MSYS2 / Linux / WSL: `./build.sh` (mingw-w64)
 - Windows: `build.bat` desde Developer Command Prompt (MSVC)
 
+## Código abierto
+OpenDock es software libre con licencia [MIT](LICENSE): puedes usarlo, estudiarlo,
+modificarlo y redistribuirlo. Está escrito en C contra la API de Win32, sin frameworks ni
+dependencias en tiempo de ejecución; cada pieza vive en su archivo (`notch.c`, `menubar.c`,
+`dock.c`, `tray.c`, `winnotif.c`, `panel.c`). El logo se genera con `make_icon.py` (Pillow).
+Los sonidos de `sounds/` conservan su propia licencia (CC BY 4.0, ver abajo).
+
 ## Créditos
 
 Los sonidos de notificación "Nota", "Eco suave", "Alerta", "Destello", "Cascada", "Aviso",
