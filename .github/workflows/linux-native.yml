@@ -58,15 +58,16 @@ jobs:
       - name: Contenido del paquete
         run: |
           cd /tmp/pkg
+          PAQ=$(ls opendock-git-[0-9]*.pkg.tar.zst)   # sin el -debug
           ls -la *.pkg.tar.zst
-          tar -tf *.pkg.tar.zst > lista.txt
+          tar -tf "$PAQ" > lista.txt
           for f in usr/bin/opendock etc/xdg/autostart/opendock.desktop \
                    usr/share/opendock/sounds/simple2.wav \
                    usr/share/icons/hicolor/512x512/apps/opendock.png \
                    usr/share/licenses/opendock-git/LICENSE; do
             if grep -qx "$f" lista.txt; then echo "ok: $f"; else echo "FALLO: falta $f"; exit 1; fi
           done
-          pacman -U --noconfirm *.pkg.tar.zst
+          pacman -U --noconfirm "$PAQ"
           opendock --version
 
   build-fedora:
