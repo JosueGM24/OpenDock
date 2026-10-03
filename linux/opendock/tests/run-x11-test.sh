@@ -10,6 +10,9 @@ mkdir -p "$ARTEFACTOS"
 
 export DISPLAY=:99
 export GDK_BACKEND=x11
+# Xvfb no tiene GPU: render por software, como en la prueba de sway.
+export LIBGL_ALWAYS_SOFTWARE=1
+export GSK_RENDERER=cairo
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-runtime-opendock-x11}"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"

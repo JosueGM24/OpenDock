@@ -60,13 +60,15 @@ def check_corners(img, w, h, radius, bg, top=0):
 
 
 def check_bar(img, w, bar_height):
-    """La banda superior (0..bar_height) debe tener un color uniforme
-    distinto del fondo general de escritorio, en toda su anchura."""
+    """La banda superior (0..bar_height) debe ser de la barra en toda su anchura."""
     muestra_izq = img.getpixel((4, bar_height // 2))
     muestra_centro = img.getpixel((w // 2, bar_height // 2))
     muestra_der = img.getpixel((w - 4, bar_height // 2))
-    ok = casi(muestra_izq[:3], muestra_centro[:3], 40) and casi(muestra_centro[:3], muestra_der[:3], 40)
-    print(f"{'ok' if ok else 'FALLO'}: banda superior uniforme: {muestra_izq}, {muestra_centro}, {muestra_der}")
+    # Del color de la barra (#1C1C1E, DESIGN.md "Sistema oscuro") en toda su
+    # anchura; negro puro sería el fondo de un X sin pintar, no la barra.
+    color_barra = (0x1C, 0x1C, 0x1E)
+    ok = all(casi(m[:3], color_barra, 12) for m in (muestra_izq, muestra_centro, muestra_der))
+    print(f"{'ok' if ok else 'FALLO'}: banda superior del color de la barra: {muestra_izq}, {muestra_centro}, {muestra_der}")
     # justo debajo de la barra no debería tener el mismo color exacto que dentro,
     # salvo que el fondo del escritorio coincida (poco probable con blanco puro)
     return ok
