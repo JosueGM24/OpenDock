@@ -1,0 +1,9 @@
+{
+  "uuid": "opendock@josuegm24.github.io",
+  "name": "OpenDock",
+  "description": "Lleva el aspecto y el comportamiento de OpenDock (notch, dock y esquinas redondeadas) a GNOME Shell.",
+  "shell-version": ["45", "46", "47", "48"],
+  "url": "https://github.com/JosueGM24/OpenDock",
+  "settings-schema": "org.gnome.shell.extensions.opendock",
+  "gettext-domain": "opendock"
+}

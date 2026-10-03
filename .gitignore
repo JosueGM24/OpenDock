@@ -7,3 +7,9 @@
 
 # Restos de herramientas
 *.stackdump
+
+# Extensión de GNOME: generado por build.sh (sonidos copiados, schemas
+# compilados y el .zip empaquetado), no se versiona.
+linux/gnome-extension/opendock@josuegm24.github.io/sounds/
+linux/gnome-extension/opendock@josuegm24.github.io/schemas/gschemas.compiled
+linux/gnome-extension/dist/
