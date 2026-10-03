@@ -31,10 +31,20 @@ chown -R tester:tester "$USER_HOME" "$ARTIFACT_DIR" 2>/dev/null || chown -R test
 
 chmod +x "$CI_DIR/inner-test.sh"
 
-# Se ejecuta la prueba real como "tester"; el estado (ok/fallo) se
-# propaga mediante el código de salida de inner-test.sh.
-runuser -u tester -- env \
+# gnome-shell espera poder hablar con logind sobre el bus de sistema; en un
+# contenedor sin systemd ese bus no existe y LoginManagerSystemd aborta el
+# proceso al conectar. Se levanta un dbus de sistema mínimo (y un
+# machine-id) para que esa conexión funcione, aunque no haya logind detrás.
+command -v dbus-uuidgen >/dev/null 2>&1 && dbus-uuidgen --ensure || true
+mkdir -p /run/dbus
+if [ ! -S /run/dbus/system_bus_socket ]; then
+    dbus-daemon --system --fork || echo "AVISO: no se pudo levantar el bus de sistema; se continúa de todos modos"
+fi
+
+# Se ejecuta la prueba real como "tester", dentro de su propia sesión de
+# D-Bus (dbus-run-session se encarga de crearla y de limpiarla al salir).
+runuser -u tester -- dbus-run-session -- env \
     HOME="$USER_HOME" \
     ARTIFACT_DIR="$ARTIFACT_DIR" \
     UUID="$UUID" \
-    "$CI_DIR/inner-test.sh"
+    bash "$CI_DIR/inner-test.sh"

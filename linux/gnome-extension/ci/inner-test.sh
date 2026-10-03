@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Se ejecuta como el usuario sin privilegios "tester". Arranca una sesión
-# de D-Bus propia, lanza gnome-shell en modo headless con un monitor
+# Se ejecuta como el usuario sin privilegios "tester", ya dentro de una
+# sesión de D-Bus propia (run-test.sh lo invoca envuelto en
+# `dbus-run-session`). Lanza gnome-shell en modo headless con un monitor
 # virtual, habilita la extensión, toma capturas y comprueba (vía
 # org.gnome.Shell.Eval, que requiere --unsafe-mode) que las esquinas, el
 # notch y el dock existen, que la barra mide 28 px y que el banner nativo
@@ -21,12 +22,14 @@ chmod 700 "$XDG_RUNTIME_DIR"
 FAIL=0
 SKIPPED=()
 
-eval "$(dbus-launch --sh-syntax)"
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    echo "FALLO: no hay sesión de D-Bus activa (se esperaba estar dentro de dbus-run-session)."
+    exit 1
+fi
 echo "Bus de sesión: $DBUS_SESSION_BUS_ADDRESS"
 
 cleanup() {
     [ -n "${SHELL_PID:-}" ] && kill "$SHELL_PID" 2>/dev/null
-    [ -n "${DBUS_SESSION_BUS_PID:-}" ] && kill "$DBUS_SESSION_BUS_PID" 2>/dev/null
 }
 trap cleanup EXIT
 
