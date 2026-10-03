@@ -726,6 +726,11 @@ static void reconstruir(void)
     }
     actualizar_estado_items();
     if (g_d.cursor_dentro) fijar_lupa();
+    for (guint i = 0; i < g_d.items->len; i++) {
+        OdItem *it = g_ptr_array_index(g_d.items, i);
+        g_debug("dock: %s anclada=%d ventanas=%d activa=%d", it->id, it->anclada,
+            it->n_ventanas, it->activa);
+    }
 }
 
 static void al_cambiar_ventanas(gpointer datos)

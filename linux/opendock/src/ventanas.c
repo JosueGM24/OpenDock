@@ -125,7 +125,9 @@ static void ft_estado(void *d, struct zwlr_foreign_toplevel_handle_v1 *h, struct
 
 static void ft_hecho(void *d, struct zwlr_foreign_toplevel_handle_v1 *h)
 {
-    (void)d; (void)h;
+    (void)h;
+    OdVentana *v = d;
+    g_debug("ventanas: hecho %s activa=%d", v->app_id, v->activa);
     avisar();
 }
 
@@ -133,6 +135,7 @@ static void ft_cerrada(void *d, struct zwlr_foreign_toplevel_handle_v1 *h)
 {
     (void)h;
     OdVentana *v = d;
+    g_debug("ventanas: cerrada %s (%s)", v->app_id, v->titulo);
     g_ptr_array_remove(g_v.lista, v);   /* liberar_ventana destruye el handle */
     avisar();
 }
