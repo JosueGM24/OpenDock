@@ -25,6 +25,7 @@
 #define HOLD_NOTE   4500
 #define HOLD_SHOT   3500
 #define MAX_HITS    96
+#define BODY_LINE   18     /* alto de línea del cuerpo de un aviso (fBody, 13 px) */
 
 enum { M_HIDDEN, M_PEEK, M_MINI, M_QUICK, M_CENTER };
 enum { A_BOTTOM, A_TOP, A_MIDDLE };
@@ -382,7 +383,7 @@ static void RenderPeekNote(void)
     DrawAppIcon(c, bx, (N.H - box) / 2, box, p->aumid, p->app, p->logo, 1.0f);
     Text(c, N.fTitle, p->title[0] ? p->title : p->app, tx, NS(8), right - aw - NS(8) - tx, NS(20), N.look.fg, 0);
     Text(c, N.fSmall, ago, right - aw, NS(8), aw + 1, NS(20), N.look.fg3, 0);
-    Text(c, N.fSmall, p->detail[0] ? p->detail : p->app, tx, NS(28), right - tx, NS(18), N.look.fg2, 0);
+    Text(c, N.fBody, p->detail[0] ? p->detail : p->app, tx, NS(28), right - tx, NS(BODY_LINE), N.look.fg2, 0);
 }
 
 
@@ -536,10 +537,10 @@ static float NeedExtra(int i, int cw)
     int extra = 0;
     if (w->body[0]) {
         RECT r = { 0, 0, right - tx, 0 };
-        HGDIOBJ o = SelectObject(N.content.dc, N.fSmall);
+        HGDIOBJ o = SelectObject(N.content.dc, N.fBody);
         DrawTextW(N.content.dc, w->body, -1, &r, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
         SelectObject(N.content.dc, o);
-        extra = max(0, min((int)(r.bottom - r.top), NS(16) * BODY_MAX) - NS(16));
+        extra = max(0, min((int)(r.bottom - r.top), NS(BODY_LINE) * BODY_MAX) - NS(BODY_LINE));
     }
     if (HasPills(w)) extra += NS(ACT_ROW);
     return (float)extra;
@@ -564,12 +565,12 @@ static void DrawCard(Canvas *c, int x, int y, int cw, int h, int i, float alpha,
 
     const int extra = h - cardH, pills = HasPills(w) ? NS(ACT_ROW) : 0;
     if (extra <= 1) {
-        Text(c, N.fSmall, w->body, tx, y + NS(46), right - tx, NS(16), Gfx_Mix(cardBg, L->fg2, alpha), 0);
+        Text(c, N.fBody, w->body, tx, y + NS(46), right - tx, NS(BODY_LINE), Gfx_Mix(cardBg, L->fg2, alpha), 0);
         return;
     }
     /* expandida: el texto completo se va descubriendo según crece la tarjeta */
-    const int bodyH = NS(16) + max(0, extra - pills);
-    Gfx_Text(c, N.fSmall, w->body, tx, y + NS(46), right - tx, bodyH, Gfx_Mix(cardBg, L->fg2, alpha),
+    const int bodyH = NS(BODY_LINE) + max(0, extra - pills);
+    Gfx_Text(c, N.fBody, w->body, tx, y + NS(46), right - tx, bodyH, Gfx_Mix(cardBg, L->fg2, alpha),
              DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
     if (!pills || extra < pills * 0.5f) return;
     const float show = min(1.0f, (extra - pills * 0.5f) / (pills * 0.5f)) * alpha;
