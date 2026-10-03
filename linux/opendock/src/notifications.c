@@ -118,12 +118,17 @@ static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocaci
     g_message("opendock: Notify: parámetros desempaquetados app=%s resumen=%s",
         app_name_in ? app_name_in : "(null)", summary_in ? summary_in : "(null)");
     if (iter_acciones) g_variant_iter_free(iter_acciones);
+    g_message("opendock: Notify: iter_acciones liberado");
     (void)expire_timeout; /* la duración del peek la fija el notch (DESIGN.md: 4,5 s) */
 
     gchar *app_name = limitar_cadena(app_name_in);
+    g_message("opendock: Notify: app_name limitado");
     gchar *app_icon = limitar_cadena(app_icon_in);
+    g_message("opendock: Notify: app_icon limitado");
     gchar *summary = limitar_cadena(summary_in);
+    g_message("opendock: Notify: summary limitado");
     gchar *body = limitar_cadena(body_in);
+    g_message("opendock: Notify: body limitado");
 
     GdkPixbuf *pixbuf = NULL;
     g_message("opendock: Notify: hints=%p tipo=%s", (void *)hints,
