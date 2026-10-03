@@ -181,6 +181,9 @@ print(buscar(json.load(sys.stdin)))')
         SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock 2>/dev/null | head -n1 || true)
         # Mini notch: cursor al centro de la barra. sway sin cabeza puede no
         # tener puntero, así que esto sólo avisa.
+        # hide_cursor esconde el cursor al instante y sway lo cuenta como que
+        # salió de la barra: aquí tiene que quedarse quieto encima.
+        swaymsg seat seat0 hide_cursor 0 >/dev/null 2>&1 || true
         if swaymsg seat seat0 cursor set "$((ANCHO / 2))" 10 >/dev/null 2>&1; then
             sleep 0.2
             captura 08-mini.png mini || echo "AVISO: no se vio la pastilla del mini notch"
