@@ -13,7 +13,9 @@ gio_dep = dependency('gio-2.0')
 gio_unix_dep = dependency('gio-unix-2.0')
 gobject_dep = dependency('gobject-2.0')
 
-deps = [gtk4_dep, glib_dep, gio_dep, gio_unix_dep, gobject_dep]
+m_dep = cc.find_library('m', required: false)
+
+deps = [gtk4_dep, glib_dep, gio_dep, gio_unix_dep, gobject_dep, m_dep]
 
 # gtk4-layer-shell: necesario para Wayland (KDE, Hyprland, Sway, labwc, river, COSMIC).
 # Si no está disponible seguimos compilando: en tal caso sólo funcionará el respaldo X11.
