@@ -47,8 +47,12 @@ export class PanelStyler {
 
     _applyStyle() {
         const palette = paletteFor(this._settings.get_string('material'));
+        // min-height/max-height porque algunos temas (p.ej. el de Fedora)
+        // fijan un min-height propio que, de lo contrario, gana sobre un
+        // height normal sin importar la especificidad.
         Main.panel.set_style(
             `background-color: ${palette.background}; height: ${PANEL_HEIGHT}px; ` +
+            `min-height: ${PANEL_HEIGHT}px; max-height: ${PANEL_HEIGHT}px; ` +
             'border: none; box-shadow: none; padding: 0px; margin: 0px;');
         this._styleApplied = true;
     }
