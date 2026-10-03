@@ -329,6 +329,7 @@ void od_mini_iniciar(OdConfig *cfg, OdBackendTipo backend)
     gtk_css_provider_load_from_string(css,
         "window.od-mini-ventana { background: transparent; }"
         ".od-rapida { background-color: #1C1C1E; border-radius: 0 0 16px 16px; }"
+        ".od-rapida image { color: #FFFFFF; }"
         ".od-rapida-titulo { color: #FFFFFF; font-size: 13px; font-weight: 600; }"
         ".od-rapida-silencio { min-width: 28px; min-height: 28px; padding: 0; border-radius: 14px;"
         "  border: none; box-shadow: none; background: rgba(255,255,255,0.08); color: #FFFFFF; }"

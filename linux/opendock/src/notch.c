@@ -266,7 +266,7 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
         ".opendock-aviso-hora {"
         "  color: #6E6E73; font-size: 12px;"
         "}"
-        ".opendock-campana { color: #FFFFFF; }"
+        ".opendock-campana, .opendock-aviso image { color: #FFFFFF; }"
         ".opendock-no-leidas { min-width: 24px; min-height: 20px; padding: 0 7px;"
         "  border-radius: 10px; background: #0A84FF; color: #FFFFFF;"
         "  font-size: 12px; font-weight: 600; }");

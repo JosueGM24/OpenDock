@@ -508,6 +508,7 @@ void od_centro_iniciar(OdConfig *cfg, OdBackendTipo backend, const OdCentroRetro
         ".od-lista.od-hay-hover .od-tarjeta { transform: scale(0.965); }"
         ".od-lista .od-tarjeta.od-hover { transform: scale(1.035); background-color: #3A3A3C; }"
         ".od-tarjeta.od-borrando { transform: translateX(348px); opacity: 0; }"
+        ".od-tarjeta image, .od-boton-cabecera image { color: #FFFFFF; }"
         ".od-tarjeta-titulo { color: #FFFFFF; font-size: 14px; font-weight: 600; }"
         ".od-tarjeta-cuerpo { color: #AEAEB2; font-size: 12px; }"
         ".od-tarjeta-hora { color: #6E6E73; font-size: 12px; }"
