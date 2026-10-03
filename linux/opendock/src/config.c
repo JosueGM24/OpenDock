@@ -95,6 +95,18 @@ OdConfig *od_config_cargar(void)
     return cfg;
 }
 
+void od_config_abrir(OdConfig *cfg)
+{
+    gchar *uri = g_filename_to_uri(cfg->config_path, NULL, NULL);
+    GError *error = NULL;
+    if (!uri || !g_app_info_launch_default_for_uri(uri, NULL, &error)) {
+        g_message("opendock: no se pudo abrir %s: %s", cfg->config_path,
+            error ? error->message : "?");
+        g_clear_error(&error);
+    }
+    g_free(uri);
+}
+
 void od_config_guardar_bool(OdConfig *cfg, const char *grupo, const char *clave,
     gboolean valor)
 {

@@ -11,7 +11,10 @@
 #include "opendock-build-config.h"
 #include "volume.h"
 #include "power.h"
+#include "centro.h"
+#include "mini.h"
 #include <gtk/gtk.h>
+#include <math.h>
 
 #if HAVE_LAYER_SHELL
 #include <gtk4-layer-shell/gtk4-layer-shell.h>
@@ -36,6 +39,7 @@ typedef struct {
     GtkWidget *control_volumen;
     GtkWidget *lbl_bateria_cc;   /* tarjeta de batería del centro de control */
     GtkWidget *popover;
+    GtkWidget *interruptor_no_molestar;
     OdConfig *cfg;
     int alto;
     OdBackendTipo backend;
@@ -165,11 +169,22 @@ static void al_mover_volumen(GtkRange *r, gpointer datos)
 
 static gboolean al_mover_no_molestar(GtkSwitch *sw, gboolean estado, gpointer datos)
 {
-    (void)datos;
-    g_barra.cfg->no_molestar = estado;
-    od_config_guardar_bool(g_barra.cfg, "general", "no_molestar", estado);
-    gtk_switch_set_state(sw, estado);
+    (void)sw; (void)datos;
+    od_bar_fijar_no_molestar(estado);
     return TRUE;
+}
+
+/* Un solo sitio que cambia No molestar: lo guarda y pone al día el
+ * interruptor de la barra, la campana del centro y la vista rápida. */
+void od_bar_fijar_no_molestar(gboolean activo)
+{
+    if (!g_barra.cfg) return;
+    g_barra.cfg->no_molestar = activo;
+    od_config_guardar_bool(g_barra.cfg, "general", "no_molestar", activo);
+    if (g_barra.interruptor_no_molestar)
+        gtk_switch_set_state(GTK_SWITCH(g_barra.interruptor_no_molestar), activo);
+    od_centro_refrescar_no_molestar();
+    od_mini_refrescar();
 }
 
 /* "Ajustes ›": abre config.ini con el editor predeterminado (sin shell). */
@@ -177,14 +192,27 @@ static void al_pulsar_ajustes(GtkButton *b, gpointer datos)
 {
     (void)b; (void)datos;
     gtk_popover_popdown(GTK_POPOVER(g_barra.popover));
-    gchar *uri = g_filename_to_uri(g_barra.cfg->config_path, NULL, NULL);
-    GError *error = NULL;
-    if (!uri || !g_app_info_launch_default_for_uri(uri, NULL, &error)) {
-        g_message("opendock: no se pudo abrir %s: %s", g_barra.cfg->config_path,
-            error ? error->message : "?");
-        g_clear_error(&error);
-    }
-    g_free(uri);
+    od_config_abrir(g_barra.cfg);
+}
+
+/* Cursor sobre la barra: la zona central despierta el mini notch. */
+static void al_mover_en_barra(GtkEventControllerMotion *c, double x, double y, gpointer datos)
+{
+    (void)y; (void)datos;
+    double dx = x - gtk_widget_get_width(gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(c))) / 2.0;
+    od_mini_cursor(fabs(dx) < OD_MINI_ZONA / 2.0, dx);
+}
+
+static void al_salir_de_barra(GtkEventControllerMotion *c, gpointer datos)
+{
+    (void)c; (void)datos;
+    od_mini_cursor(FALSE, 0);
+}
+
+static void al_pulsar_reloj(GtkGestureClick *g, int n, double x, double y, gpointer datos)
+{
+    (void)g; (void)n; (void)x; (void)y; (void)datos;
+    od_centro_alternar();
 }
 
 static GtkWidget *crear_tarjeta_interruptor(const char *icono, const char *texto,
@@ -235,6 +263,7 @@ static GtkWidget *crear_centro_control(void)
     GtkWidget *tarjeta_nm = crear_tarjeta_interruptor("notifications-disabled-symbolic",
         "No molestar", G_CALLBACK(al_mover_no_molestar), &sw_nm);
     gtk_switch_set_state(GTK_SWITCH(sw_nm), g_barra.cfg->no_molestar);
+    g_barra.interruptor_no_molestar = sw_nm;
     gtk_box_append(GTK_BOX(caja), tarjeta_nm);
 
     GtkWidget *tarjeta_bateria = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -397,6 +426,18 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
     gtk_center_box_set_end_widget(GTK_CENTER_BOX(centro), caja_der);
 
     gtk_window_set_child(GTK_WINDOW(win), centro);
+
+    GtkEventController *mov = gtk_event_controller_motion_new();
+    g_signal_connect(mov, "motion", G_CALLBACK(al_mover_en_barra), NULL);
+    g_signal_connect(mov, "enter", G_CALLBACK(al_mover_en_barra), NULL);
+    g_signal_connect(mov, "leave", G_CALLBACK(al_salir_de_barra), NULL);
+    gtk_widget_add_controller(win, mov);
+
+    /* Clic en el reloj: abre o cierra el centro de notificaciones. */
+    GtkGesture *clic_reloj = gtk_gesture_click_new();
+    g_signal_connect(clic_reloj, "released", G_CALLBACK(al_pulsar_reloj), NULL);
+    gtk_widget_add_controller(lbl_reloj, GTK_EVENT_CONTROLLER(clic_reloj));
+    gtk_widget_set_cursor_from_name(lbl_reloj, "pointer");
 
     GtkCssProvider *css = gtk_css_provider_new();
     gtk_css_provider_load_from_string(css,

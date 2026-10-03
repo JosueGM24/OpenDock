@@ -7,6 +7,7 @@
  * siempre encima, recolocada con Xlib; se muestra/oculta sin animación.
  */
 #include "notch.h"
+#include "centro.h"
 #include "opendock-build-config.h"
 #include "spring.h"
 #include <gtk/gtk.h>
@@ -22,6 +23,9 @@
 #define OD_AVISO_ANCHO   360
 #define OD_AVISO_ALTO    54
 #define OD_AVISO_HOLD_S  4.5   /* DESIGN.md: "se queda 4,5 s" */
+#define OD_DISCRETO_ANCHO 112
+#define OD_DISCRETO_ALTO  34
+#define OD_DISCRETO_HOLD_S 3.5
 
 typedef struct {
     GtkWidget *ventana;
@@ -29,6 +33,9 @@ typedef struct {
     GtkWidget *lbl_titulo;
     GtkWidget *lbl_cuerpo;
     GtkWidget *lbl_hora;
+    GtkWidget *pila;           /* "aviso" o "discreto" */
+    GtkWidget *lbl_no_leidas;
+    guint no_leidas;
 
     OdMuelle  muelle_margen; /* px de margen superior: 0 = visible, negativo = oculto arriba */
     gboolean  objetivo_visible;
@@ -67,7 +74,9 @@ static void colocar_x11(void)
     }
     Display *xdisplay = od_x11_display(surface);
     Window xid = od_x11_ventana(surface);
-    int x = geo.x + (geo.width - OD_AVISO_ANCHO) / 2;
+    int ancho = g_strcmp0(gtk_stack_get_visible_child_name(GTK_STACK(g_notch.pila)), "discreto") == 0
+        ? OD_DISCRETO_ANCHO : OD_AVISO_ANCHO;
+    int x = geo.x + (geo.width - ancho) / 2;
     int y = geo.y + g_notch.alto_barra;
     XMoveWindow(xdisplay, xid, x, y);
 }
@@ -127,6 +136,37 @@ static gboolean al_expirar(gpointer datos)
     return G_SOURCE_REMOVE;
 }
 
+static void mostrar(double segundos)
+{
+    if (g_notch.temporizador_autocierre) {
+        g_source_remove(g_notch.temporizador_autocierre);
+        g_notch.temporizador_autocierre = 0;
+    }
+    /* Con el centro abierto ya se ven las notificaciones: no hace falta aviso. */
+    if (od_centro_abierto()) return;
+
+    gtk_widget_set_visible(g_notch.ventana, TRUE);
+    g_notch.objetivo_visible = TRUE;
+
+#if HAVE_X11
+    if (g_notch.backend == OD_BACKEND_X11) {
+        colocar_x11();
+    } else
+#endif
+    {
+        od_muelle_fijar_objetivo(&g_notch.muelle_margen, g_notch.alto_barra);
+        iniciar_animacion();
+    }
+
+    g_notch.temporizador_autocierre = g_timeout_add((guint)(segundos * 1000), al_expirar, NULL);
+}
+
+static void al_pulsar_notch(GtkGestureClick *g, int n, double x, double y, gpointer datos)
+{
+    (void)g; (void)n; (void)x; (void)y; (void)datos;
+    od_centro_abrir();
+}
+
 void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
 {
     if (g_notch.iniciado) return;
@@ -137,9 +177,6 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
     GtkWidget *win = gtk_window_new();
     gtk_window_set_decorated(GTK_WINDOW(win), FALSE);
     gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
-    gtk_widget_set_can_target(win, FALSE);
-    gtk_widget_set_size_request(win, OD_AVISO_ANCHO, OD_AVISO_ALTO);
-    gtk_window_set_default_size(GTK_WINDOW(win), OD_AVISO_ANCHO, OD_AVISO_ALTO);
     gtk_widget_add_css_class(win, "opendock-notch");
 
     GtkWidget *tarjeta = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
@@ -181,7 +218,37 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
     gtk_widget_set_valign(hora, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(tarjeta), hora);
 
-    gtk_window_set_child(GTK_WINDOW(win), tarjeta);
+    /* Campana discreta (No molestar): campana de 14 px + contador en
+     * píldora de acento. */
+    GtkWidget *discreto = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(discreto, "opendock-aviso");
+    gtk_widget_set_size_request(discreto, OD_DISCRETO_ANCHO, OD_DISCRETO_ALTO);
+    gtk_widget_set_halign(discreto, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(discreto, GTK_ALIGN_START);
+    GtkWidget *campana = gtk_image_new_from_icon_name("preferences-system-notifications-symbolic");
+    gtk_image_set_pixel_size(GTK_IMAGE(campana), 14);
+    gtk_widget_add_css_class(campana, "opendock-campana");
+    gtk_widget_set_margin_start(campana, 23);
+    gtk_widget_set_hexpand(campana, TRUE);
+    gtk_widget_set_halign(campana, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(discreto), campana);
+    GtkWidget *no_leidas = gtk_label_new("1");
+    gtk_widget_add_css_class(no_leidas, "opendock-no-leidas");
+    gtk_widget_set_valign(no_leidas, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_end(no_leidas, 14);
+    gtk_box_append(GTK_BOX(discreto), no_leidas);
+
+    GtkWidget *pila = gtk_stack_new();
+    gtk_stack_set_hhomogeneous(GTK_STACK(pila), FALSE);
+    gtk_stack_set_vhomogeneous(GTK_STACK(pila), FALSE);
+    gtk_stack_add_named(GTK_STACK(pila), tarjeta, "aviso");
+    gtk_stack_add_named(GTK_STACK(pila), discreto, "discreto");
+    gtk_window_set_child(GTK_WINDOW(win), pila);
+
+    /* Clic en el aviso o la campana: abre el centro de notificaciones. */
+    GtkGesture *clic = gtk_gesture_click_new();
+    g_signal_connect(clic, "released", G_CALLBACK(al_pulsar_notch), NULL);
+    gtk_widget_add_controller(win, GTK_EVENT_CONTROLLER(clic));
 
     GtkCssProvider *css = gtk_css_provider_new();
     gtk_css_provider_load_from_string(css,
@@ -198,7 +265,11 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
         "}"
         ".opendock-aviso-hora {"
         "  color: #6E6E73; font-size: 12px;"
-        "}");
+        "}"
+        ".opendock-campana { color: #FFFFFF; }"
+        ".opendock-no-leidas { min-width: 24px; min-height: 20px; padding: 0 7px;"
+        "  border-radius: 10px; background: #0A84FF; color: #FFFFFF;"
+        "  font-size: 12px; font-weight: 600; }");
     gtk_style_context_add_provider_for_display(gtk_widget_get_display(win),
         GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(css);
@@ -208,6 +279,8 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
     g_notch.lbl_titulo = titulo;
     g_notch.lbl_cuerpo = cuerpo;
     g_notch.lbl_hora = hora;
+    g_notch.pila = pila;
+    g_notch.lbl_no_leidas = no_leidas;
 
 #if HAVE_LAYER_SHELL
     if (backend == OD_BACKEND_WAYLAND && gtk_layer_is_supported()) {
@@ -255,26 +328,29 @@ void od_notch_mostrar_aviso(const char *app_name, const char *resumen,
         gtk_image_set_from_icon_name(GTK_IMAGE(g_notch.icono), "dialog-information-symbolic");
     }
 
-    if (g_notch.temporizador_autocierre) {
-        g_source_remove(g_notch.temporizador_autocierre);
-        g_notch.temporizador_autocierre = 0;
-    }
+    gtk_stack_set_visible_child_name(GTK_STACK(g_notch.pila), "aviso");
+    mostrar(OD_AVISO_HOLD_S);
+}
 
-    gtk_widget_set_visible(g_notch.ventana, TRUE);
-    g_notch.objetivo_visible = TRUE;
+void od_notch_mostrar_discreto(void)
+{
+    if (!g_notch.iniciado) return;
+    g_notch.no_leidas++;
+    char txt[16];
+    g_snprintf(txt, sizeof txt, "%u", g_notch.no_leidas);
+    gtk_label_set_text(GTK_LABEL(g_notch.lbl_no_leidas), txt);
+    gtk_stack_set_visible_child_name(GTK_STACK(g_notch.pila), "discreto");
+    mostrar(OD_DISCRETO_HOLD_S);
+}
 
-#if HAVE_X11
-    if (g_notch.backend == OD_BACKEND_X11) {
-        colocar_x11();
-    } else
-#endif
-    {
-        od_muelle_fijar_objetivo(&g_notch.muelle_margen, g_notch.alto_barra);
-        iniciar_animacion();
-    }
+gboolean od_notch_visible(void)
+{
+    return g_notch.iniciado && g_notch.objetivo_visible;
+}
 
-    g_notch.temporizador_autocierre = g_timeout_add(
-        (guint)(OD_AVISO_HOLD_S * 1000), al_expirar, NULL);
+void od_notch_marcar_leidas(void)
+{
+    g_notch.no_leidas = 0;
 }
 
 void od_notch_ocultar(void)

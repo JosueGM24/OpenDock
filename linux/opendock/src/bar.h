@@ -15,4 +15,7 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend);
  * app con foco (foreign-toplevel en Wayland, _NET_ACTIVE_WINDOW en X11). */
 void od_bar_set_app_activa(const char *nombre, const char *icono_nombre);
 
+/* Activa o desactiva No molestar (lo guarda y lo refleja en todas partes). */
+void od_bar_fijar_no_molestar(gboolean activo);
+
 #endif

@@ -19,7 +19,17 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend);
 void od_notch_mostrar_aviso(const char *app_name, const char *resumen,
     const char *cuerpo, GdkPixbuf *icono, const char *icono_nombre);
 
+/* No molestar: en vez del aviso, una campana de 112×34 con el número de
+ * notificaciones sin leer (se suma una cada vez). */
+void od_notch_mostrar_discreto(void);
+
 /* Oculta el aviso actual con la animación de cierre (si lo hay). */
 void od_notch_ocultar(void);
+
+/* TRUE mientras el aviso (o la campana) está a la vista. */
+gboolean od_notch_visible(void);
+
+/* Al abrir el centro: las notificaciones ya se han visto. */
+void od_notch_marcar_leidas(void);
 
 #endif

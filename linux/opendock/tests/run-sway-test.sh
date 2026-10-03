@@ -143,6 +143,55 @@ print(buscar(json.load(sys.stdin)))')
         fi
     fi
 
+    if [[ "$PHASES" == *centro* ]]; then
+        centro() {
+            gdbus call --session --dest io.github.josuegm24.OpenDock \
+                --object-path /io/github/josuegm24/OpenDock \
+                --method org.gtk.Actions.Activate centro '[]' '{}' >/dev/null
+        }
+        captura() {  # captura <archivo> <check>
+            grim "$ARTEFACTOS/$1"
+            python3 "$CHECK_PY" "$ARTEFACTOS/$1" --width "$ANCHO" --height "$ALTO" \
+                --bar-height "$BAR_ALTURA" --check "$2"
+        }
+        # Una notificación con acciones (gdbus: notify-send -A se queda esperando).
+        gdbus call --session --dest org.freedesktop.Notifications \
+            --object-path /org/freedesktop/Notifications \
+            --method org.freedesktop.Notifications.Notify \
+            "CI" 0 "" "Con acciones" "Cuerpo largo de una notificación de prueba" \
+            '["default", "Abrir", "ok", "Vale"]' '{}' 5000 >/dev/null
+        sleep 5   # que se vaya el aviso del notch
+
+        centro; sleep 1
+        captura 05-centro.png center || ok=1
+        centro; sleep 1
+        captura 06-centro-cerrado.png closed || ok=1
+
+        # CloseNotification de todas (los ids empiezan en 1): el centro queda vacío.
+        for id in $(seq 1 10); do
+            gdbus call --session --dest org.freedesktop.Notifications \
+                --object-path /org/freedesktop/Notifications \
+                --method org.freedesktop.Notifications.CloseNotification "$id" >/dev/null 2>&1 || true
+        done
+        centro; sleep 1
+        captura 07-centro-vacio.png center-empty || ok=1
+        centro; sleep 1
+
+        export SWAYSOCK
+        SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock 2>/dev/null | head -n1 || true)
+        # Mini notch: cursor al centro de la barra. sway sin cabeza puede no
+        # tener puntero, así que esto sólo avisa.
+        if swaymsg seat seat0 cursor set "$((ANCHO / 2))" 10 >/dev/null 2>&1; then
+            sleep 0.2
+            captura 08-mini.png mini || echo "AVISO: no se vio la pastilla del mini notch"
+            sleep 0.6
+            captura 09-rapida.png quick || echo "AVISO: no se vio la vista rápida"
+            swaymsg seat seat0 cursor set "$((ANCHO / 2))" 400 >/dev/null 2>&1 || true
+        else
+            echo "AVISO: sway no acepta mover el cursor; se omite el mini notch"
+        fi
+    fi
+
     if [[ "$PHASES" == *dock* ]]; then
         if command -v foot >/dev/null; then
             foot &

@@ -13,6 +13,9 @@
  *   opendock --replace     reemplaza cualquier servidor de notificaciones
  *                          (org.freedesktop.Notifications) que ya exista
  *   opendock --help
+ *
+ * Acción por D-Bus (para un atajo de teclado del escritorio):
+ *   gdbus call --session --dest io.github.josuegm24.OpenDock  *     --object-path /io/github/josuegm24/OpenDock  *     --method org.gtk.Actions.Activate centro [] {}
  */
 #include "config.h"
 #include "opendock-build-config.h"
@@ -21,6 +24,8 @@
 #include "notch.h"
 #include "notifications.h"
 #include "bar.h"
+#include "centro.h"
+#include "mini.h"
 #include <gtk/gtk.h>
 #include <glib-unix.h>
 #include <locale.h>
@@ -38,6 +43,12 @@ static gboolean manejar_senal_salida(gpointer datos)
     g_message("opendock: señal de salida recibida, cerrando de forma ordenada");
     g_application_quit(e->app);
     return G_SOURCE_REMOVE;
+}
+
+static void al_accion_centro(GSimpleAction *a, GVariant *p, gpointer datos)
+{
+    (void)a; (void)p; (void)datos;
+    od_centro_alternar();
 }
 
 static void al_activar(GApplication *app, gpointer datos)
@@ -78,6 +89,12 @@ static void al_activar(GApplication *app, gpointer datos)
     e->cfg->reemplazar_notificaciones = e->reemplazar;
     od_notificaciones_iniciar(e->cfg);
     od_bar_iniciar(e->cfg, backend);
+    od_mini_iniciar(e->cfg, backend);
+
+    GSimpleAction *centro = g_simple_action_new("centro", NULL);
+    g_signal_connect(centro, "activate", G_CALLBACK(al_accion_centro), NULL);
+    g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(centro));
+    g_object_unref(centro);
 
     /* La fase siguiente añade aquí: dock. */
 }

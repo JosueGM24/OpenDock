@@ -70,6 +70,8 @@ sources = [
   'src/bar.c',
   'src/volume.c',
   'src/power.c',
+  'src/centro.c',
+  'src/mini.c',
 ]
 
 # Protocolo wlr-foreign-toplevel-management: se añade en la fase 5 (dock), generado

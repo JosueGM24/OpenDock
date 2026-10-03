@@ -22,6 +22,9 @@ typedef struct {
 OdConfig *od_config_cargar(void);
 void od_config_liberar(OdConfig *cfg);
 
+/* Abre config.ini con la app predeterminada (sin shell intermedio). */
+void od_config_abrir(OdConfig *cfg);
+
 /* Cambia un valor booleano y lo guarda en config.ini sin tocar el resto. */
 void od_config_guardar_bool(OdConfig *cfg, const char *grupo, const char *clave,
     gboolean valor);

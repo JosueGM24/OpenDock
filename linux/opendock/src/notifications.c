@@ -5,6 +5,8 @@
  */
 #include "notifications.h"
 #include "notch.h"
+#include "centro.h"
+#include "mini.h"
 #include "opendock-build-config.h"
 #include <gio/gio.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
@@ -13,6 +15,7 @@
 #define OD_MAX_CADENA      4096      /* límite para app_name/summary/body/etc. */
 #define OD_MAX_IMG_LADO    512       /* ancho/alto máximo de image-data */
 #define OD_MAX_IMG_BYTES   (4 * 1024 * 1024)
+#define OD_MAX_ACCIONES    8         /* pares clave/etiqueta que guardamos */
 
 static const gchar introspeccion_xml[] =
     "<node>"
@@ -102,6 +105,21 @@ static GdkPixbuf *decodificar_image_data(GVariant *v)
     return resultado;
 }
 
+/* "as" de pares clave, etiqueta -> gchar** acotado (como mucho
+ * OD_MAX_ACCIONES pares, cadenas limitadas). Se descarta un par a medias. */
+static gchar **leer_acciones(GVariantIter *iter)
+{
+    GPtrArray *v = g_ptr_array_new();
+    const gchar *clave, *etiqueta;
+    while (v->len < OD_MAX_ACCIONES * 2 && g_variant_iter_next(iter, "&s", &clave)) {
+        if (!g_variant_iter_next(iter, "&s", &etiqueta)) break;
+        g_ptr_array_add(v, limitar_cadena(clave));
+        g_ptr_array_add(v, limitar_cadena(etiqueta));
+    }
+    g_ptr_array_add(v, NULL);
+    return (gchar **)g_ptr_array_free(v, FALSE);
+}
+
 static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocacion)
 {
     const gchar *app_name_in = NULL, *app_icon_in = NULL, *summary_in = NULL, *body_in = NULL;
@@ -117,6 +135,7 @@ static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocaci
     g_variant_get(parametros, "(&su&s&s&sas@a{sv}i)",
         &app_name_in, &replaces_id, &app_icon_in, &summary_in, &body_in,
         &iter_acciones, &hints, &expire_timeout);
+    gchar **acciones = iter_acciones ? leer_acciones(iter_acciones) : g_new0(gchar *, 1);
     if (iter_acciones) g_variant_iter_free(iter_acciones);
     (void)expire_timeout; /* la duración del peek la fija el notch (DESIGN.md: 4,5 s) */
 
@@ -142,10 +161,37 @@ static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocaci
     /* No molestar: la notificación se acepta (devuelve su id) pero no se
      * muestra, salvo las críticas (urgency = 2), igual que en Windows. */
     guint8 urgencia = 1;
-    if (hints) g_variant_lookup(hints, "urgency", "y", &urgencia);
+    gboolean transitoria = FALSE;
+    if (hints) {
+        g_variant_lookup(hints, "urgency", "y", &urgencia);
+        g_variant_lookup(hints, "transient", "b", &transitoria);
+    }
     if (!g_srv.cfg->no_molestar || urgencia >= 2)
         od_notch_mostrar_aviso(app_name, summary, body, pixbuf,
             (app_icon && *app_icon) ? app_icon : NULL);
+    else
+        od_notch_mostrar_discreto();
+
+    /* Las transitorias sólo se avisan; las demás se quedan en el centro. */
+    if (!transitoria) {
+        OdNotif *n = g_new0(OdNotif, 1);
+        n->id = id;
+        n->app = g_strdup(app_name);
+        n->titulo = g_strdup(summary);
+        n->cuerpo = g_strdup(body);
+        n->icono_nombre = (app_icon && *app_icon) ? g_strdup(app_icon) : NULL;
+        if (pixbuf) {
+            G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+            n->icono = gdk_texture_new_for_pixbuf(pixbuf);
+            G_GNUC_END_IGNORE_DEPRECATIONS
+        }
+        n->acciones = acciones;
+        acciones = NULL;
+        n->hora_us = g_get_real_time();
+        od_centro_agregar(n);
+        od_mini_refrescar();
+    }
+    g_strfreev(acciones);
 
     if (pixbuf) g_object_unref(pixbuf);
     g_free(app_name);
@@ -169,8 +215,10 @@ static void manejar_close(GVariant *parametros, GDBusMethodInvocation *invocacio
 {
     guint32 id = 0;
     g_variant_get(parametros, "(u)", &id);
-    if (id != 0 && id == g_srv.id_actual) {
-        od_notch_ocultar();
+    if (id != 0) {
+        if (id == g_srv.id_actual) od_notch_ocultar();
+        od_centro_quitar(id);
+        od_mini_refrescar();
         emitir_cerrado(id, 3); /* 3 = cerrada por CloseNotification */
     }
     g_dbus_method_invocation_return_value(invocacion, NULL);
@@ -247,8 +295,30 @@ static void al_perder_nombre(GDBusConnection *conexion, const gchar *nombre, gpo
         nombre);
 }
 
+/* El usuario pulsó una acción en el centro: se avisa al cliente y la
+ * notificación se da por cerrada (2 = descartada por el usuario). */
+static void al_accion(guint32 id, const char *clave)
+{
+    if (g_srv.bus) {
+        g_dbus_connection_emit_signal(g_srv.bus, NULL,
+            "/org/freedesktop/Notifications", "org.freedesktop.Notifications",
+            "ActionInvoked", g_variant_new("(us)", id, clave), NULL);
+    }
+    emitir_cerrado(id, 2);
+    od_mini_refrescar();
+}
+
+static void al_descartar(guint32 id)
+{
+    emitir_cerrado(id, 2);
+    od_mini_refrescar();
+}
+
 void od_notificaciones_iniciar(OdConfig *cfg)
 {
+    static const OdCentroRetrollamadas rr = { al_accion, al_descartar };
+    od_centro_iniciar(cfg, od_sesion_backend(), &rr);
+
     g_srv.cfg = cfg;
     g_srv.siguiente_id = 1;
 

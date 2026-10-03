@@ -92,6 +92,48 @@ def check_notch(img, w):
     return encontrado
 
 
+PANEL = (0x1C, 0x1C, 0x1E)   # fondo del centro / de la barra (DESIGN.md)
+TARJETA = (0x2C, 0x2C, 0x2E)  # tarjeta del centro
+
+
+def muestra(img, x, y, esperado, nombre, tol=10):
+    px = img.getpixel((x, y))
+    ok = casi(px[:3], esperado, tol)
+    print(f"{'ok' if ok else 'FALLO'}: {nombre} en ({x},{y}) = {px}, esperaba {esperado}")
+    return ok
+
+
+def check_center(img, w, bar_height, con_tarjeta):
+    """Centro de notificaciones abierto: panel de 384 de ancho centrado bajo
+    la barra; la primera tarjeta empieza tras la cabecera de 56."""
+    cx = w // 2
+    ok = muestra(img, cx - 192 + 8, bar_height + 28, PANEL, "panel del centro (cabecera)")
+    y_tarjeta = bar_height + 56 + 35
+    if con_tarjeta:
+        ok &= muestra(img, cx - 60, y_tarjeta, TARJETA, "primera tarjeta")
+    else:
+        px = img.getpixel((cx, y_tarjeta))
+        vacio = not casi(px[:3], TARJETA, 6)
+        print(f"{'ok' if vacio else 'FALLO'}: sin tarjetas en ({cx},{y_tarjeta}) = {px}")
+        ok &= vacio
+    return ok
+
+
+def check_closed(img, w, bar_height, bg):
+    """Nada bajo la barra en el centro (centro y notch cerrados)."""
+    return muestra(img, w // 2, bar_height + 120, bg, "fondo bajo la barra (centro cerrado)")
+
+
+def check_mini(img, w, bar_height):
+    """Pastilla del mini notch (110×9) justo bajo la barra, en el centro."""
+    return muestra(img, w // 2, bar_height + 3, PANEL, "pastilla del mini notch")
+
+
+def check_quick(img, w, bar_height):
+    """Vista rápida (272×44) bajo la barra: su fondo a la izquierda del texto."""
+    return muestra(img, w // 2 - 130, bar_height + 30, PANEL, "vista rápida")
+
+
 def check_dock(img, w, h):
     """El panel del dock debe verse como una franja oscura cerca del
     borde inferior de la pantalla."""
@@ -113,7 +155,8 @@ def main():
     ap.add_argument("--top-offset", type=int, default=0,
                     help="alto de la barra sobre las esquinas de arriba (corners)")
     ap.add_argument("--bg", type=int, nargs=3, default=[255, 255, 255])
-    ap.add_argument("--check", required=True, choices=["corners", "bar", "notch", "dock"])
+    ap.add_argument("--check", required=True, choices=["corners", "bar", "notch", "dock", "center", "center-empty",
+                             "closed", "mini", "quick"])
     args = ap.parse_args()
 
     img = Image.open(args.imagen).convert("RGB")
@@ -127,6 +170,14 @@ def main():
         ok = check_notch(img, args.width)
     elif args.check == "dock":
         ok = check_dock(img, args.width, args.height)
+    elif args.check in ("center", "center-empty"):
+        ok = check_center(img, args.width, args.bar_height, args.check == "center")
+    elif args.check == "closed":
+        ok = check_closed(img, args.width, args.bar_height, tuple(args.bg))
+    elif args.check == "mini":
+        ok = check_mini(img, args.width, args.bar_height)
+    elif args.check == "quick":
+        ok = check_quick(img, args.width, args.bar_height)
     else:
         ok = False
 
