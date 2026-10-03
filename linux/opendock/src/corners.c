@@ -34,14 +34,14 @@ static void dibujar_esquina(GtkDrawingArea *area, cairo_t *cr, int w, int h, gpo
 
     switch (esquina) {
         case OD_ESQUINA_SUP_IZQ:
-            cx = r; cy = r; ang_ini = M_PI; ang_fin = 1.5 * M_PI; break;
+            cx = r; cy = r; ang_ini = G_PI; ang_fin = 1.5 * G_PI; break;
         case OD_ESQUINA_SUP_DER:
-            cx = 0; cy = r; ang_ini = 1.5 * M_PI; ang_fin = 2.0 * M_PI; break;
+            cx = 0; cy = r; ang_ini = 1.5 * G_PI; ang_fin = 2.0 * G_PI; break;
         case OD_ESQUINA_INF_IZQ:
-            cx = r; cy = 0; ang_ini = 0.5 * M_PI; ang_fin = M_PI; break;
+            cx = r; cy = 0; ang_ini = 0.5 * G_PI; ang_fin = G_PI; break;
         case OD_ESQUINA_INF_DER:
         default:
-            cx = 0; cy = 0; ang_ini = 0.0; ang_fin = 0.5 * M_PI; break;
+            cx = 0; cy = 0; ang_ini = 0.0; ang_fin = 0.5 * G_PI; break;
     }
 
     cairo_save(cr);
@@ -93,7 +93,7 @@ static GtkWidget *crear_ventana_esquina(GtkApplication *app, OdEsquina esquina, 
     gtk_window_set_decorated(GTK_WINDOW(win), FALSE);
     gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
     gtk_widget_set_can_target(win, FALSE);
-    gtk_widget_set_default_size(win, radio, radio);
+    gtk_window_set_default_size(GTK_WINDOW(win), radio, radio);
 
     GtkWidget *area = crear_contenido(esquina, radio);
     gtk_window_set_child(GTK_WINDOW(win), area);
