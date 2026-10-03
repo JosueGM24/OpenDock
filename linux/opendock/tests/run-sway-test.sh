@@ -87,7 +87,7 @@ ejecutar_dentro_de_sway() {
     if [[ "$PHASES" == *notch* ]]; then
         if command -v notify-send >/dev/null; then
             notify-send "Prueba" "Hola desde CI"
-            sleep 1
+            sleep 2
             grim "$ARTEFACTOS/03-notch.png"
             if ! python3 "$CHECK_PY" "$ARTEFACTOS/03-notch.png" --width "$ANCHO" --check notch; then
                 ok=1

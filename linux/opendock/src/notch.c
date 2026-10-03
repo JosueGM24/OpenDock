@@ -109,6 +109,14 @@ static gboolean fotograma_muelle(GtkWidget *widget, GdkFrameClock *clock, gpoint
 static void iniciar_animacion(void)
 {
     g_notch.ultimo_us = 0;
+    /* Adelantamos el muelle "a mano" un buen trozo antes de depender del
+     * frame clock: en compositores sin vsync real (p. ej. sway con salida
+     * "headless" en integración continua) el primer tic puede tardar o no
+     * llegar nunca, y no queremos que el notch se quede invisible por eso.
+     * Con k=420 esto ya deja el valor pegado al objetivo; los tics reales
+     * que lleguen después sólo afinan el último tramo. */
+    od_muelle_actualizar(&g_notch.muelle_margen, 0.3);
+    aplicar_margen((int)lround(g_notch.muelle_margen.valor));
     gtk_widget_add_tick_callback(g_notch.ventana, fotograma_muelle, NULL, NULL);
 }
 
@@ -265,6 +273,9 @@ void od_notch_mostrar_aviso(const char *app_name, const char *resumen,
         od_muelle_fijar_objetivo(&g_notch.muelle_margen, g_notch.alto_barra);
         iniciar_animacion();
     }
+
+    g_message("opendock: notch mostrado, visible=%d margen=%.1f",
+        gtk_widget_get_visible(g_notch.ventana), g_notch.muelle_margen.valor);
 
     g_notch.temporizador_autocierre = g_timeout_add(
         (guint)(OD_AVISO_HOLD_S * 1000), al_expirar, NULL);
