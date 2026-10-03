@@ -51,6 +51,31 @@ endif
 
 conf = configuration_data()
 conf.set('HAVE_LAYER_SHELL', have_layer_shell ? 1 : 0)
+proto_sources = []
+# Protocolo wlr-foreign-toplevel-management (ventanas abiertas para el dock),
+# generado con wayland-scanner a partir del XML vendido en protocols/.
+have_foreign_toplevel = false
+proto_xml = meson.current_source_dir() / 'protocols/wlr-foreign-toplevel-management-unstable-v1.xml'
+wayland_scanner = find_program('wayland-scanner', required: false)
+if have_layer_shell and wayland_scanner.found() and fs.exists(proto_xml)
+  wl_proto_header = custom_target('wlr-foreign-toplevel-client-header',
+    input: proto_xml,
+    output: 'wlr-foreign-toplevel-management-unstable-v1-client-protocol.h',
+    command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'])
+  wl_proto_code = custom_target('wlr-foreign-toplevel-code',
+    input: proto_xml,
+    output: 'wlr-foreign-toplevel-management-unstable-v1-protocol.c',
+    command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
+  gtk_wayland_dep = dependency('gtk4-wayland', required: false)
+  wayland_client_dep = dependency('wayland-client', required: false)
+  if gtk_wayland_dep.found() and wayland_client_dep.found()
+    proto_sources = [wl_proto_code, wl_proto_header]
+    deps += [gtk_wayland_dep, wayland_client_dep]
+    have_foreign_toplevel = true
+  endif
+endif
+
+conf.set('HAVE_FOREIGN_TOPLEVEL', have_foreign_toplevel ? 1 : 0)
 conf.set('HAVE_X11', have_x11 ? 1 : 0)
 conf.set('HAVE_PULSE', have_pulse ? 1 : 0)
 conf.set('HAVE_CANBERRA', have_canberra ? 1 : 0)
@@ -72,32 +97,11 @@ sources = [
   'src/power.c',
   'src/centro.c',
   'src/mini.c',
+  'src/ventanas.c',
+  'src/dock.c',
 ]
 
-# Protocolo wlr-foreign-toplevel-management: se añade en la fase 5 (dock), generado
-# con wayland-scanner a partir del XML vendido en protocols/.
-have_foreign_toplevel = false
-proto_xml = meson.current_source_dir() / 'protocols/wlr-foreign-toplevel-management-unstable-v1.xml'
-wayland_scanner = find_program('wayland-scanner', required: false)
-if have_layer_shell and wayland_scanner.found() and fs.exists(proto_xml)
-  wl_proto_header = custom_target('wlr-foreign-toplevel-client-header',
-    input: proto_xml,
-    output: 'wlr-foreign-toplevel-management-unstable-v1-client-protocol.h',
-    command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'])
-  wl_proto_code = custom_target('wlr-foreign-toplevel-code',
-    input: proto_xml,
-    output: 'wlr-foreign-toplevel-management-unstable-v1-protocol.c',
-    command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
-  sources += [wl_proto_code]
-  sources += [wl_proto_header]
-  have_foreign_toplevel = true
-  wayland_client_dep = dependency('wayland-client', required: false)
-  if wayland_client_dep.found()
-    deps += wayland_client_dep
-  endif
-endif
-
-executable('opendock', sources,
+executable('opendock', sources + proto_sources,
   include_directories: inc,
   dependencies: deps,
   install: true)

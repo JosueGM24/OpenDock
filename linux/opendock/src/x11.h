@@ -20,6 +20,14 @@ static inline Display *od_x11_display(GdkSurface *surface)
     return d;
 }
 
+static inline Display *od_x11_display_de(GdkDisplay *display)
+{
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    Display *d = gdk_x11_display_get_xdisplay(display);
+    G_GNUC_END_IGNORE_DEPRECATIONS
+    return d;
+}
+
 static inline Window od_x11_ventana(GdkSurface *surface)
 {
     G_GNUC_BEGIN_IGNORE_DEPRECATIONS

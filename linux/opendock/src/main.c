@@ -28,6 +28,7 @@
 #include "bar.h"
 #include "centro.h"
 #include "mini.h"
+#include "dock.h"
 #include <gtk/gtk.h>
 #include <glib-unix.h>
 #include <locale.h>
@@ -100,6 +101,7 @@ static void al_activar(GApplication *app, gpointer datos)
     od_notificaciones_iniciar(e->cfg);
     od_bar_iniciar(e->cfg, backend);
     od_mini_iniciar(e->cfg, backend);
+    od_dock_iniciar(e->cfg, backend);
 
     GSimpleAction *centro = g_simple_action_new("centro", NULL);
     g_signal_connect(centro, "activate", G_CALLBACK(al_accion_centro), NULL);
@@ -110,7 +112,6 @@ static void al_activar(GApplication *app, gpointer datos)
     g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(cursor));
     g_object_unref(cursor);
 
-    /* La fase siguiente añade aquí: dock. */
 }
 
 int main(int argc, char **argv)

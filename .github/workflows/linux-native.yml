@@ -66,7 +66,7 @@ jobs:
     name: Prueba funcional (sway sin cabeza, Wayland)
     runs-on: ubuntu-24.04
     env:
-      PHASES: corners,bar,notch,centro
+      PHASES: corners,bar,notch,centro,dock
     steps:
       - uses: actions/checkout@v4
       - name: Paquetes

@@ -199,15 +199,54 @@ print(buscar(json.load(sys.stdin)))')
     fi
 
     if [[ "$PHASES" == *dock* ]]; then
+        # Sin ventanas y sin apps ancladas instaladas (en CI no hay ninguna de
+        # las de por defecto), el dock no dibuja nada.
+        grim "$ARTEFACTOS/12-sin-dock.png"
+        if python3 "$CHECK_PY" "$ARTEFACTOS/12-sin-dock.png" --width "$ANCHO" --height "$ALTO" --check dock >/dev/null; then
+            echo "FALLO: el dock se dibuja sin ninguna app"
+            ok=1
+        else
+            echo "ok: sin apps, el dock no se dibuja"
+        fi
         if command -v foot >/dev/null; then
             foot &
             FOOT_PID=$!
             sleep 1.5
-            grim "$ARTEFACTOS/04-dock.png"
-            if ! python3 "$CHECK_PY" "$ARTEFACTOS/04-dock.png" --width "$ANCHO" --height "$ALTO" --check dock; then
+            # La ventana de foot sale en el dock (zwlr_foreign_toplevel)...
+            grim "$ARTEFACTOS/13-dock.png"
+            if ! python3 "$CHECK_PY" "$ARTEFACTOS/13-dock.png" --width "$ANCHO" --height "$ALTO" --check dock; then
+                ok=1
+            fi
+            # ...y termina por encima de la media altura que reserva el dock.
+            export SWAYSOCK
+            SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock 2>/dev/null | head -n1 || true)
+            fondo_ventana=$(swaymsg -t get_tree | python3 -c '
+import json, sys
+def buscar(n):
+    if n.get("app_id") == "foot":
+        return n["rect"]["y"] + n["rect"]["height"]
+    for h in n.get("nodes", []) + n.get("floating_nodes", []):
+        r = buscar(h)
+        if r is not None:
+            return r
+print(buscar(json.load(sys.stdin)))')
+            echo "ventana foot termina en y=$fondo_ventana"
+            if [[ "$fondo_ventana" =~ ^[0-9]+$ ]] && [ "$fondo_ventana" -le $((ALTO - 42)) ]; then
+                echo "ok: la ventana deja libres los 42 px del dock"
+            else
+                echo "FALLO: la ventana no respeta la zona del dock"
                 ok=1
             fi
             kill "$FOOT_PID" 2>/dev/null || true
+            sleep 1
+            # Al cerrarla, el icono (no anclado) desaparece.
+            grim "$ARTEFACTOS/14-dock-vacio.png"
+            if python3 "$CHECK_PY" "$ARTEFACTOS/14-dock-vacio.png" --width "$ANCHO" --height "$ALTO" --check dock >/dev/null; then
+                echo "FALLO: el icono de foot sigue en el dock tras cerrarla"
+                ok=1
+            else
+                echo "ok: al cerrar foot su icono sale del dock"
+            fi
         else
             echo "AVISO: no hay 'foot' disponible, se omite la comprobación de ventana abierta en el dock"
         fi
