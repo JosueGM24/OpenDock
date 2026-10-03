@@ -1,0 +1,42 @@
+# Mantenedor: Josué Gómez <josuegm24@github>
+pkgname=opendock-git
+_repo=OpenDock
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Esquinas redondeadas, notch con notificaciones, barra superior y dock para Wayland (layer-shell) y X11"
+arch=('x86_64' 'aarch64')
+url="https://github.com/JosueGM24/OpenDock"
+license=('MIT')
+depends=('gtk4' 'glib2' 'gtk4-layer-shell' 'wayland' 'libx11' 'libpulse' 'libcanberra'
+         'hicolor-icon-theme')
+makedepends=('git' 'meson' 'ninja')
+optdepends=('networkmanager: Wi-Fi en la barra y el centro de control'
+            'upower: batería en la barra'
+            'bluez: Bluetooth en el centro de control'
+            'gnome-shell-extension-opendock: lo mismo dentro de GNOME Shell')
+provides=('opendock')
+conflicts=('opendock')
+source=("git+https://github.com/JosueGM24/OpenDock.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$_repo"
+    local base
+    base=$(sed -n "s/^  version: '\(.*\)',$/\1/p" linux/opendock/meson.build)
+    printf "%s.r%s.%s" "$base" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+    arch-meson "$_repo/linux/opendock" build
+    meson compile -C build
+}
+
+check() {
+    ./build/opendock --version
+}
+
+package() {
+    meson install -C build --destdir "$pkgdir"
+    install -Dm644 "$_repo/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "$_repo/sounds/CREDITS.txt" "$pkgdir/usr/share/licenses/$pkgname/SOUNDS-CREDITS.txt"
+}

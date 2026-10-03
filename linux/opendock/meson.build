@@ -119,6 +119,9 @@ install_data(files(
     '../../sounds/complete.wav', '../../sounds/CREDITS.txt'),
   install_dir: dir_sonidos)
 
+install_data('../../icon_512.png', rename: 'opendock.png',
+  install_dir: get_option('datadir') / 'icons' / 'hicolor' / '512x512' / 'apps')
+
 install_data('opendock.desktop', install_dir: get_option('sysconfdir') / 'xdg/autostart')
 
 summary({

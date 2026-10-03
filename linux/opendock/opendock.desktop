@@ -7,3 +7,5 @@ Icon=opendock
 Terminal=false
 NoDisplay=true
 X-GNOME-Autostart-enabled=true
+# En GNOME (Mutter no tiene layer-shell) va la extensión de GNOME Shell.
+NotShowIn=GNOME;

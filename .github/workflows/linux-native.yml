@@ -31,6 +31,61 @@ jobs:
         working-directory: linux/opendock
         run: ./build/opendock --version
 
+  paquete-arch:
+    name: Paquete de Arch (makepkg)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Paquetes
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed base-devel git meson ninja \
+            gtk4 gtk4-layer-shell glib2 libpulse libcanberra libx11 wayland hicolor-icon-theme
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: makepkg con el código de este commit
+        run: |
+          useradd -m constructor
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          install -d -o constructor /tmp/pkg/src
+          cp linux/opendock/PKGBUILD /tmp/pkg/
+          git clone -q "$GITHUB_WORKSPACE" /tmp/pkg/src/OpenDock
+          chown -R constructor /tmp/pkg
+          cd /tmp/pkg
+          # -e: usa src/OpenDock tal cual (el clon de este commit) en vez de descargarlo.
+          runuser -u constructor -- makepkg -e -f --noconfirm
+      - name: Contenido del paquete
+        run: |
+          cd /tmp/pkg
+          ls -la *.pkg.tar.zst
+          tar -tf *.pkg.tar.zst > lista.txt
+          for f in usr/bin/opendock etc/xdg/autostart/opendock.desktop \
+                   usr/share/opendock/sounds/simple2.wav \
+                   usr/share/icons/hicolor/512x512/apps/opendock.png \
+                   usr/share/licenses/opendock-git/LICENSE; do
+            if grep -qx "$f" lista.txt; then echo "ok: $f"; else echo "FALLO: falta $f"; exit 1; fi
+          done
+          pacman -U --noconfirm *.pkg.tar.zst
+          opendock --version
+
+  build-fedora:
+    name: Compilar (Fedora, como dice el README)
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Paquetes
+        run: |
+          dnf install -y gcc meson ninja-build pkgconf-pkg-config gtk4-devel gtk4-layer-shell-devel \
+            wayland-devel libX11-devel pulseaudio-libs-devel libcanberra-devel
+      - uses: actions/checkout@v4
+      - name: Configurar, compilar e instalar
+        run: |
+          meson setup build linux/opendock --prefix=/usr --werror
+          meson compile -C build
+          meson install -C build
+          opendock --version
+
   build-ubuntu:
     name: Compilar (Ubuntu 24.04)
     runs-on: ubuntu-24.04
