@@ -17,6 +17,7 @@
 #include "config.h"
 #include "opendock-build-config.h"
 #include "session.h"
+#include "corners.h"
 #include <gtk/gtk.h>
 #include <glib-unix.h>
 #include <locale.h>
@@ -66,10 +67,13 @@ static void al_activar(GApplication *app, gpointer datos)
 
     if (backend == OD_BACKEND_DESCONOCIDO) {
         g_printerr("opendock: no se detecta ni WAYLAND_DISPLAY ni DISPLAY; nada que hacer.\n");
+        return;
     }
 
-    /* Las fases siguientes añaden aquí: esquinas, notch/notificaciones,
-     * barra superior y dock, eligiendo backend Wayland o X11. */
+    od_esquinas_iniciar(e->cfg, backend);
+
+    /* Las fases siguientes añaden aquí: notch/notificaciones, barra
+     * superior y dock. */
 }
 
 int main(int argc, char **argv)

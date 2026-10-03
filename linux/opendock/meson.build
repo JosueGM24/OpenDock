@@ -27,9 +27,10 @@ endif
 
 # Backend X11 de GDK: ventanas EWMH dock + _NET_WM_STRUT_PARTIAL.
 gdkx11_dep = dependency('gdk-x11-4.0', required: false)
-have_x11 = gdkx11_dep.found()
+x11_raw_dep = dependency('x11', required: false)
+have_x11 = gdkx11_dep.found() and x11_raw_dep.found()
 if have_x11
-  deps += gdkx11_dep
+  deps += [gdkx11_dep, x11_raw_dep]
 endif
 
 # libpulse: volumen. Opcional (PLAN.md lo marca como dependencia opcional).
@@ -61,6 +62,7 @@ sources = [
   'src/config.c',
   'src/spring.c',
   'src/session.c',
+  'src/corners.c',
 ]
 
 # Protocolo wlr-foreign-toplevel-management: se añade en la fase 5 (dock), generado
