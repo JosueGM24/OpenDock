@@ -20,6 +20,7 @@
 #include "corners.h"
 #include "notch.h"
 #include "notifications.h"
+#include "bar.h"
 #include <gtk/gtk.h>
 #include <glib-unix.h>
 #include <locale.h>
@@ -76,8 +77,9 @@ static void al_activar(GApplication *app, gpointer datos)
     od_notch_iniciar(e->cfg, backend);
     e->cfg->reemplazar_notificaciones = e->reemplazar;
     od_notificaciones_iniciar(e->cfg);
+    od_bar_iniciar(e->cfg, backend);
 
-    /* Las fases siguientes añaden aquí: barra superior y dock. */
+    /* La fase siguiente añade aquí: dock. */
 }
 
 int main(int argc, char **argv)

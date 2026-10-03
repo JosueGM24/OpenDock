@@ -23,27 +23,29 @@ def es_negro(px, tolerancia=24):
     return casi(px[:3], (0, 0, 0), tolerancia)
 
 
-def check_corners(img, w, h, radius, bg):
+def check_corners(img, w, h, radius, bg, top=0):
     """Cada esquina: el píxel extremo (pegado al borde físico) debe ser
-    negro (la máscara); un píxel cerca del borde interior del cuarto de
-    círculo debe mostrar el fondo (la zona transparente deja verlo)."""
+    oscuro (la máscara: negra, o del color de la barra arriba); un píxel
+    cerca del borde interior del cuarto de círculo debe mostrar el fondo
+    (la zona transparente deja verlo). 'top' es el alto de la barra: las
+    esquinas de arriba empiezan debajo de ella."""
     extremos = [
-        (1, 1, "superior izquierda"),
-        (w - 2, 1, "superior derecha"),
+        (1, top + 1, "superior izquierda"),
+        (w - 2, top + 1, "superior derecha"),
         (1, h - 2, "inferior izquierda"),
         (w - 2, h - 2, "inferior derecha"),
     ]
     interiores = [
-        (radius - 3, radius - 3, "superior izquierda"),
-        (w - radius + 2, radius - 3, "superior derecha"),
+        (radius - 3, top + radius - 3, "superior izquierda"),
+        (w - radius + 2, top + radius - 3, "superior derecha"),
         (radius - 3, h - radius + 2, "inferior izquierda"),
         (w - radius + 2, h - radius + 2, "inferior derecha"),
     ]
     ok = True
     for x, y, nombre in extremos:
         px = img.getpixel((x, y))
-        if not es_negro(px):
-            print(f"FALLO: esquina {nombre}: píxel extremo ({x},{y}) = {px}, esperaba negro")
+        if not es_negro(px, 40):
+            print(f"FALLO: esquina {nombre}: píxel extremo ({x},{y}) = {px}, esperaba oscuro")
             ok = False
         else:
             print(f"ok: esquina {nombre}: píxel extremo ({x},{y}) negro {px}")
@@ -106,6 +108,8 @@ def main():
     ap.add_argument("--height", type=int, default=800)
     ap.add_argument("--radius", type=int, default=16)
     ap.add_argument("--bar-height", type=int, default=28)
+    ap.add_argument("--top-offset", type=int, default=0,
+                    help="alto de la barra sobre las esquinas de arriba (corners)")
     ap.add_argument("--bg", type=int, nargs=3, default=[255, 255, 255])
     ap.add_argument("--check", required=True, choices=["corners", "bar", "notch", "dock"])
     args = ap.parse_args()
@@ -113,7 +117,8 @@ def main():
     img = Image.open(args.imagen).convert("RGB")
 
     if args.check == "corners":
-        ok = check_corners(img, args.width, args.height, args.radius, tuple(args.bg))
+        ok = check_corners(img, args.width, args.height, args.radius, tuple(args.bg),
+                           args.top_offset)
     elif args.check == "bar":
         ok = check_bar(img, args.width, args.bar_height)
     elif args.check == "notch":

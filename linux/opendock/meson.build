@@ -35,9 +35,10 @@ endif
 
 # libpulse: volumen. Opcional (PLAN.md lo marca como dependencia opcional).
 pulse_dep = dependency('libpulse', required: false)
-have_pulse = pulse_dep.found()
+pulse_glib_dep = dependency('libpulse-mainloop-glib', required: false)
+have_pulse = pulse_dep.found() and pulse_glib_dep.found()
 if have_pulse
-  deps += pulse_dep
+  deps += [pulse_dep, pulse_glib_dep]
 endif
 
 # libcanberra: sonidos de notificación. Opcional.
@@ -65,6 +66,9 @@ sources = [
   'src/corners.c',
   'src/notch.c',
   'src/notifications.c',
+  'src/bar.c',
+  'src/volume.c',
+  'src/power.c',
 ]
 
 # Protocolo wlr-foreign-toplevel-management: se añade en la fase 5 (dock), generado

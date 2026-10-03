@@ -69,10 +69,13 @@ ejecutar_dentro_de_sway() {
     sleep 2
 
     local ok=0
+    # Con la barra, las esquinas de arriba empiezan debajo de ella.
+    local desplazamiento=0
+    [[ "$PHASES" == *bar* ]] && desplazamiento=$BAR_ALTURA
 
     grim "$ARTEFACTOS/01-esquinas.png"
     if ! python3 "$CHECK_PY" "$ARTEFACTOS/01-esquinas.png" --width "$ANCHO" --height "$ALTO" \
-            --radius "$RADIO" --bg 255 255 255 --check corners; then
+            --radius "$RADIO" --bg 255 255 255 --top-offset "$desplazamiento" --check corners; then
         ok=1
     fi
 
@@ -81,6 +84,35 @@ ejecutar_dentro_de_sway() {
         if ! python3 "$CHECK_PY" "$ARTEFACTOS/02-barra.png" --width "$ANCHO" \
                 --bar-height "$BAR_ALTURA" --check bar; then
             ok=1
+        fi
+        # Zona exclusiva: una ventana (sway la pone a pantalla completa del
+        # espacio de trabajo) debe empezar justo debajo de la barra.
+        if command -v foot >/dev/null && command -v swaymsg >/dev/null; then
+            foot &
+            local foot_pid=$!
+            sleep 1.5
+            local y_ventana
+            y_ventana=$(swaymsg -t get_tree | python3 -c '
+import json, sys
+def buscar(n):
+    if n.get("app_id") == "foot":
+        return n["rect"]["y"]
+    for h in n.get("nodes", []) + n.get("floating_nodes", []):
+        r = buscar(h)
+        if r is not None:
+            return r
+print(buscar(json.load(sys.stdin)))')
+            echo "ventana foot en y=$y_ventana"
+            if [ "$y_ventana" = "None" ] || [ "$y_ventana" -lt "$BAR_ALTURA" ]; then
+                echo "FALLO: la ventana no respeta la zona exclusiva de la barra"
+                ok=1
+            else
+                echo "ok: la ventana empieza debajo de la barra"
+            fi
+            kill "$foot_pid" 2>/dev/null || true
+            sleep 0.5
+        else
+            echo "AVISO: sin foot/swaymsg, se omite la comprobación de la zona exclusiva"
         fi
     fi
 

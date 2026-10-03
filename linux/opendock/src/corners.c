@@ -23,7 +23,8 @@ typedef enum {
 
 /* Dibuja la máscara: negro fuera del cuarto de círculo, transparente dentro.
  * El centro de curvatura se sitúa siempre a 'r' px de la esquina física de
- * la pantalla, hacia el interior. */
+ * la pantalla, hacia el interior. Las de arriba empiezan bajo la barra y
+ * llevan su color (DESIGN.md), así parecen la continuación de la barra. */
 static void dibujar_esquina(GtkDrawingArea *area, cairo_t *cr, int w, int h, gpointer datos)
 {
     OdEsquina esquina = GPOINTER_TO_INT(datos);
@@ -49,8 +50,11 @@ static void dibujar_esquina(GtkDrawingArea *area, cairo_t *cr, int w, int h, gpo
     cairo_set_source_rgba(cr, 0, 0, 0, 0);
     cairo_paint(cr);
 
-    /* Rectángulo negro completo... */
-    cairo_set_source_rgba(cr, 0, 0, 0, 1);
+    /* Rectángulo completo (negro, o el color de la barra arriba)... */
+    if (esquina == OD_ESQUINA_SUP_IZQ || esquina == OD_ESQUINA_SUP_DER)
+        cairo_set_source_rgba(cr, 0x1C / 255.0, 0x1C / 255.0, 0x1E / 255.0, 1);
+    else
+        cairo_set_source_rgba(cr, 0, 0, 0, 1);
     cairo_rectangle(cr, 0, 0, w, h);
     cairo_fill(cr);
 
@@ -111,7 +115,7 @@ static GtkWidget *crear_ventana_esquina(GtkApplication *app, OdEsquina esquina, 
 }
 
 #if HAVE_LAYER_SHELL
-static void colocar_wayland(GtkWidget *win, GdkMonitor *monitor, OdEsquina esquina)
+static void colocar_wayland(GtkWidget *win, GdkMonitor *monitor, OdEsquina esquina, int alto_barra)
 {
     gtk_layer_init_for_window(GTK_WINDOW(win));
     gtk_layer_set_monitor(GTK_WINDOW(win), monitor);
@@ -127,6 +131,7 @@ static void colocar_wayland(GtkWidget *win, GdkMonitor *monitor, OdEsquina esqui
     gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_BOTTOM, !arriba);
     gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_LEFT, izquierda);
     gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_RIGHT, !izquierda);
+    if (arriba) gtk_layer_set_margin(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_TOP, alto_barra);
 }
 
 static void iniciar_wayland(GtkApplication *app, OdConfig *cfg)
@@ -139,7 +144,7 @@ static void iniciar_wayland(GtkApplication *app, OdConfig *cfg)
         GdkMonitor *mon = g_list_model_get_item(monitores, i);
         for (OdEsquina e = 0; e < OD_ESQUINA_N; e++) {
             GtkWidget *win = crear_ventana_esquina(app, e, cfg->radio_esquinas);
-            colocar_wayland(win, mon, e);
+            colocar_wayland(win, mon, e, cfg->alto_barra);
             gtk_window_present(GTK_WINDOW(win));
         }
         g_object_unref(mon);
@@ -152,7 +157,8 @@ static void iniciar_wayland(GtkApplication *app, OdConfig *cfg)
  * marcamos _NET_WM_WINDOW_TYPE_DOCK + override-redirect a bajo nivel y
  * movemos con Xlib a la esquina física del monitor (GTK4 no deja mover
  * ventanas top-level directamente, por eso el acceso a Xlib). */
-static void colocar_x11(GtkWidget *win, GdkMonitor *monitor, OdEsquina esquina, int radio)
+static void colocar_x11(GtkWidget *win, GdkMonitor *monitor, OdEsquina esquina, int radio,
+    int alto_barra)
 {
     GdkRectangle geo;
     gdk_monitor_get_geometry(monitor, &geo);
@@ -160,7 +166,7 @@ static void colocar_x11(GtkWidget *win, GdkMonitor *monitor, OdEsquina esquina, 
     int x = (esquina == OD_ESQUINA_SUP_IZQ || esquina == OD_ESQUINA_INF_IZQ)
         ? geo.x : geo.x + geo.width - radio;
     int y = (esquina == OD_ESQUINA_SUP_IZQ || esquina == OD_ESQUINA_SUP_DER)
-        ? geo.y : geo.y + geo.height - radio;
+        ? geo.y + alto_barra : geo.y + geo.height - radio;
 
     GdkSurface *surface = gtk_native_get_surface(gtk_widget_get_native(win));
     if (!GDK_IS_X11_SURFACE(surface)) return;
@@ -191,7 +197,7 @@ static void iniciar_x11(GtkApplication *app, OdConfig *cfg)
         for (OdEsquina e = 0; e < OD_ESQUINA_N; e++) {
             GtkWidget *win = crear_ventana_esquina(app, e, cfg->radio_esquinas);
             gtk_window_present(GTK_WINDOW(win));
-            colocar_x11(win, mon, e, cfg->radio_esquinas);
+            colocar_x11(win, mon, e, cfg->radio_esquinas, cfg->alto_barra);
         }
         g_object_unref(mon);
     }
