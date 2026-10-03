@@ -467,6 +467,8 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
         "popover.opendock-popover > contents { border-radius: 16px; }"
         "popover.opendock-popover label, popover.opendock-popover image { color: #FFFFFF; }"
         "popover.opendock-popover button.flat:hover { background: rgba(255,255,255,0.10); }"
+        "popover.opendock-popover menubutton > button { background: none; border: none; box-shadow: none; }"
+        "popover.opendock-popover menubutton > button:hover { background: rgba(255,255,255,0.10); }"
         /* DESIGN.md: pasar el cursor 1,16, pulsar 0,88. GTK no tiene muelles
          * en CSS; una curva con rebote se le parece (k 520 ≈ 0,18 s). */
         ".opendock-icono { transition: transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1); }"
