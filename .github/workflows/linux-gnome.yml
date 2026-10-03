@@ -1,0 +1,86 @@
+name: Extensión de GNOME (OpenDock)
+
+on:
+  push:
+    branches: [linux-gnome]
+    paths:
+      - 'linux/gnome-extension/**'
+      - '.github/workflows/linux-gnome.yml'
+  workflow_dispatch:
+
+jobs:
+  pack-and-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar herramientas (glib, gjs, zip)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libglib2.0-bin gjs zip
+
+      - name: Comprobación de sintaxis (node --check)
+        run: |
+          set -e
+          for f in linux/gnome-extension/opendock@josuegm24.github.io/extension.js \
+                   linux/gnome-extension/opendock@josuegm24.github.io/prefs.js \
+                   linux/gnome-extension/opendock@josuegm24.github.io/lib/*.js; do
+            echo "== $f =="
+            node --check "$f"
+          done
+
+      - name: Validar el XML del gschema
+        run: |
+          set -e
+          python3 -c "import xml.dom.minidom as m; m.parse('linux/gnome-extension/opendock@josuegm24.github.io/schemas/org.gnome.shell.extensions.opendock.gschema.xml')"
+
+      - name: Empaquetar (glib-compile-schemas --strict + zip)
+        run: bash linux/gnome-extension/build.sh "$GITHUB_WORKSPACE/dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opendock-gnome-extension
+          path: dist/*.shell-extension.zip
+
+  functional-test:
+    needs: pack-and-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: ${{ matrix.image }}
+      options: --privileged
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora
+            image: fedora:latest
+            install_script: install-fedora.sh
+          - distro: archlinux
+            image: archlinux:latest
+            install_script: install-arch.sh
+    steps:
+      - name: Instalar git (lo necesita actions/checkout)
+        run: |
+          if command -v dnf >/dev/null 2>&1; then
+            dnf install -y git
+          elif command -v pacman >/dev/null 2>&1; then
+            pacman -Sy --noconfirm --needed git
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Instalar dependencias (gnome-shell, mutter, gjs, dbus...)
+        run: bash "linux/gnome-extension/ci/${{ matrix.install_script }}"
+
+      - name: Ejecutar gnome-shell headless y probar la extensión
+        run: bash linux/gnome-extension/ci/run-test.sh "$GITHUB_WORKSPACE/ci-artifacts"
+
+      - name: Subir capturas y log del shell
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gnome-${{ matrix.distro }}-artifacts
+          path: ci-artifacts/
+          if-no-files-found: warn
