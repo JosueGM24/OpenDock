@@ -13,6 +13,7 @@
 #include "power.h"
 #include "centro.h"
 #include "mini.h"
+#include "bandeja.h"
 #include <gtk/gtk.h>
 #include <math.h>
 
@@ -419,6 +420,8 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
     gtk_widget_add_css_class(img_wifi, "opendock-icono");
     gtk_widget_add_css_class(img_bateria, "opendock-icono");
     gtk_widget_add_css_class(boton_ajustes, "opendock-icono");
+    /* DESIGN.md: chevrón de la bandeja, sonido, Wi-Fi, batería, hora, engranaje. */
+    gtk_box_append(GTK_BOX(caja_der), od_bandeja_crear_boton());
     gtk_box_append(GTK_BOX(caja_der), img_volumen);
     gtk_box_append(GTK_BOX(caja_der), img_wifi);
     gtk_box_append(GTK_BOX(caja_der), img_bateria);

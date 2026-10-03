@@ -80,6 +80,8 @@ conf.set('HAVE_X11', have_x11 ? 1 : 0)
 conf.set('HAVE_PULSE', have_pulse ? 1 : 0)
 conf.set('HAVE_CANBERRA', have_canberra ? 1 : 0)
 conf.set_quoted('OPENDOCK_VERSION', meson.project_version())
+dir_sonidos = get_option('prefix') / get_option('datadir') / 'opendock' / 'sounds'
+conf.set_quoted('OPENDOCK_DIR_SONIDOS', dir_sonidos)
 configure_file(output: 'opendock-build-config.h', configuration: conf)
 
 inc = include_directories('.', 'src')
@@ -99,12 +101,23 @@ sources = [
   'src/mini.c',
   'src/ventanas.c',
   'src/dock.c',
+  'src/sonido.c',
+  'src/bandeja.c',
 ]
 
 executable('opendock', sources + proto_sources,
   include_directories: inc,
   dependencies: deps,
   install: true)
+
+# Los mismos sonidos de Material Design que la versión de Windows (CC-BY 4.0).
+install_data(files(
+    '../../sounds/simple1.wav', '../../sounds/simple2.wav', '../../sounds/alert.wav',
+    '../../sounds/deco1.wav', '../../sounds/deco2.wav', '../../sounds/intense.wav',
+    '../../sounds/ambient.wav', '../../sounds/confirm.wav', '../../sounds/celeb1.wav',
+    '../../sounds/celeb2.wav', '../../sounds/celeb3.wav', '../../sounds/party.wav',
+    '../../sounds/complete.wav', '../../sounds/CREDITS.txt'),
+  install_dir: dir_sonidos)
 
 install_data('opendock.desktop', install_dir: get_option('sysconfdir') / 'xdg/autostart')
 

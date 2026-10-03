@@ -65,6 +65,11 @@ OdConfig *od_config_cargar(void)
         cfg->oled = g_key_file_get_boolean(kf, "general", "oled", NULL);
     if (existe && g_key_file_has_key(kf, "general", "no_molestar", NULL))
         cfg->no_molestar = g_key_file_get_boolean(kf, "general", "no_molestar", NULL);
+    cfg->sonido = existe ? g_key_file_get_string(kf, "general", "sonido", NULL) : NULL;
+    if (!cfg->sonido) cfg->sonido = g_strdup("eco");
+    cfg->volumen_sonido = 70;
+    if (existe && g_key_file_has_key(kf, "general", "volumen_sonido", NULL))
+        cfg->volumen_sonido = g_key_file_get_integer(kf, "general", "volumen_sonido", NULL);
 
     if (existe && g_key_file_has_key(kf, "dock", "apps", NULL)) {
         gsize n = 0;
@@ -85,6 +90,7 @@ OdConfig *od_config_cargar(void)
     cfg->radio_esquinas = CLAMP(cfg->radio_esquinas, 0, 64);
     cfg->alto_barra = CLAMP(cfg->alto_barra, 16, 64);
     cfg->alto_dock = CLAMP(cfg->alto_dock, 32, 96);
+    cfg->volumen_sonido = CLAMP(cfg->volumen_sonido, 0, 100);
 
     if (!existe) {
         /* Primera vez: dejamos un config.ini legible con los valores por defecto. */
@@ -92,6 +98,8 @@ OdConfig *od_config_cargar(void)
         g_key_file_set_integer(kf, "general", "alto_barra", cfg->alto_barra);
         g_key_file_set_integer(kf, "general", "alto_dock", cfg->alto_dock);
         g_key_file_set_boolean(kf, "general", "oled", cfg->oled);
+        g_key_file_set_string(kf, "general", "sonido", cfg->sonido);
+        g_key_file_set_integer(kf, "general", "volumen_sonido", cfg->volumen_sonido);
         g_key_file_set_string(kf, "dock", "ocultar", "nunca");
         g_key_file_set_string_list(kf, "dock", "apps",
             (const gchar * const *)cfg->apps_ancladas,
@@ -150,6 +158,7 @@ void od_config_liberar(OdConfig *cfg)
 {
     if (!cfg) return;
     g_free(cfg->config_path);
+    g_free(cfg->sonido);
     g_strfreev(cfg->apps_ancladas);
     g_free(cfg);
 }

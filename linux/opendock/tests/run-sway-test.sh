@@ -15,7 +15,7 @@ export BAR_ALTURA=28
 export ARTEFACTOS="${1:-/tmp/opendock-ci-screens}"
 mkdir -p "$ARTEFACTOS"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+export REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 export OPENDOCK_BIN="$REPO_ROOT/linux/opendock/build/opendock"
 export CHECK_PY="$REPO_ROOT/linux/opendock/tests/check_screenshot.py"
 
@@ -202,6 +202,58 @@ print(buscar(json.load(sys.stdin)))')
         cursor_barra 9999.0   # fuera de la zona: se esconde
         sleep 0.5
         captura 11-mini-fuera.png closed || ok=1
+    fi
+
+    if [[ "$PHASES" == *bandeja* ]]; then
+        vigilante() {
+            gdbus call --session --dest org.kde.StatusNotifierWatcher \
+                --object-path /StatusNotifierWatcher \
+                --method org.freedesktop.DBus.Properties.Get \
+                org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems 2>&1
+        }
+        if gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+                --method org.freedesktop.DBus.GetNameOwner org.kde.StatusNotifierWatcher >/dev/null 2>&1; then
+            echo "ok: opendock ofrece org.kde.StatusNotifierWatcher"
+        else
+            echo "FALLO: nadie ofrece org.kde.StatusNotifierWatcher"
+            ok=1
+        fi
+        SNI_LOG="$ARTEFACTOS/sni.log"
+        : > "$SNI_LOG"
+        python3 "$REPO_ROOT/linux/opendock/tests/sni_falso.py" "$SNI_LOG" 60 &
+        SNI_PID=$!
+        sleep 2
+        echo "Iconos registrados -> $(vigilante)"
+        if vigilante | grep -q "/StatusNotifierItem"; then
+            echo "ok: el icono falso queda registrado"
+        else
+            echo "FALLO: el icono falso no aparece en RegisteredStatusNotifierItems"
+            ok=1
+        fi
+        if grep -q "propiedad IconName" "$SNI_LOG"; then
+            echo "ok: la bandeja lee las propiedades del icono"
+        else
+            echo "FALLO: la bandeja no leyó las propiedades del icono"
+            cat "$SNI_LOG"
+            ok=1
+        fi
+        # Desplegar la bandeja para la captura (la comprueba una persona).
+        gdbus call --session --dest io.github.josuegm24.OpenDock \
+            --object-path /io/github/josuegm24/OpenDock \
+            --method org.gtk.Actions.Activate bandeja '[]' '{}' >/dev/null
+        sleep 1
+        grim "$ARTEFACTOS/15-bandeja.png"
+        gdbus call --session --dest io.github.josuegm24.OpenDock \
+            --object-path /io/github/josuegm24/OpenDock \
+            --method org.gtk.Actions.Activate bandeja '[]' '{}' >/dev/null
+        kill "$SNI_PID" 2>/dev/null || true
+        sleep 1
+        if vigilante | grep -q "/StatusNotifierItem"; then
+            echo "FALLO: el icono sigue registrado después de cerrarse su proceso"
+            ok=1
+        else
+            echo "ok: al cerrarse su proceso el icono se da de baja"
+        fi
     fi
 
     if [[ "$PHASES" == *dock* ]]; then

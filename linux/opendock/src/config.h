@@ -13,6 +13,8 @@ typedef struct {
     int alto_dock;               /* px, por defecto 60 */
     gboolean oled;               /* fondo negro puro en vez de vidrio */
     gboolean no_molestar;        /* sin avisos en el notch (salvo críticos) */
+    gchar *sonido;               /* "eco" (por defecto), "silencio", "sistema", ... */
+    int volumen_sonido;          /* 0..100 */
     gboolean reemplazar_notificaciones; /* --replace */
     gchar **apps_ancladas;       /* lista de ids .desktop, terminada en NULL */
     int ocultar_dock;            /* OD_OCULTAR_NUNCA / _MITAD / _COMPLETO */

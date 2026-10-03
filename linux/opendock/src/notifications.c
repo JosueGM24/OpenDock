@@ -7,6 +7,7 @@
 #include "notch.h"
 #include "centro.h"
 #include "mini.h"
+#include "sonido.h"
 #include "opendock-build-config.h"
 #include <gio/gio.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
@@ -161,16 +162,19 @@ static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocaci
     /* No molestar: la notificación se acepta (devuelve su id) pero no se
      * muestra, salvo las críticas (urgency = 2), igual que en Windows. */
     guint8 urgencia = 1;
-    gboolean transitoria = FALSE;
+    gboolean transitoria = FALSE, sin_sonido = FALSE;
     if (hints) {
         g_variant_lookup(hints, "urgency", "y", &urgencia);
         g_variant_lookup(hints, "transient", "b", &transitoria);
+        g_variant_lookup(hints, "suppress-sound", "b", &sin_sonido);
     }
-    if (!g_srv.cfg->no_molestar || urgencia >= 2)
+    if (!g_srv.cfg->no_molestar || urgencia >= 2) {
         od_notch_mostrar_aviso(app_name, summary, body, pixbuf,
             (app_icon && *app_icon) ? app_icon : NULL);
-    else
+        if (!sin_sonido) od_sonido_notificacion();
+    } else {
         od_notch_mostrar_discreto();
+    }
 
     /* Las transitorias sólo se avisan; las demás se quedan en el centro. */
     if (!transitoria) {

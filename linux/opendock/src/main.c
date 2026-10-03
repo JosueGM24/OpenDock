@@ -29,6 +29,8 @@
 #include "centro.h"
 #include "mini.h"
 #include "dock.h"
+#include "sonido.h"
+#include "bandeja.h"
 #include <gtk/gtk.h>
 #include <glib-unix.h>
 #include <locale.h>
@@ -53,6 +55,12 @@ static void al_accion_centro(GSimpleAction *a, GVariant *p, gpointer datos)
 {
     (void)a; (void)p; (void)datos;
     od_centro_alternar();
+}
+
+static void al_accion_bandeja(GSimpleAction *a, GVariant *p, gpointer datos)
+{
+    (void)a; (void)p; (void)datos;
+    od_bandeja_alternar();
 }
 
 static void al_accion_cursor_barra(GSimpleAction *a, GVariant *p, gpointer datos)
@@ -98,6 +106,7 @@ static void al_activar(GApplication *app, gpointer datos)
     od_esquinas_iniciar(e->cfg, backend);
     od_notch_iniciar(e->cfg, backend);
     e->cfg->reemplazar_notificaciones = e->reemplazar;
+    od_sonido_iniciar(e->cfg);
     od_notificaciones_iniciar(e->cfg);
     od_bar_iniciar(e->cfg, backend);
     od_mini_iniciar(e->cfg, backend);
@@ -107,6 +116,10 @@ static void al_activar(GApplication *app, gpointer datos)
     g_signal_connect(centro, "activate", G_CALLBACK(al_accion_centro), NULL);
     g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(centro));
     g_object_unref(centro);
+    GSimpleAction *bandeja = g_simple_action_new("bandeja", NULL);
+    g_signal_connect(bandeja, "activate", G_CALLBACK(al_accion_bandeja), NULL);
+    g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(bandeja));
+    g_object_unref(bandeja);
     GSimpleAction *cursor = g_simple_action_new("cursor-barra", G_VARIANT_TYPE_DOUBLE);
     g_signal_connect(cursor, "activate", G_CALLBACK(al_accion_cursor_barra), NULL);
     g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(cursor));
