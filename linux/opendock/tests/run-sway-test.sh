@@ -24,6 +24,12 @@ mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
 export XDG_CONFIG_HOME="$ARTEFACTOS/config"
 mkdir -p "$XDG_CONFIG_HOME"
+# Sin apps ancladas: el runner trae Firefox (anclado por defecto) y la
+# prueba del dock necesita empezar vacío para ver entrar y salir una ventana.
+mkdir -p "$XDG_CONFIG_HOME/opendock"
+printf '[dock]
+apps=
+' > "$XDG_CONFIG_HOME/opendock/config.ini"
 
 export SWAY_CFG="$ARTEFACTOS/sway-config"
 cat > "$SWAY_CFG" <<EOF
@@ -199,8 +205,8 @@ print(buscar(json.load(sys.stdin)))')
     fi
 
     if [[ "$PHASES" == *dock* ]]; then
-        # Sin ventanas y sin apps ancladas instaladas (en CI no hay ninguna de
-        # las de por defecto), el dock no dibuja nada.
+        # Sin ventanas y sin apps ancladas (config.ini de arriba), el dock no
+        # dibuja nada.
         grim "$ARTEFACTOS/12-sin-dock.png"
         if python3 "$CHECK_PY" "$ARTEFACTOS/12-sin-dock.png" --width "$ANCHO" --height "$ALTO" --check dock >/dev/null; then
             echo "FALLO: el dock se dibuja sin ninguna app"
