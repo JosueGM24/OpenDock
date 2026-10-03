@@ -18,6 +18,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<script>document.documentElement.classList.add('js')</script>
 <link rel="stylesheet" href="assets/site.css">
 </head>
 <body>
@@ -26,19 +27,21 @@
     <a class="brand" href="#"><img src="assets/logo.png" alt="">OpenDock</a>
     <nav class="links" aria-label="Secciones">
       <a href="#piezas">Qué trae</a>
+      <a href="#rendimiento">Rendimiento</a>
+      <a href="#seguridad">Seguridad</a>
+      <a href="#versiones">Versiones</a>
       <a href="https://github.com/JosueGM24/OpenDock">GitHub</a>
-      <a href="#instalar">Instalar</a>
       <a href="#opinion">Opinar</a>
       <span class="tag">Código abierto · MIT</span>
     </nav>
   </header>
 
   <section class="hero">
-    <h1>Tu Windows,<br><span class="soft">con notch, barra y</span> dock.</h1>
+    <h1><span class="ln">Tu Windows,</span><br><span class="ln soft">con notch, barra y</span> <span class="ln">dock.</span></h1>
     <div class="hero-copy">
       <p class="lede">OpenDock pone tus notificaciones en un notch, añade una barra superior con centro de control y un dock con tus apps. Todo se mueve con rebote, gasta menos memoria que una pestaña del navegador, no se conecta a internet y su código es abierto.</p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/OpenDock.exe">Descargar para Windows</a>
+        <a class="btn btn-primary" href="#instalar">Instalar OpenDock <span class="arr">↓</span></a>
         <a class="btn btn-ghost" href="https://github.com/JosueGM24/OpenDock">Ver en GitHub</a>
       </div>
     </div>
@@ -82,15 +85,15 @@
     </div>
   </section>
 
-  <section class="specs" aria-label="Consumo">
-    <div class="spec"><div class="v">&lt;15<small>MB</small></div><div class="k">de memoria en uso</div></div>
-    <div class="spec"><div class="v">&lt;1<small>%</small></div><div class="k">de un núcleo en reposo</div></div>
-    <div class="spec"><div class="v">3,2<small>MB</small></div><div class="k">un solo .exe, en C</div></div>
+  <section class="specs" aria-label="Consumo" data-reveal>
+    <div class="spec"><div class="v"><span data-count="13.7" data-dec="1">13,7</span><small>MB</small></div><div class="k">de memoria en uso</div></div>
+    <div class="spec"><div class="v"><span data-count="1.3" data-dec="1">1,3</span><small>%</small></div><div class="k">de un núcleo en reposo</div></div>
+    <div class="spec"><div class="v"><span data-count="2.7" data-dec="1">2,7</span><small>MB</small></div><div class="k">un solo .exe, en C</div></div>
     <div class="spec"><div class="v">0<small>conexiones</small></div><div class="k">ni red ni telemetría</div></div>
     <div class="spec"><div class="v">MIT</div><div class="k">código abierto</div></div>
   </section>
 
-  <section id="piezas">
+  <section id="piezas" data-reveal>
     <div class="section-head">
       <h2>Cinco piezas que se entienden entre sí</h2>
       <p>El notch se funde con la barra, el dock respeta tus ventanas maximizadas y todo comparte material, acento y rebote. Cada pieza se activa por separado.</p>
@@ -162,11 +165,44 @@
     </div>
   </section>
 
-  <section class="oss" id="codigo">
+
+  <section class="sec" id="rendimiento">
+    <div class="section-head" data-reveal>
+      <div><p class="eyebrow">Rendimiento</p><h2>Ligera de verdad, medido</h2></div>
+      <p>Medido en una laptop de 16 núcleos con la barra, el dock, el notch y las esquinas activos, en reposo. Las cifras salen del perfilador incluido en el código.</p>
+    </div>
+    <div class="perf">
+      <div class="meter" data-reveal>
+        <div class="mrow"><div class="top"><span>CPU en reposo · versión 2.0</span><b>1,3<small>% de un núcleo</small></b></div><div class="track"><i style="--w:52%"></i></div><div class="cap">0,08 % del equipo entero</div></div>
+        <div class="mrow"><div class="top"><span>CPU en reposo · versión anterior</span><b>2,5<small>%</small></b></div><div class="track old"><i style="--w:100%;--d:.3s"></i></div><div class="cap">−48 % tras el último análisis de rendimiento</div></div>
+        <div class="mrow"><div class="top"><span>Memoria privada</span><b>13,7<small>MB</small></b></div><div class="track"><i style="--w:14%;--d:.45s"></i></div><div class="cap">una pestaña típica del navegador usa más de 100 MB</div></div>
+        <div class="mrow"><div class="top"><span>Hilos · objetos de dibujo</span><b>11<small>· 94</small></b></div><div class="track"><i style="--w:22%;--d:.6s"></i></div><div class="cap">un solo hilo de interfaz; el resto, a la espera de avisos</div></div>
+      </div>
+      <div class="hows">
+        <div class="how" data-reveal style="--d:0.00s"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2.5L5 13.5h6l-1 8 8-11h-6z"/></svg></span><div><b>Escucha, no pregunta</b><span>Wi‑Fi, volumen, batería y notificaciones llegan como avisos del sistema; nada se consulta en bucle.</span></div></div><div class="how" data-reveal style="--d:0.07s"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg></span><div><b>Todo en caché</b><span>Iconos a alta resolución una vez; las apps ancladas solo se releen cuando cambias algo.</span></div></div><div class="how" data-reveal style="--d:0.14s"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg></span><div><b>Cursor con ritmo</b><span>20 consultas por segundo cerca del borde y 7 lejos de él; nada cuando no hace falta.</span></div></div><div class="how" data-reveal style="--d:0.21s"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h10M4 17h6"/></svg></span><div><b>Vidrio barato</b><span>El fondo se captura a un cuarto de resolución y solo se recompone si cambió lo de detrás.</span></div></div><div class="how" data-reveal style="--d:0.28s"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2.5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg></span><div><b>C y Win32, sin capas</b><span>Sin frameworks ni navegador embebido; las DLL del sistema se cargan solo cuando se usan.</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="seguridad">
+    <div class="section-head" data-reveal>
+      <div><p class="eyebrow">Seguridad</p><h2>Endurecida por defecto</h2></div>
+      <p>Cada versión se compila con MSVC en GitHub Actions, a la vista de todos, y no se publica si falta alguna de estas protecciones. El código pasó una revisión de seguridad completa en la 2.0.</p>
+    </div>
+    <div class="shield">
+      <div class="chip" data-reveal style="--d:0.00s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>Control Flow Guard</b><span>Los saltos indirectos solo van a destinos válidos.</span></div><div class="chip" data-reveal style="--d:0.06s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>CET · shadow stack</b><span>El procesador comprueba cada retorno de función.</span></div><div class="chip" data-reveal style="--d:0.12s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>ASLR de alta entropía</b><span>Direcciones de memoria impredecibles.</span></div><div class="chip" data-reveal style="--d:0.18s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>DEP</b><span>Los datos nunca se ejecutan como código.</span></div><div class="chip" data-reveal style="--d:0.24s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>DLL solo de System32</b><span>Nada plantado junto al .exe se carga.</span></div><div class="chip" data-reveal style="--d:0.12s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>Solo binarios de Microsoft</b><span>Ninguna DLL ajena entra en el proceso.</span></div><div class="chip" data-reveal style="--d:0.18s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>Sin código dinámico</b><span>No se puede generar ni inyectar código.</span></div><div class="chip" data-reveal style="--d:0.24s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>Sin imágenes remotas</b><span>Nada se carga desde la red ni de baja integridad.</span></div><div class="chip" data-reveal style="--d:0.30s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>Sin red ni telemetría</b><span>No abre ninguna conexión, nunca.</span></div><div class="chip" data-reveal style="--d:0.36s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>Sin administrador</b><span>Corre como tu usuario; todo vive en HKCU.</span></div>
+    </div>
+    <div class="verify">
+      <div class="vbox" data-reveal><p><b>Comprueba la descarga.</b> En PowerShell, junto al archivo; debe coincidir con el SHA-256 de la versión.</p><div class="cmdline"><code>Get-FileHash .\OpenDock.exe -Algorithm SHA256</code><button class="copy" type="button" data-copy="Get-FileHash .\OpenDock.exe -Algorithm SHA256" aria-label="Copiar el comando"><svg class="c1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><svg class="c2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></div></div>
+      <div class="vbox" data-reveal style="--d:.08s"><p><b>Comprueba las protecciones.</b> Con el código del repositorio y Python, sin instalar nada más.</p><div class="cmdline"><code>py tools/check_pe.py OpenDock.exe --strict</code><button class="copy" type="button" data-copy="py tools/check_pe.py OpenDock.exe --strict" aria-label="Copiar el comando"><svg class="c1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><svg class="c2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></div></div>
+    </div>
+  </section>
+
+  <section class="oss" id="codigo" data-reveal>
     <div>
       <img class="oss-logo" src="assets/logo.png" alt="Logo de OpenDock: un cuadrado azul con el notch negro arriba">
       <h2>Código abierto, de principio a fin</h2>
-      <p>OpenDock se publica con licencia MIT: úsalo, estúdialo, modifícalo y compártelo. Son unas diez mil líneas de C contra la API de Win32, sin frameworks ni dependencias en tiempo de ejecución. Cada pieza vive en su propio archivo, así que es fácil encontrar lo que quieres cambiar.</p>
+      <p>OpenDock se publica con licencia MIT: úsalo, estúdialo, modifícalo y compártelo. Son unas once mil líneas de C contra la API de Win32, sin frameworks ni dependencias en tiempo de ejecución. Cada pieza vive en su propio archivo, así que es fácil encontrar lo que quieres cambiar.</p>
       <div class="maker"><span class="av" aria-hidden="true">D</span><div><b>Hecho por Daniel Godínez</b><a href="https://danielgodinez.netlify.app/" rel="noopener">danielgodinez.netlify.app</a></div></div>
       <pre class="cmd"><span class="c"># con MSYS2 (mingw-w64)</span>
 ./build.sh
@@ -174,19 +210,19 @@
 build.bat</pre>
     </div>
     <div class="files" role="table" aria-label="Archivos del código">
-      <div class="f" role="row"><code>notch.c</code><span>La isla, el centro de notificaciones y los sonidos</span><em>1 948</em></div>
-      <div class="f" role="row"><code>menubar.c</code><span>Barra superior, centro de control y panel de bandeja</span><em>2 641</em></div>
-      <div class="f" role="row"><code>dock.c</code><span>Dock, apps ancladas y ocultación</span><em>1 585</em></div>
-      <div class="f" role="row"><code>winnotif.c</code><span>Lectura local de las notificaciones de Windows</span><em>926</em></div>
-      <div class="f" role="row"><code>tray.c</code><span>Recibe los iconos de la bandeja sin la barra de Windows</span><em>331</em></div>
+      <div class="f" role="row"><code>notch.c</code><span>La isla, el centro de notificaciones y los sonidos</span><em>1 904</em></div>
+      <div class="f" role="row"><code>menubar.c</code><span>Barra superior, centro de control y panel de bandeja</span><em>2 732</em></div>
+      <div class="f" role="row"><code>dock.c</code><span>Dock, apps ancladas y ocultación</span><em>1 626</em></div>
+      <div class="f" role="row"><code>winnotif.c</code><span>Lectura local de las notificaciones de Windows</span><em>932</em></div>
+      <div class="f" role="row"><code>tray.c</code><span>Recibe los iconos de la bandeja sin la barra de Windows</span><em>341</em></div>
       <div class="f" role="row"><code>panel.c</code><span>La ventana de ajustes</span><em>980</em></div>
-      <div class="f" role="row"><code>corner_radius.c</code><span>Arranque, esquinas y atajos</span><em>1 103</em></div>
+      <div class="f" role="row"><code>corner_radius.c</code><span>Arranque, esquinas y atajos</span><em>1 173</em></div>
       <div class="f" role="row"><code>gfx.c · pop.c</code><span>Antialiasado con SDF y muelles</span><em>810</em></div>
-      <div class="f total" role="row"><code>Total</code><span>Más install.c, el instalador sin permisos</span><em>10 638</em></div>
+      <div class="f total" role="row"><code>Total</code><span>Más install.c (instalador sin permisos) y lazy.c (DLL de System32)</span><em>10 917</em></div>
     </div>
   </section>
 
-  <section class="quiet" id="privacidad">
+  <section class="quiet" id="privacidad" data-reveal>
     <h2>Lee tus avisos sin sacarlos del equipo</h2>
     <dl class="facts">
       <div class="fact"><dt>Notificaciones</dt><dd>Se leen en solo lectura de la base local de Windows. No se copian, no se suben, no se guardan aparte.</dd></div>
@@ -197,7 +233,7 @@ build.bat</pre>
     </dl>
   </section>
 
-  <section class="install" id="instalar">
+  <section class="install" id="instalar" data-reveal>
     <div class="section-head" style="margin:0">
       <h2>Instalar en un minuto</h2>
       <p>¿Usabas CornerRadius? OpenDock es su nuevo nombre: al abrirlo cierra la versión vieja, conserva tus ajustes y ocupa su lugar.</p>
@@ -216,7 +252,35 @@ build.bat</pre>
   </section>
 
 
-  <section class="talk" id="opinion">
+
+  <section class="sec" id="versiones">
+    <div class="section-head" data-reveal>
+      <div><p class="eyebrow">Versiones</p><h2>Descargas y novedades</h2></div>
+      <p>Cada versión trae el .exe y su huella SHA-256. Las anteriores siguen en GitHub.</p>
+    </div>
+    <div class="rels" id="rels" data-reveal>
+      <article class="rel latest">
+        <div>
+          <h3>OpenDock 2.0.0 <span class="badge">Más reciente</span></h3>
+          <div class="meta2"><span>2 oct 2026</span><span>2,7 MB</span><span>Windows 10 y 11 · x64</span></div>
+          <ul>
+            <li>Nuevo nombre: CornerRadius ahora es OpenDock, y migra tus ajustes sola.</li>
+            <li>Barra superior con el icono de la app activa y esquinas de vidrio.</li>
+            <li>Catorce sonidos de Material Design, con Eco suave de serie.</li>
+            <li>CPU en reposo a la mitad y revisión de seguridad completa (CFG, CET, DLL de System32).</li>
+          </ul>
+        </div>
+        <div class="side">
+          <a class="dl" href="https://github.com/JosueGM24/OpenDock/releases/download/v2.0.0/OpenDock.exe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>Descargar .exe</a>
+          <a class="dl ghost" href="https://github.com/JosueGM24/OpenDock/releases/tag/v2.0.0">Notas completas</a>
+        </div>
+        <div class="sha"><div class="cmdline"><code>7b4d7c9807888ab71091238364a5bb34f0828df98b12db1497e07526989b1fc7</code><button class="copy" type="button" data-copy="7b4d7c9807888ab71091238364a5bb34f0828df98b12db1497e07526989b1fc7" aria-label="Copiar el SHA-256"><svg class="c1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><svg class="c2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></div></div>
+      </article>
+    </div>
+    <p class="rels-foot">Todas las versiones en <a href="https://github.com/JosueGM24/OpenDock/releases">GitHub Releases</a>.</p>
+  </section>
+
+  <section class="talk" id="opinion" data-reveal>
     <div class="talk-intro">
       <h2>¿Algo falla o se te ocurre algo?</h2>
       <p>Cuéntamelo aquí: llega directo a mi correo. Si dejas el tuyo, te aviso cuando esté arreglado o cuando la idea llegue a una versión.</p>

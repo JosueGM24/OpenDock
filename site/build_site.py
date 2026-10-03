@@ -98,6 +98,7 @@ html = f'''<!doctype html>
 <meta property="og:image" content="{SITE}assets/og.png">
 <meta name="twitter:card" content="summary_large_image">
 {fonts}
+<script>document.documentElement.classList.add('js')</script>
 <link rel="stylesheet" href="assets/site.css">
 </head>
 <body>

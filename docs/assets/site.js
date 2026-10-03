@@ -690,3 +690,78 @@
     });
   });
 })();
+
+/* ── movimiento: cabecera, aparición al bajar, contadores, copiar y versiones ── */
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const head = document.querySelector('header.top');
+  const onScroll = () => head.classList.toggle('scrolled', scrollY > 12);
+  addEventListener('scroll', onScroll, { passive: true }); onScroll();
+
+  // aparición: cada bloque entra al acercarse; si algo falla, todo se ve igual
+  const els = [...document.querySelectorAll('[data-reveal]')];
+  const show = e => e.classList.add('in');
+  if (!reduce && 'IntersectionObserver' in window) {
+    let fired = false;      /* si el navegador nunca avisa, todo se muestra igual */
+    const io = new IntersectionObserver(es => { fired = true; es.forEach(e => { if (e.isIntersecting) { show(e.target); io.unobserve(e.target); } }); }, { rootMargin: '0px 0px -8% 0px', threshold: .08 });
+    els.forEach(e => io.observe(e));
+    setTimeout(() => { if (!fired) els.forEach(show); }, 1500);
+    setTimeout(() => els.forEach(e => { if (e.getBoundingClientRect().top < innerHeight) show(e); }), 60);
+  } else els.forEach(show);
+
+  // contadores de la franja de cifras
+  const fmt = (v, d) => v.toFixed(d).replace('.', ',');
+  const count = el => {
+    const to = parseFloat(el.dataset.count), d = +el.dataset.dec || 0, t0 = performance.now(), dur = 1100;
+    const f = now => { const p = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - p, 4); el.textContent = fmt(to * e, d); if (p < 1) requestAnimationFrame(f); };
+    requestAnimationFrame(f);
+  };
+  const nums = [...document.querySelectorAll('[data-count]')];
+  if (!reduce && 'IntersectionObserver' in window) {
+    const io2 = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { count(e.target); io2.unobserve(e.target); } }), { threshold: .6 });
+    nums.forEach(n => io2.observe(n));
+  }
+
+  // copiar con confirmación
+  document.addEventListener('click', async e => {
+    const b = e.target.closest('.copy'); if (!b) return;
+    const text = b.dataset.copy;
+    try { await navigator.clipboard.writeText(text); }
+    catch { const r = document.createRange(); r.selectNodeContents(b.previousElementSibling); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+    b.classList.add('done'); b.setAttribute('aria-label', 'Copiado');
+    setTimeout(() => { b.classList.remove('done'); b.setAttribute('aria-label', 'Copiar'); }, 1600);
+  });
+
+  // versiones: la lista real de GitHub (la de la página queda si no hay red)
+  const box = document.getElementById('rels'); if (!box || !window.fetch) return;
+  const REPO = 'JosueGM24/OpenDock';
+  const esc = t => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const date = s => new Date(s).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' }).replace('.', '');
+  const mb = n => (n / 1048576).toFixed(1).replace('.', ',') + ' MB';
+  const tpl = box.querySelector('.rel');
+  fetch('https://api.github.com/repos/' + REPO + '/releases?per_page=6', { headers: { Accept: 'application/vnd.github+json' } })
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(list => {
+      list = list.filter(r => !r.draft);
+      if (!list.length) return;
+      const keep = tpl.cloneNode(true);
+      box.innerHTML = '';
+      list.forEach((r, i) => {
+        const exe = (r.assets || []).find(a => /\.exe$/i.test(a.name));
+        let el;
+        if (r.tag_name === 'v2.0.0') { el = keep.cloneNode(true); el.classList.toggle('latest', i === 0); const b = el.querySelector('.badge'); if (b && i) b.remove(); }
+        else {
+          el = document.createElement('article'); el.className = 'rel' + (i === 0 ? ' latest' : '');
+          const notes = (r.body || '').split('\n').map(l => l.replace(/^[-*]\s+/, '').trim()).filter(l => l && !/^#|^\*\*Full Changelog/.test(l)).slice(0, 4);
+          el.innerHTML = '<div><h3>' + esc(r.name || r.tag_name) + (i === 0 ? ' <span class="badge">Más reciente</span>' : '') + '</h3>'
+            + '<div class="meta2"><span>' + date(r.published_at) + '</span>' + (exe ? '<span>' + mb(exe.size) + '</span>' : '') + '<span>Windows 10 y 11 · x64</span></div>'
+            + (notes.length ? '<ul>' + notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>' : '') + '</div>'
+            + '<div class="side">' + (exe ? '<a class="dl" href="' + esc(exe.browser_download_url) + '">' + tpl.querySelector('.dl svg').outerHTML + 'Descargar .exe</a>' : '')
+            + '<a class="dl ghost" href="' + esc(r.html_url) + '">Notas completas</a></div>';
+        }
+        el.style.animation = reduce ? '' : 'rise .6s ' + (i * 0.07) + 's cubic-bezier(.2,.9,.25,1) both';
+        box.appendChild(el);
+      });
+    })
+    .catch(() => { /* sin red o sin cuota de la API: se queda la versión escrita en la página */ });
+})();

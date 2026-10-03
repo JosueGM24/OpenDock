@@ -352,6 +352,120 @@ footer a { color: #C9CED8; }
 @media (max-width: 860px) { .talk { grid-template-columns: 1fr; gap: 28px; } }
 @media (max-width: 560px) { .fgrid { grid-template-columns: 1fr; } }
 
+
+/* ── cabecera fija que se vuelve vidrio al bajar ── */
+body { overflow-x: clip; }
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 50; transition: padding .3s; isolation: isolate; }
+header.top::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 100vw; transform: translateX(-50%); z-index: -1; opacity: 0;
+  background: rgba(0, 0, 0, .72); -webkit-backdrop-filter: blur(16px) saturate(1.4); backdrop-filter: blur(16px) saturate(1.4); border-bottom: 1px solid #14171D; transition: opacity .3s; pointer-events: none; }
+header.top.scrolled { padding-block: 14px; }
+header.top.scrolled::before { opacity: 1; }
+nav.links a { position: relative; }
+nav.links a::after { content: ""; position: absolute; left: 0; right: 0; bottom: -4px; height: 1.5px; border-radius: 1px; background: var(--ink); transform: scaleX(0); transform-origin: left; transition: transform .35s var(--spring); }
+nav.links a:hover::after { transform: scaleX(1); }
+
+/* ── carga de la página ── */
+@keyframes rise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+@keyframes riseScale { from { opacity: 0; transform: translateY(28px) scale(.97); } to { opacity: 1; transform: none; } }
+.hero h1 .ln { display: inline-block; animation: rise .8s cubic-bezier(.2, .9, .25, 1) both; }
+.hero h1 .ln:nth-of-type(2) { animation-delay: .08s; } .hero h1 .ln:nth-of-type(3) { animation-delay: .16s; }
+.hero .lede { animation: rise .8s .22s cubic-bezier(.2, .9, .25, 1) both; }
+.hero .cta-row { animation: rise .8s .3s cubic-bezier(.2, .9, .25, 1) both; }
+.hero .controls { animation: rise .8s .38s cubic-bezier(.2, .9, .25, 1) both; }
+.screen-box { animation: riseScale 1s .42s cubic-bezier(.2, 1.1, .3, 1) both; }
+header.top { animation: rise .6s cubic-bezier(.2, .9, .25, 1) both; }
+
+/* ── aparición al bajar (solo con JS; sin él todo está visible) ── */
+.js [data-reveal] { opacity: 0; transform: translateY(26px); transition: opacity .7s cubic-bezier(.2, .9, .25, 1), transform .9s cubic-bezier(.2, 1.05, .3, 1); transition-delay: var(--d, 0s); }
+.js [data-reveal].in { opacity: 1; transform: none; }
+
+/* botones: pulsar */
+.btn:active, .send:active, .try:active, .dl:active { transform: scale(.97); }
+.btn-primary .arr { display: inline-block; transition: transform .45s var(--spring); }
+.btn-primary:hover .arr { transform: translateY(2px); animation: nudge 1s ease-in-out infinite; }
+@keyframes nudge { 50% { transform: translateY(4px); } }
+
+/* ── secciones nuevas ── */
+.sec { margin-block: 112px; }
+.sec .section-head { margin-bottom: 32px; }
+.eyebrow { font: 500 12px/1 var(--mono); color: var(--accent); text-transform: uppercase; letter-spacing: .12em; margin: 0 0 14px; }
+
+/* rendimiento */
+.perf { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 20px; }
+.meter { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 26px; display: grid; gap: 22px; align-content: start; }
+.mrow { display: grid; gap: 9px; }
+.mrow .top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.mrow .top span { color: #C9CED8; font-size: 14px; }
+.mrow .top b { font: 700 26px/1 var(--display); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.mrow .top b small { font: 500 13px/1 var(--body); color: var(--mute); margin-left: 3px; }
+.track { height: 10px; border-radius: 5px; background: #12151B; overflow: hidden; position: relative; }
+.track i { position: absolute; inset: 0 auto 0 0; width: var(--w); border-radius: 5px; background: linear-gradient(90deg, var(--accent-2), var(--accent)); transform-origin: left; }
+.js .track i { transform: scaleX(0); transition: transform 1.2s cubic-bezier(.2, 1, .3, 1); transition-delay: var(--d, .15s); }
+.js .in .track i { transform: scaleX(1); }
+.track.old i { background: #2B3140; }
+.mrow .cap { font: 12px/1.4 var(--mono); color: var(--mute); }
+.hows { display: grid; gap: 10px; align-content: start; }
+.how { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 14px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); transition: border-color .25s, transform .45s var(--spring); }
+.how:hover { border-color: #2A303B; transform: translateX(4px); }
+.how .ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: #12151B; color: var(--accent); }
+.how .ic svg { width: 18px; height: 18px; }
+.how b { display: block; font: 600 15px/1.3 var(--body); margin-bottom: 3px; }
+.how span { color: #A9B0BC; font-size: 14px; }
+
+/* seguridad */
+.shield { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.chip { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; display: grid; gap: 10px; align-content: start; transition: border-color .25s, transform .45s var(--spring); }
+.chip:hover { border-color: rgba(48, 209, 88, .45); transform: translateY(-3px); }
+.chip .ok { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: rgba(48, 209, 88, .13); color: #30D158; }
+.chip .ok svg { width: 14px; height: 14px; }
+.js .chip .ok svg path { stroke-dasharray: 20; stroke-dashoffset: 20; transition: stroke-dashoffset .5s ease-out; transition-delay: calc(var(--d, 0s) + .35s); }
+.js .in .chip .ok svg path, .js .chip.in .ok svg path { stroke-dashoffset: 0; }
+.chip b { font: 600 14px/1.25 var(--body); }
+.chip span { font-size: 12.5px; color: #A9B0BC; line-height: 1.45; }
+.verify { margin-top: 18px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.vbox { background: #0B0D11; border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: grid; gap: 10px; }
+.vbox p { margin: 0; color: #B3B9C5; font-size: 14px; }
+.cmdline { display: flex; align-items: center; gap: 10px; background: #050608; border: 1px solid #171A21; border-radius: 10px; padding: 10px 10px 10px 14px; }
+.cmdline code { flex: 1; min-width: 0; font: 12.5px/1.5 var(--mono); color: #D6DAE2; overflow-x: auto; white-space: nowrap; }
+.copy { flex: none; width: 32px; height: 32px; border-radius: 8px; border: 1px solid #232833; background: #0E1116; color: #C9CED8; cursor: pointer; display: grid; place-items: center; transition: background .2s, transform .35s var(--spring); }
+.copy:hover { background: #161A22; }
+.copy:active { transform: scale(.9); }
+.copy svg { width: 15px; height: 15px; }
+.copy .c2 { display: none; color: #30D158; }
+.copy.done .c1 { display: none; }
+.copy.done .c2 { display: block; animation: pop .4s var(--spring); }
+@keyframes pop { from { transform: scale(.4); } to { transform: none; } }
+
+/* versiones */
+.rels { display: grid; gap: 12px; }
+.rel { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 24px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px 28px; align-items: start; }
+.rel.latest { border-color: #26324A; background: linear-gradient(180deg, rgba(98, 124, 255, .07), transparent 70%), var(--panel); }
+.rel h3 { margin: 0; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font: 700 26px/1.1 var(--display); letter-spacing: -.02em; }
+.badge { font: 500 11px/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; padding: 6px 9px; border-radius: 999px; background: rgba(48, 209, 88, .14); color: #30D158; }
+.rel .meta2 { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 16px; font: 12.5px/1.5 var(--mono); color: var(--mute); }
+.rel ul { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; color: #C9CED8; font-size: 14px; }
+.rel li { padding-left: 16px; position: relative; }
+.rel li::before { content: ""; position: absolute; left: 0; top: .62em; width: 6px; height: 6px; border-radius: 50%; background: #3B4252; }
+.rel .side { display: grid; gap: 10px; justify-items: end; }
+.dl { display: inline-flex; align-items: center; gap: 10px; padding: 12px 18px; border-radius: 999px; background: var(--ink); color: #06080B; text-decoration: none; font: 600 14px/1 var(--body); transition: transform .45s var(--spring); white-space: nowrap; }
+.dl:hover { transform: translateY(-2px); }
+.dl svg { width: 16px; height: 16px; }
+.dl.ghost { background: transparent; color: var(--ink); border: 1px solid #2A303B; }
+.rel .sha { grid-column: 1 / -1; }
+.rel .sha .cmdline code { font-size: 11.5px; }
+.skel { height: 110px; border-radius: 22px; border: 1px solid var(--line); background: linear-gradient(90deg, #0B0D11 0%, #12151B 40%, #0B0D11 80%); background-size: 200% 100%; animation: shimmer 1.3s linear infinite; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.rels-foot { margin-top: 14px; font-size: 14px; color: var(--mute); }
+
+@media (max-width: 960px) { .shield { grid-template-columns: repeat(2, minmax(0, 1fr)); } .perf, .verify { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .rel { grid-template-columns: 1fr; } .rel .side { justify-items: start; } }
+@media (prefers-reduced-motion: reduce) {
+  .js [data-reveal] { opacity: 1; transform: none; }
+  .js .track i { transform: none; }
+  .js .chip .ok svg path { stroke-dashoffset: 0; }
+  .skel { animation: none; }
+}
+
 @media (max-width: 860px) {
   .hero-copy, .quiet, .oss, .part.full { grid-template-columns: 1fr; }
   .cta-row { justify-self: start; }
@@ -378,19 +492,21 @@ footer a { color: #C9CED8; }
     <a class="brand" href="#"><img src="__LOGO__" alt="">OpenDock</a>
     <nav class="links" aria-label="Secciones">
       <a href="#piezas">Qué trae</a>
+      <a href="#rendimiento">Rendimiento</a>
+      <a href="#seguridad">Seguridad</a>
+      <a href="#versiones">Versiones</a>
       <a href="#codigo">Código</a>
-      <a href="#instalar">Instalar</a>
       <a href="#opinion">Opinar</a>
       <span class="tag">Código abierto · MIT</span>
     </nav>
   </header>
 
   <section class="hero">
-    <h1>Tu Windows,<br><span class="soft">con notch, barra y</span> dock.</h1>
+    <h1><span class="ln">Tu Windows,</span><br><span class="ln soft">con notch, barra y</span> <span class="ln">dock.</span></h1>
     <div class="hero-copy">
       <p class="lede">OpenDock pone tus notificaciones en un notch, añade una barra superior con centro de control y un dock con tus apps. Todo se mueve con rebote, gasta menos memoria que una pestaña del navegador, no se conecta a internet y su código es abierto.</p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="#instalar">Instalar OpenDock</a>
+        <a class="btn btn-primary" href="#instalar">Instalar OpenDock <span class="arr">↓</span></a>
         <a class="btn btn-ghost" href="#codigo">Ver el código</a>
       </div>
     </div>
@@ -434,15 +550,15 @@ footer a { color: #C9CED8; }
     </div>
   </section>
 
-  <section class="specs" aria-label="Consumo">
-    <div class="spec"><div class="v">&lt;15<small>MB</small></div><div class="k">de memoria en uso</div></div>
-    <div class="spec"><div class="v">&lt;1<small>%</small></div><div class="k">de un núcleo en reposo</div></div>
-    <div class="spec"><div class="v">3,2<small>MB</small></div><div class="k">un solo .exe, en C</div></div>
+  <section class="specs" aria-label="Consumo" data-reveal>
+    <div class="spec"><div class="v"><span data-count="13.7" data-dec="1">13,7</span><small>MB</small></div><div class="k">de memoria en uso</div></div>
+    <div class="spec"><div class="v"><span data-count="1.3" data-dec="1">1,3</span><small>%</small></div><div class="k">de un núcleo en reposo</div></div>
+    <div class="spec"><div class="v"><span data-count="2.7" data-dec="1">2,7</span><small>MB</small></div><div class="k">un solo .exe, en C</div></div>
     <div class="spec"><div class="v">0<small>conexiones</small></div><div class="k">ni red ni telemetría</div></div>
     <div class="spec"><div class="v">MIT</div><div class="k">código abierto</div></div>
   </section>
 
-  <section id="piezas">
+  <section id="piezas" data-reveal>
     <div class="section-head">
       <h2>Cinco piezas que se entienden entre sí</h2>
       <p>El notch se funde con la barra, el dock respeta tus ventanas maximizadas y todo comparte material, acento y rebote. Cada pieza se activa por separado.</p>
@@ -514,11 +630,44 @@ footer a { color: #C9CED8; }
     </div>
   </section>
 
-  <section class="oss" id="codigo">
+
+  <section class="sec" id="rendimiento">
+    <div class="section-head" data-reveal>
+      <div><p class="eyebrow">Rendimiento</p><h2>Ligera de verdad, medido</h2></div>
+      <p>Medido en una laptop de 16 núcleos con la barra, el dock, el notch y las esquinas activos, en reposo. Las cifras salen del perfilador incluido en el código.</p>
+    </div>
+    <div class="perf">
+      <div class="meter" data-reveal>
+        <div class="mrow"><div class="top"><span>CPU en reposo · versión 2.0</span><b>1,3<small>% de un núcleo</small></b></div><div class="track"><i style="--w:52%"></i></div><div class="cap">0,08 % del equipo entero</div></div>
+        <div class="mrow"><div class="top"><span>CPU en reposo · versión anterior</span><b>2,5<small>%</small></b></div><div class="track old"><i style="--w:100%;--d:.3s"></i></div><div class="cap">−48 % tras el último análisis de rendimiento</div></div>
+        <div class="mrow"><div class="top"><span>Memoria privada</span><b>13,7<small>MB</small></b></div><div class="track"><i style="--w:14%;--d:.45s"></i></div><div class="cap">una pestaña típica del navegador usa más de 100 MB</div></div>
+        <div class="mrow"><div class="top"><span>Hilos · objetos de dibujo</span><b>11<small>· 94</small></b></div><div class="track"><i style="--w:22%;--d:.6s"></i></div><div class="cap">un solo hilo de interfaz; el resto, a la espera de avisos</div></div>
+      </div>
+      <div class="hows">
+        <div class="how" data-reveal style="--d:0.00s"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2.5L5 13.5h6l-1 8 8-11h-6z"/></svg></span><div><b>Escucha, no pregunta</b><span>Wi‑Fi, volumen, batería y notificaciones llegan como avisos del sistema; nada se consulta en bucle.</span></div></div><div class="how" data-reveal style="--d:0.07s"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg></span><div><b>Todo en caché</b><span>Iconos a alta resolución una vez; las apps ancladas solo se releen cuando cambias algo.</span></div></div><div class="how" data-reveal style="--d:0.14s"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg></span><div><b>Cursor con ritmo</b><span>20 consultas por segundo cerca del borde y 7 lejos de él; nada cuando no hace falta.</span></div></div><div class="how" data-reveal style="--d:0.21s"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h10M4 17h6"/></svg></span><div><b>Vidrio barato</b><span>El fondo se captura a un cuarto de resolución y solo se recompone si cambió lo de detrás.</span></div></div><div class="how" data-reveal style="--d:0.28s"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2.5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg></span><div><b>C y Win32, sin capas</b><span>Sin frameworks ni navegador embebido; las DLL del sistema se cargan solo cuando se usan.</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="seguridad">
+    <div class="section-head" data-reveal>
+      <div><p class="eyebrow">Seguridad</p><h2>Endurecida por defecto</h2></div>
+      <p>Cada versión se compila con MSVC en GitHub Actions, a la vista de todos, y no se publica si falta alguna de estas protecciones. El código pasó una revisión de seguridad completa en la 2.0.</p>
+    </div>
+    <div class="shield">
+      <div class="chip" data-reveal style="--d:0.00s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>Control Flow Guard</b><span>Los saltos indirectos solo van a destinos válidos.</span></div><div class="chip" data-reveal style="--d:0.06s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>CET · shadow stack</b><span>El procesador comprueba cada retorno de función.</span></div><div class="chip" data-reveal style="--d:0.12s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>ASLR de alta entropía</b><span>Direcciones de memoria impredecibles.</span></div><div class="chip" data-reveal style="--d:0.18s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>DEP</b><span>Los datos nunca se ejecutan como código.</span></div><div class="chip" data-reveal style="--d:0.24s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>DLL solo de System32</b><span>Nada plantado junto al .exe se carga.</span></div><div class="chip" data-reveal style="--d:0.12s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>Solo binarios de Microsoft</b><span>Ninguna DLL ajena entra en el proceso.</span></div><div class="chip" data-reveal style="--d:0.18s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>Sin código dinámico</b><span>No se puede generar ni inyectar código.</span></div><div class="chip" data-reveal style="--d:0.24s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>Sin imágenes remotas</b><span>Nada se carga desde la red ni de baja integridad.</span></div><div class="chip" data-reveal style="--d:0.30s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>Sin red ni telemetría</b><span>No abre ninguna conexión, nunca.</span></div><div class="chip" data-reveal style="--d:0.36s"><span class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><b>Sin administrador</b><span>Corre como tu usuario; todo vive en HKCU.</span></div>
+    </div>
+    <div class="verify">
+      <div class="vbox" data-reveal><p><b>Comprueba la descarga.</b> En PowerShell, junto al archivo; debe coincidir con el SHA-256 de la versión.</p><div class="cmdline"><code>Get-FileHash .\OpenDock.exe -Algorithm SHA256</code><button class="copy" type="button" data-copy="Get-FileHash .\OpenDock.exe -Algorithm SHA256" aria-label="Copiar el comando"><svg class="c1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><svg class="c2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></div></div>
+      <div class="vbox" data-reveal style="--d:.08s"><p><b>Comprueba las protecciones.</b> Con el código del repositorio y Python, sin instalar nada más.</p><div class="cmdline"><code>py tools/check_pe.py OpenDock.exe --strict</code><button class="copy" type="button" data-copy="py tools/check_pe.py OpenDock.exe --strict" aria-label="Copiar el comando"><svg class="c1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><svg class="c2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></div></div>
+    </div>
+  </section>
+
+  <section class="oss" id="codigo" data-reveal>
     <div>
       <img class="oss-logo" src="__LOGO__" alt="Logo de OpenDock: un cuadrado azul con el notch negro arriba">
       <h2>Código abierto, de principio a fin</h2>
-      <p>OpenDock se publica con licencia MIT: úsalo, estúdialo, modifícalo y compártelo. Son unas diez mil líneas de C contra la API de Win32, sin frameworks ni dependencias en tiempo de ejecución. Cada pieza vive en su propio archivo, así que es fácil encontrar lo que quieres cambiar.</p>
+      <p>OpenDock se publica con licencia MIT: úsalo, estúdialo, modifícalo y compártelo. Son unas once mil líneas de C contra la API de Win32, sin frameworks ni dependencias en tiempo de ejecución. Cada pieza vive en su propio archivo, así que es fácil encontrar lo que quieres cambiar.</p>
       <div class="maker"><span class="av" aria-hidden="true">D</span><div><b>Hecho por Daniel Godínez</b><a href="https://danielgodinez.netlify.app/" rel="noopener">danielgodinez.netlify.app</a></div></div>
       <pre class="cmd"><span class="c"># con MSYS2 (mingw-w64)</span>
 ./build.sh
@@ -526,19 +675,19 @@ footer a { color: #C9CED8; }
 build.bat</pre>
     </div>
     <div class="files" role="table" aria-label="Archivos del código">
-      <div class="f" role="row"><code>notch.c</code><span>La isla, el centro de notificaciones y los sonidos</span><em>1 948</em></div>
-      <div class="f" role="row"><code>menubar.c</code><span>Barra superior, centro de control y panel de bandeja</span><em>2 641</em></div>
-      <div class="f" role="row"><code>dock.c</code><span>Dock, apps ancladas y ocultación</span><em>1 585</em></div>
-      <div class="f" role="row"><code>winnotif.c</code><span>Lectura local de las notificaciones de Windows</span><em>926</em></div>
-      <div class="f" role="row"><code>tray.c</code><span>Recibe los iconos de la bandeja sin la barra de Windows</span><em>331</em></div>
+      <div class="f" role="row"><code>notch.c</code><span>La isla, el centro de notificaciones y los sonidos</span><em>1 904</em></div>
+      <div class="f" role="row"><code>menubar.c</code><span>Barra superior, centro de control y panel de bandeja</span><em>2 732</em></div>
+      <div class="f" role="row"><code>dock.c</code><span>Dock, apps ancladas y ocultación</span><em>1 626</em></div>
+      <div class="f" role="row"><code>winnotif.c</code><span>Lectura local de las notificaciones de Windows</span><em>932</em></div>
+      <div class="f" role="row"><code>tray.c</code><span>Recibe los iconos de la bandeja sin la barra de Windows</span><em>341</em></div>
       <div class="f" role="row"><code>panel.c</code><span>La ventana de ajustes</span><em>980</em></div>
-      <div class="f" role="row"><code>corner_radius.c</code><span>Arranque, esquinas y atajos</span><em>1 103</em></div>
+      <div class="f" role="row"><code>corner_radius.c</code><span>Arranque, esquinas y atajos</span><em>1 173</em></div>
       <div class="f" role="row"><code>gfx.c · pop.c</code><span>Antialiasado con SDF y muelles</span><em>810</em></div>
-      <div class="f total" role="row"><code>Total</code><span>Más install.c, el instalador sin permisos</span><em>10 638</em></div>
+      <div class="f total" role="row"><code>Total</code><span>Más install.c (instalador sin permisos) y lazy.c (DLL de System32)</span><em>10 917</em></div>
     </div>
   </section>
 
-  <section class="quiet" id="privacidad">
+  <section class="quiet" id="privacidad" data-reveal>
     <h2>Lee tus avisos sin sacarlos del equipo</h2>
     <dl class="facts">
       <div class="fact"><dt>Notificaciones</dt><dd>Se leen en solo lectura de la base local de Windows. No se copian, no se suben, no se guardan aparte.</dd></div>
@@ -549,7 +698,7 @@ build.bat</pre>
     </dl>
   </section>
 
-  <section class="install" id="instalar">
+  <section class="install" id="instalar" data-reveal>
     <div class="section-head" style="margin:0">
       <h2>Instalar en un minuto</h2>
       <p>¿Usabas CornerRadius? OpenDock es su nuevo nombre: al abrirlo cierra la versión vieja, conserva tus ajustes y ocupa su lugar.</p>
@@ -568,7 +717,35 @@ build.bat</pre>
   </section>
 
 
-  <section class="talk" id="opinion">
+
+  <section class="sec" id="versiones">
+    <div class="section-head" data-reveal>
+      <div><p class="eyebrow">Versiones</p><h2>Descargas y novedades</h2></div>
+      <p>Cada versión trae el .exe y su huella SHA-256. Las anteriores siguen en GitHub.</p>
+    </div>
+    <div class="rels" id="rels" data-reveal>
+      <article class="rel latest">
+        <div>
+          <h3>OpenDock 2.0.0 <span class="badge">Más reciente</span></h3>
+          <div class="meta2"><span>2 oct 2026</span><span>2,7 MB</span><span>Windows 10 y 11 · x64</span></div>
+          <ul>
+            <li>Nuevo nombre: CornerRadius ahora es OpenDock, y migra tus ajustes sola.</li>
+            <li>Barra superior con el icono de la app activa y esquinas de vidrio.</li>
+            <li>Catorce sonidos de Material Design, con Eco suave de serie.</li>
+            <li>CPU en reposo a la mitad y revisión de seguridad completa (CFG, CET, DLL de System32).</li>
+          </ul>
+        </div>
+        <div class="side">
+          <a class="dl" href="https://github.com/JosueGM24/OpenDock/releases/download/v2.0.0/OpenDock.exe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>Descargar .exe</a>
+          <a class="dl ghost" href="https://github.com/JosueGM24/OpenDock/releases/tag/v2.0.0">Notas completas</a>
+        </div>
+        <div class="sha"><div class="cmdline"><code>7b4d7c9807888ab71091238364a5bb34f0828df98b12db1497e07526989b1fc7</code><button class="copy" type="button" data-copy="7b4d7c9807888ab71091238364a5bb34f0828df98b12db1497e07526989b1fc7" aria-label="Copiar el SHA-256"><svg class="c1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><svg class="c2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></div></div>
+      </article>
+    </div>
+    <p class="rels-foot">Todas las versiones en <a href="https://github.com/JosueGM24/OpenDock/releases">GitHub Releases</a>.</p>
+  </section>
+
+  <section class="talk" id="opinion" data-reveal>
     <div class="talk-intro">
       <h2>¿Algo falla o se te ocurre algo?</h2>
       <p>Cuéntamelo aquí: llega directo a mi correo. Si dejas el tuyo, te aviso cuando esté arreglado o cuando la idea llegue a una versión.</p>
@@ -1313,5 +1490,80 @@ build.bat</pre>
       } finally { btn.disabled = false; lbl.textContent = label; }
     });
   });
+})();
+
+/* ── movimiento: cabecera, aparición al bajar, contadores, copiar y versiones ── */
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const head = document.querySelector('header.top');
+  const onScroll = () => head.classList.toggle('scrolled', scrollY > 12);
+  addEventListener('scroll', onScroll, { passive: true }); onScroll();
+
+  // aparición: cada bloque entra al acercarse; si algo falla, todo se ve igual
+  const els = [...document.querySelectorAll('[data-reveal]')];
+  const show = e => e.classList.add('in');
+  if (!reduce && 'IntersectionObserver' in window) {
+    let fired = false;      /* si el navegador nunca avisa, todo se muestra igual */
+    const io = new IntersectionObserver(es => { fired = true; es.forEach(e => { if (e.isIntersecting) { show(e.target); io.unobserve(e.target); } }); }, { rootMargin: '0px 0px -8% 0px', threshold: .08 });
+    els.forEach(e => io.observe(e));
+    setTimeout(() => { if (!fired) els.forEach(show); }, 1500);
+    setTimeout(() => els.forEach(e => { if (e.getBoundingClientRect().top < innerHeight) show(e); }), 60);
+  } else els.forEach(show);
+
+  // contadores de la franja de cifras
+  const fmt = (v, d) => v.toFixed(d).replace('.', ',');
+  const count = el => {
+    const to = parseFloat(el.dataset.count), d = +el.dataset.dec || 0, t0 = performance.now(), dur = 1100;
+    const f = now => { const p = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - p, 4); el.textContent = fmt(to * e, d); if (p < 1) requestAnimationFrame(f); };
+    requestAnimationFrame(f);
+  };
+  const nums = [...document.querySelectorAll('[data-count]')];
+  if (!reduce && 'IntersectionObserver' in window) {
+    const io2 = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { count(e.target); io2.unobserve(e.target); } }), { threshold: .6 });
+    nums.forEach(n => io2.observe(n));
+  }
+
+  // copiar con confirmación
+  document.addEventListener('click', async e => {
+    const b = e.target.closest('.copy'); if (!b) return;
+    const text = b.dataset.copy;
+    try { await navigator.clipboard.writeText(text); }
+    catch { const r = document.createRange(); r.selectNodeContents(b.previousElementSibling); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+    b.classList.add('done'); b.setAttribute('aria-label', 'Copiado');
+    setTimeout(() => { b.classList.remove('done'); b.setAttribute('aria-label', 'Copiar'); }, 1600);
+  });
+
+  // versiones: la lista real de GitHub (la de la página queda si no hay red)
+  const box = document.getElementById('rels'); if (!box || !window.fetch) return;
+  const REPO = 'JosueGM24/OpenDock';
+  const esc = t => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const date = s => new Date(s).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' }).replace('.', '');
+  const mb = n => (n / 1048576).toFixed(1).replace('.', ',') + ' MB';
+  const tpl = box.querySelector('.rel');
+  fetch('https://api.github.com/repos/' + REPO + '/releases?per_page=6', { headers: { Accept: 'application/vnd.github+json' } })
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(list => {
+      list = list.filter(r => !r.draft);
+      if (!list.length) return;
+      const keep = tpl.cloneNode(true);
+      box.innerHTML = '';
+      list.forEach((r, i) => {
+        const exe = (r.assets || []).find(a => /\.exe$/i.test(a.name));
+        let el;
+        if (r.tag_name === 'v2.0.0') { el = keep.cloneNode(true); el.classList.toggle('latest', i === 0); const b = el.querySelector('.badge'); if (b && i) b.remove(); }
+        else {
+          el = document.createElement('article'); el.className = 'rel' + (i === 0 ? ' latest' : '');
+          const notes = (r.body || '').split('\n').map(l => l.replace(/^[-*]\s+/, '').trim()).filter(l => l && !/^#|^\*\*Full Changelog/.test(l)).slice(0, 4);
+          el.innerHTML = '<div><h3>' + esc(r.name || r.tag_name) + (i === 0 ? ' <span class="badge">Más reciente</span>' : '') + '</h3>'
+            + '<div class="meta2"><span>' + date(r.published_at) + '</span>' + (exe ? '<span>' + mb(exe.size) + '</span>' : '') + '<span>Windows 10 y 11 · x64</span></div>'
+            + (notes.length ? '<ul>' + notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>' : '') + '</div>'
+            + '<div class="side">' + (exe ? '<a class="dl" href="' + esc(exe.browser_download_url) + '">' + tpl.querySelector('.dl svg').outerHTML + 'Descargar .exe</a>' : '')
+            + '<a class="dl ghost" href="' + esc(r.html_url) + '">Notas completas</a></div>';
+        }
+        el.style.animation = reduce ? '' : 'rise .6s ' + (i * 0.07) + 's cubic-bezier(.2,.9,.25,1) both';
+        box.appendChild(el);
+      });
+    })
+    .catch(() => { /* sin red o sin cuota de la API: se queda la versión escrita en la página */ });
 })();
 </script>
