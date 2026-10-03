@@ -203,6 +203,10 @@ else
     MINI_RESULT="$(shell_eval "$MINI_JS")"
     echo "Eval mini notch -> $MINI_RESULT"
     soft_check "la pastilla del mini notch aparece y se imanta al centro" 'miniMode=pill;miniVisible=true;miniX=0' "$MINI_RESULT"
+    if ! echo "$MINI_RESULT" | grep -q 'miniMode=pill'; then
+        # ¿Qué actor reactivo hay bajo el cursor? (si no es la franja, algo la tapa)
+        echo "Actor bajo el cursor -> $(shell_eval "(() => { const Clutter = imports.gi.Clutter; const ext = $LOOKUP_EXPR; const m = ext._notch._monitor; const a = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, m.x + m.width / 2, m.y + 31); const s = ext._notch._hotStrip; return 'actor=' + (a ? (a.name || a.constructor.name) : 'null') + ';strip=' + s.x + ',' + s.y + ',' + s.width + 'x' + s.height + ';stripVisible=' + s.visible + ';panel=' + ext._notch._panelHeight; })()")"
+    fi
 
     sleep 0.3
     MINI_RESULT2="$(shell_eval "$MINI_JS")"
@@ -242,6 +246,9 @@ else
         TRASH_WIDTH_RESULT="$(shell_eval "$TRASH_WIDTH_JS")"
         echo "Eval papelera -> $TRASH_WIDTH_RESULT"
         soft_check "la papelera crece de 40 a 58 px al pasar el cursor" 'trashWidth=5[0-9]' "$TRASH_WIDTH_RESULT"
+        if ! echo "$TRASH_WIDTH_RESULT" | grep -q 'trashWidth=5'; then
+            echo "Actor bajo el cursor (papelera) -> $(shell_eval "(() => { const Clutter = imports.gi.Clutter; const ext = $LOOKUP_EXPR; const card = ext._notch._cardList.get_children()[0]; const t = card.get_children().find(c => c.name === 'opendock-trash-strip'); const [x, y] = t.get_transformed_position(); const [w, h] = t.get_transformed_size(); const a = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, x + w / 2, y + h / 2); return 'actor=' + (a ? (a.name || a.constructor.name) : 'null') + ';trash=' + Math.round(x) + ',' + Math.round(y) + ',' + Math.round(w) + 'x' + Math.round(h); })()")"
+        fi
 
         # --- Borrar: la tarjeta debe desaparecer tras deslizar y desvanecer.
         DISMISS_JS="(() => { const ext = $LOOKUP_EXPR; const card = ext._notch._cardList.get_children()[1]; const n = card._opendockNotification; ext._notch._dismiss(n); return 'borrando'; })()"
