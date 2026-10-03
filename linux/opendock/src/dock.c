@@ -203,15 +203,6 @@ static void item_liberar(gpointer p)
     g_free(it);
 }
 
-static OdItem *buscar_item(const char *id)
-{
-    for (guint i = 0; i < g_d.items->len; i++) {
-        OdItem *it = g_ptr_array_index(g_d.items, i);
-        if (g_strcmp0(it->id, id) == 0) return it;
-    }
-    return NULL;
-}
-
 static const char *nombre_item(OdItem *it)
 {
     return it->info ? g_app_info_get_display_name(G_APP_INFO(it->info)) : it->id;
