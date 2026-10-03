@@ -33,8 +33,23 @@ typedef struct {
 } AppInfo;
 
 static sqlite3  *s_db;
-static WinNote   s_notes[WN_MAX];
+static WinNote   s_notes[WN_MAX];     /* lo que enseña el centro: base de Windows + historial */
 static int       s_count;
+
+/* Los navegadores (WhatsApp Web, Telegram…) usan la misma etiqueta para todo un chat y
+ * Windows REEMPLAZA el aviso anterior por el nuevo: en su base sólo queda el último. Para
+ * no perder los anteriores, guardamos aquí los que fueron reemplazados. Se van al
+ * borrarlos, con "Borrar todo" o cuando el chat entero desaparece de Windows. */
+#define KEY_CAP 64
+typedef struct { wchar_t tag[KEY_CAP], group[KEY_CAP]; } NoteKey;
+static WinNote   s_cur[WN_MAX];       /* filas de la base en la última lectura */
+static NoteKey   s_curKey[WN_MAX];
+static int       s_ncur;
+static WinNote   s_hist[WN_MAX];      /* reemplazados */
+static NoteKey   s_histKey[WN_MAX];
+static int       s_nhist;
+/* Ids propios del historial, lejos de los de Windows (no chocan ni con "Borrar todo"). */
+static LONGLONG  s_histSeq = 0x4000000000000000LL;
 static LONGLONG  s_lastSeen = -1;      /* -1 = primera carga: no avisar de lo antiguo */
 static LONGLONG  s_cleared;            /* "Borrar todo": oculta ids <= este */
 static LONGLONG  s_dismissed[64];
@@ -409,33 +424,87 @@ static BOOL OpenDb(void)
 static BOOL IsDismissed(LONGLONG id)
 {
     if (id <= s_cleared) return TRUE;
-    for (int i = 0; i < s_ndismissed; ++i) if (s_dismissed[i] == id) return TRUE;
+    /* s_ndismissed sigue contando pasado 64 (anillo): no leer fuera de la tabla */
+    const int n = min(s_ndismissed, (int)(sizeof(s_dismissed) / sizeof(s_dismissed[0])));
+    for (int i = 0; i < n; ++i) if (s_dismissed[i] == id) return TRUE;
     return FALSE;
+}
+
+static BOOL SameChat(const WinNote *a, const NoteKey *ka, const WinNote *b, const NoteKey *kb)
+{
+    return ka->tag[0] && !lstrcmpW(ka->tag, kb->tag) && !lstrcmpW(ka->group, kb->group) &&
+           !lstrcmpiW(a->aumid, b->aumid);
+}
+
+static void CopyKey(NoteKey *k, const unsigned char *tag, const unsigned char *group)
+{
+    k->tag[0] = k->group[0] = 0;
+    if (tag) MultiByteToWideChar(CP_UTF8, 0, (const char *)tag, -1, k->tag, KEY_CAP);
+    if (group) MultiByteToWideChar(CP_UTF8, 0, (const char *)group, -1, k->group, KEY_CAP);
+    k->tag[KEY_CAP - 1] = k->group[KEY_CAP - 1] = 0;
+}
+
+static void PushHistory(const WinNote *w, const NoteKey *k)
+{
+    if (s_nhist == WN_MAX) {            /* lleno: fuera el más antiguo (el último) */
+        --s_nhist;
+    }
+    MoveMemory(&s_hist[1], &s_hist[0], s_nhist * sizeof(WinNote));
+    MoveMemory(&s_histKey[1], &s_histKey[0], s_nhist * sizeof(NoteKey));
+    s_hist[0] = *w;
+    s_hist[0].id = ++s_histSeq;
+    s_histKey[0] = *k;
+    ++s_nhist;
+}
+
+static void DropHistory(int i)
+{
+    MoveMemory(&s_hist[i], &s_hist[i + 1], (s_nhist - i - 1) * sizeof(WinNote));
+    MoveMemory(&s_histKey[i], &s_histKey[i + 1], (s_nhist - i - 1) * sizeof(NoteKey));
+    --s_nhist;
+}
+
+/* s_notes = base + historial, del más nuevo al más antiguo (por llegada). */
+static void Merge(void)
+{
+    int a = 0, b = 0, n = 0;
+    while (n < WN_MAX && (a < s_ncur || b < s_nhist)) {
+        const BOOL takeCur = b >= s_nhist || (a < s_ncur && s_cur[a].arrival >= s_hist[b].arrival);
+        s_notes[n++] = takeCur ? s_cur[a++] : s_hist[b++];
+    }
+    s_count = n;
 }
 
 void Wn_Refresh(BOOL notify)
 {
     if (!OpenDb()) return;
     static const char kSql[] =
-        "SELECT n.Id, n.ArrivalTime, n.Payload, h.PrimaryId "
+        "SELECT n.Id, n.ArrivalTime, n.Payload, h.PrimaryId, n.Tag, n.\"Group\" "
+        "FROM Notification n JOIN NotificationHandler h ON h.RecordId = n.HandlerId "
+        "WHERE n.Type = 'toast' ORDER BY n.Id DESC LIMIT 60";
+    /* Sin Tag/Group (esquema antiguo): igual que antes, sin historial. */
+    static const char kSqlOld[] =
+        "SELECT n.Id, n.ArrivalTime, n.Payload, h.PrimaryId, NULL, NULL "
         "FROM Notification n JOIN NotificationHandler h ON h.RecordId = n.HandlerId "
         "WHERE n.Type = 'toast' ORDER BY n.Id DESC LIMIT 60";
     sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(s_db, kSql, -1, &st, NULL) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(s_db, kSql, -1, &st, NULL) != SQLITE_OK &&
+        sqlite3_prepare_v2(s_db, kSqlOld, -1, &st, NULL) != SQLITE_OK) {
         sqlite3_close(s_db);    /* esquema distinto o base bloqueada: reintentar en el próximo cambio */
         s_db = NULL;
         return;
     }
 
+    static WinNote fresh[WN_MAX];
+    static NoteKey freshKey[WN_MAX];
     int n = 0;
-    LONGLONG maxId = s_lastSeen;
-    int newest = -1;
+    LONGLONG maxId = s_lastSeen, newestId = 0;
     while (n < WN_MAX && sqlite3_step(st) == SQLITE_ROW) {
         const LONGLONG id = sqlite3_column_int64(st, 0);
         if (id > maxId) maxId = id;
         if (IsDismissed(id)) continue;
 
-        WinNote *w = &s_notes[n];
+        WinNote *w = &fresh[n];
         ZeroMemory(w, sizeof(*w));
         w->id = id;
         w->arrival = sqlite3_column_int64(st, 1);
@@ -443,16 +512,46 @@ void Wn_Refresh(BOOL notify)
         lstrcpynW(w->aumid, aumid ? aumid : L"", 160);
         ParsePayload(sqlite3_column_blob(st, 2), sqlite3_column_bytes(st, 2), w);
         if (!w->title[0] && !w->body[0]) continue;
+        CopyKey(&freshKey[n], sqlite3_column_text(st, 4), sqlite3_column_text(st, 5));
 
         lstrcpynW(w->app, LookupApp(w->aumid)->name, 64);
-        if (s_lastSeen >= 0 && id > s_lastSeen && newest < 0) newest = n;
+        if (s_lastSeen >= 0 && id > s_lastSeen && !newestId) newestId = id;
         ++n;
     }
     sqlite3_finalize(st);
-    s_count = n;
-    s_lastSeen = maxId < 0 ? 0 : maxId;
 
-    if (notify && newest >= 0) Notch_ShowWin(&s_notes[newest]);
+    /* Lo que había y ya no está porque otro del mismo chat lo reemplazó: al historial.
+     * (También si Windows lo reescribió en el sitio con otro texto.) */
+    for (int i = 0; i < s_ncur; ++i) {
+        const WinNote *old = &s_cur[i];
+        if (!s_curKey[i].tag[0] || IsDismissed(old->id)) continue;
+        BOOL kept = FALSE, replaced = FALSE;
+        for (int j = 0; j < n; ++j) {
+            if (fresh[j].id == old->id) {
+                kept = !lstrcmpW(fresh[j].title, old->title) && !lstrcmpW(fresh[j].body, old->body);
+                replaced = !kept;
+                break;
+            }
+            if (fresh[j].id > old->id && SameChat(&fresh[j], &freshKey[j], old, &s_curKey[i])) replaced = TRUE;
+        }
+        if (replaced && !kept) PushHistory(old, &s_curKey[i]);
+    }
+    /* Y fuera del historial lo de los chats que ya no tienen ningún aviso en Windows. */
+    for (int i = s_nhist - 1; i >= 0; --i) {
+        BOOL alive = FALSE;
+        for (int j = 0; j < n && !alive; ++j) alive = SameChat(&fresh[j], &freshKey[j], &s_hist[i], &s_histKey[i]);
+        if (!alive || IsDismissed(s_hist[i].id)) DropHistory(i);
+    }
+
+    CopyMemory(s_cur, fresh, n * sizeof(WinNote));
+    CopyMemory(s_curKey, freshKey, n * sizeof(NoteKey));
+    s_ncur = n;
+    s_lastSeen = maxId < 0 ? 0 : maxId;
+    Merge();
+
+    if (notify && newestId)
+        for (int i = 0; i < s_count; ++i)
+            if (s_notes[i].id == newestId) { Notch_ShowWin(&s_notes[i]); break; }
     Notch_NotesChanged();
 }
 
@@ -611,6 +710,8 @@ void Wn_Dismiss(LONGLONG id)
 {
     if (s_ndismissed < 64) s_dismissed[s_ndismissed++] = id;
     else s_dismissed[(s_ndismissed++) % 64] = id;
+    for (int i = 0; i < s_nhist; ++i)
+        if (s_hist[i].id == id) { DropHistory(i); break; }
     for (int i = 0; i < s_count; ++i)
         if (s_notes[i].id == id) {
             MoveMemory(&s_notes[i], &s_notes[i + 1], (s_count - i - 1) * sizeof(WinNote));
@@ -629,6 +730,7 @@ void Wn_DismissAll(void)
         RegCloseKey(k);
     }
     s_count = 0;
+    s_ncur = s_nhist = 0;
     Notch_NotesChanged();
 }
 
@@ -904,6 +1006,7 @@ void Wn_Stop(void)
         for (int k = 0; k < 2; ++k) if (s_apps[i].icon[k]) DeleteObject(s_apps[i].icon[k]);
     s_napps = 0;
     s_count = 0;
+    s_ncur = s_nhist = 0;
 }
 
 /* ───────────────────────── Restaurar banners ───────────────────────── */
