@@ -295,7 +295,7 @@ build.bat</pre>
         <button role="tab" id="tabIdea" aria-controls="panelIdea" aria-selected="false">Sugerir una función</button>
       </div>
       <div class="fcard" role="tabpanel" id="panelBug" aria-labelledby="tabBug">
-        <form name="reportar-error" method="POST" action="/gracias.html" data-netlify="true" netlify-honeypot="bot-field" novalidate>
+        <form name="reportar-error" method="POST" action="/gracias.html" enctype="multipart/form-data" data-netlify="true" netlify-honeypot="bot-field" novalidate>
           <input type="hidden" name="form-name" value="reportar-error"><input type="hidden" name="version" value="OpenDock 2.0.0">
           <p class="hp"><label>No llenes esto: <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
           <div class="fgrid">
@@ -305,12 +305,18 @@ build.bat</pre>
             <div class="field"><label for="bWin">Windows</label><select id="bWin" name="windows"><option>Windows 11</option><option>Windows 10</option><option>No lo sé</option></select></div>
             <div class="field full"><label for="bWhat">Qué pasó</label><textarea id="bWhat" name="que-paso" required minlength="10" placeholder="Al abrir el centro de control con Vidrio, la barra parpadea…"></textarea><span class="err" aria-live="polite"></span></div>
             <div class="field full"><label for="bSteps">Cómo reproducirlo <small>(opcional)</small></label><textarea id="bSteps" name="pasos" placeholder="1. Activo la barra superior&#10;2. Cambio el material a Vidrio&#10;3. …"></textarea></div>
+            <div class="field full"><label for="bShot">Imagen <small>(opcional · PNG, JPG, GIF o WebP, hasta 8 MB)</small></label>
+              <label class="drop" for="bShot" data-drop>
+                <input class="vh" id="bShot" name="imagen" type="file" accept="image/png,image/jpeg,image/gif,image/webp">
+                <span class="dz"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-8 9"/></svg><span>Arrastra una imagen, pégala con <kbd>Ctrl</kbd>+<kbd>V</kbd> o <u>elige un archivo</u></span></span>
+                <span class="pv" hidden><img alt="Vista previa de la imagen adjunta"><span class="nm"></span><button type="button" class="rm">Quitar</button></span>
+              </label><span class="err" aria-live="polite"></span></div>
           </div>
           <div class="factions"><button class="send" type="submit"><span class="spin" aria-hidden="true"></span><span class="lbl">Enviar reporte</span></button><span class="fstatus" role="status" aria-live="polite"></span></div>
         </form>
       </div>
       <div class="fcard" role="tabpanel" id="panelIdea" aria-labelledby="tabIdea" hidden>
-        <form name="sugerir-funcion" method="POST" action="/gracias.html" data-netlify="true" netlify-honeypot="bot-field" novalidate>
+        <form name="sugerir-funcion" method="POST" action="/gracias.html" enctype="multipart/form-data" data-netlify="true" netlify-honeypot="bot-field" novalidate>
           <input type="hidden" name="form-name" value="sugerir-funcion"><input type="hidden" name="version" value="OpenDock 2.0.0">
           <p class="hp"><label>No llenes esto: <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
           <div class="fgrid">
@@ -319,6 +325,12 @@ build.bat</pre>
             <div class="field full"><label for="iPiece">Para qué parte</label><select id="iPiece" name="pieza"><option>Notch y notificaciones</option><option>Barra superior</option><option>Centro de control</option><option>Dock</option><option>Esquinas redondeadas</option><option>Sonidos</option><option>Instalación</option><option>Otra cosa</option></select></div>
             <div class="field full"><label for="iTitle">Tu idea en una frase</label><input id="iTitle" name="idea" required minlength="5" placeholder="Que el dock muestre la batería de mis audífonos"><span class="err" aria-live="polite"></span></div>
             <div class="field full"><label for="iWhy">Cuéntame más</label><textarea id="iWhy" name="detalle" required minlength="10" placeholder="Qué te gustaría que hiciera y en qué te ayudaría."></textarea><span class="err" aria-live="polite"></span></div>
+            <div class="field full"><label for="iShot">Imagen <small>(opcional · PNG, JPG, GIF o WebP, hasta 8 MB)</small></label>
+              <label class="drop" for="iShot" data-drop>
+                <input class="vh" id="iShot" name="imagen" type="file" accept="image/png,image/jpeg,image/gif,image/webp">
+                <span class="dz"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-8 9"/></svg><span>Arrastra una imagen, pégala con <kbd>Ctrl</kbd>+<kbd>V</kbd> o <u>elige un archivo</u></span></span>
+                <span class="pv" hidden><img alt="Vista previa de la imagen adjunta"><span class="nm"></span><button type="button" class="rm">Quitar</button></span>
+              </label><span class="err" aria-live="polite"></span></div>
           </div>
           <div class="factions"><button class="send" type="submit"><span class="spin" aria-hidden="true"></span><span class="lbl">Enviar idea</span></button><span class="fstatus" role="status" aria-live="polite"></span></div>
         </form>

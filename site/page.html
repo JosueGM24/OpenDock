@@ -339,6 +339,22 @@ footer p { margin: 0; max-width: 62ch; }
 .done h3 { margin: 0; font: 700 24px/1.15 var(--display); }
 .done p { margin: 0; color: #B3B9C5; max-width: 44ch; }
 .done button { margin-top: 6px; background: none; border: 1px solid #2A303B; color: var(--ink); border-radius: 999px; padding: 9px 16px; font: 500 14px/1 var(--body); cursor: pointer; }
+
+.vh { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.drop { display: block; border: 1.5px dashed #2A303B; border-radius: 14px; background: #06080B; cursor: pointer; transition: border-color .2s, background .2s, transform .35s var(--spring); }
+.drop:hover, .drop:focus-within { border-color: #3B4560; }
+.drop.over { border-color: var(--accent); background: rgba(143, 184, 255, .06); transform: scale(1.01); }
+.drop .dz { display: flex; align-items: center; gap: 12px; padding: 16px; color: #A9B0BC; font-size: 14px; }
+.drop .dz svg { width: 26px; height: 26px; flex: none; color: var(--mute); }
+.drop .dz u { color: var(--accent); text-decoration: none; }
+.drop kbd { font: 500 11px/1 var(--mono); padding: 3px 6px; border: 1px solid #2A303B; border-bottom-width: 2px; border-radius: 5px; color: #D6DAE2; }
+.drop .pv { display: flex; align-items: center; gap: 14px; padding: 10px; }
+.drop .pv[hidden] { display: none; }
+.drop .pv img { width: 72px; height: 54px; object-fit: cover; border-radius: 8px; border: 1px solid #232833; animation: pop .4s var(--spring); }
+.drop .pv .nm { flex: 1; min-width: 0; font: 12.5px/1.4 var(--mono); color: #C9CED8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drop .pv .rm { background: none; border: 1px solid #2A303B; color: var(--ink); border-radius: 999px; padding: 7px 12px; font: 500 13px/1 var(--body); cursor: pointer; }
+.drop.has .dz { display: none; }
+.field.bad .drop { border-color: #FF6B6B; }
 /* créditos */
 .maker { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .maker .av { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: linear-gradient(160deg, #96BEFF, #5464F0); color: #fff; font: 700 17px/1 var(--display); flex: none; }
@@ -760,7 +776,7 @@ build.bat</pre>
         <button role="tab" id="tabIdea" aria-controls="panelIdea" aria-selected="false">Sugerir una función</button>
       </div>
       <div class="fcard" role="tabpanel" id="panelBug" aria-labelledby="tabBug">
-        <form name="reportar-error" method="POST" action="/gracias.html" data-netlify="true" netlify-honeypot="bot-field" novalidate>
+        <form name="reportar-error" method="POST" action="/gracias.html" enctype="multipart/form-data" data-netlify="true" netlify-honeypot="bot-field" novalidate>
           <input type="hidden" name="form-name" value="reportar-error"><input type="hidden" name="version" value="OpenDock 2.0.0">
           <p class="hp"><label>No llenes esto: <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
           <div class="fgrid">
@@ -770,12 +786,18 @@ build.bat</pre>
             <div class="field"><label for="bWin">Windows</label><select id="bWin" name="windows"><option>Windows 11</option><option>Windows 10</option><option>No lo sé</option></select></div>
             <div class="field full"><label for="bWhat">Qué pasó</label><textarea id="bWhat" name="que-paso" required minlength="10" placeholder="Al abrir el centro de control con Vidrio, la barra parpadea…"></textarea><span class="err" aria-live="polite"></span></div>
             <div class="field full"><label for="bSteps">Cómo reproducirlo <small>(opcional)</small></label><textarea id="bSteps" name="pasos" placeholder="1. Activo la barra superior&#10;2. Cambio el material a Vidrio&#10;3. …"></textarea></div>
+            <div class="field full"><label for="bShot">Imagen <small>(opcional · PNG, JPG, GIF o WebP, hasta 8 MB)</small></label>
+              <label class="drop" for="bShot" data-drop>
+                <input class="vh" id="bShot" name="imagen" type="file" accept="image/png,image/jpeg,image/gif,image/webp">
+                <span class="dz"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-8 9"/></svg><span>Arrastra una imagen, pégala con <kbd>Ctrl</kbd>+<kbd>V</kbd> o <u>elige un archivo</u></span></span>
+                <span class="pv" hidden><img alt="Vista previa de la imagen adjunta"><span class="nm"></span><button type="button" class="rm">Quitar</button></span>
+              </label><span class="err" aria-live="polite"></span></div>
           </div>
           <div class="factions"><button class="send" type="submit"><span class="spin" aria-hidden="true"></span><span class="lbl">Enviar reporte</span></button><span class="fstatus" role="status" aria-live="polite"></span></div>
         </form>
       </div>
       <div class="fcard" role="tabpanel" id="panelIdea" aria-labelledby="tabIdea" hidden>
-        <form name="sugerir-funcion" method="POST" action="/gracias.html" data-netlify="true" netlify-honeypot="bot-field" novalidate>
+        <form name="sugerir-funcion" method="POST" action="/gracias.html" enctype="multipart/form-data" data-netlify="true" netlify-honeypot="bot-field" novalidate>
           <input type="hidden" name="form-name" value="sugerir-funcion"><input type="hidden" name="version" value="OpenDock 2.0.0">
           <p class="hp"><label>No llenes esto: <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
           <div class="fgrid">
@@ -784,6 +806,12 @@ build.bat</pre>
             <div class="field full"><label for="iPiece">Para qué parte</label><select id="iPiece" name="pieza"><option>Notch y notificaciones</option><option>Barra superior</option><option>Centro de control</option><option>Dock</option><option>Esquinas redondeadas</option><option>Sonidos</option><option>Instalación</option><option>Otra cosa</option></select></div>
             <div class="field full"><label for="iTitle">Tu idea en una frase</label><input id="iTitle" name="idea" required minlength="5" placeholder="Que el dock muestre la batería de mis audífonos"><span class="err" aria-live="polite"></span></div>
             <div class="field full"><label for="iWhy">Cuéntame más</label><textarea id="iWhy" name="detalle" required minlength="10" placeholder="Qué te gustaría que hiciera y en qué te ayudaría."></textarea><span class="err" aria-live="polite"></span></div>
+            <div class="field full"><label for="iShot">Imagen <small>(opcional · PNG, JPG, GIF o WebP, hasta 8 MB)</small></label>
+              <label class="drop" for="iShot" data-drop>
+                <input class="vh" id="iShot" name="imagen" type="file" accept="image/png,image/jpeg,image/gif,image/webp">
+                <span class="dz"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-8 9"/></svg><span>Arrastra una imagen, pégala con <kbd>Ctrl</kbd>+<kbd>V</kbd> o <u>elige un archivo</u></span></span>
+                <span class="pv" hidden><img alt="Vista previa de la imagen adjunta"><span class="nm"></span><button type="button" class="rm">Quitar</button></span>
+              </label><span class="err" aria-live="polite"></span></div>
           </div>
           <div class="factions"><button class="send" type="submit"><span class="spin" aria-hidden="true"></span><span class="lbl">Enviar idea</span></button><span class="fstatus" role="status" aria-live="polite"></span></div>
         </form>
@@ -1456,8 +1484,15 @@ build.bat</pre>
     tabs.forEach(([t2, p2]) => { document.getElementById(t2).setAttribute('aria-selected', String(t2 === t)); document.getElementById(p2).hidden = p2 !== p; });
   }));
   const MSG = { 'que-paso': 'Cuéntame qué pasó (al menos 10 caracteres).', idea: 'Escribe tu idea en una frase.', detalle: 'Cuéntame un poco más (al menos 10 caracteres).', correo: 'Ese correo no parece válido.' };
+  const MAX = 8 * 1024 * 1024, TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
   const check = f => {
     let ok = true;
+    f.querySelectorAll('input[type="file"]').forEach(el => {
+      const box = el.closest('.field'), err = box.querySelector(':scope > .err'), file = el.files[0];
+      const msg = !file ? '' : !TYPES.includes(file.type) ? 'Solo imágenes PNG, JPG, GIF o WebP.' : file.size > MAX ? 'La imagen pesa más de 8 MB.' : '';
+      box.classList.toggle('bad', !!msg); if (err) err.textContent = msg;
+      if (msg) ok = false;
+    });
     f.querySelectorAll('input[required], textarea[required], input[type="email"]').forEach(el => {
       const box = el.closest('.field'), err = box.querySelector('.err');
       const bad = el.type === 'email' ? el.value.trim() !== '' && !el.checkValidity() : !el.checkValidity() || el.value.trim().length < (el.minLength || 1);
@@ -1474,8 +1509,11 @@ build.bat</pre>
       if (!check(f)) return;
       btn.disabled = true; lbl.textContent = 'Enviando…';
       try {
-        const r = await fetch('/', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(f)).toString() });
-        if (!r.ok) throw new Error(r.status);
+        const data = new FormData(f);
+        const file = f.querySelector('input[type="file"]');
+        if (file && !file.files.length) data.delete(file.name);           /* sin imagen: sin campo vacío */
+        const r = await fetch('/', { method: 'POST', body: data });       /* multipart: así viaja la imagen */
+        if (!r.ok) throw new Error(String(r.status));
         const card = f.parentElement, bug = f.name === 'reportar-error';
         f.hidden = true;
         const done = document.createElement('div'); done.className = 'done'; done.setAttribute('role', 'status');
@@ -1483,10 +1521,12 @@ build.bat</pre>
           + '<h3>' + (bug ? 'Gracias, ya me llegó el reporte' : 'Gracias, ya me llegó tu idea') + '</h3>'
           + '<p>' + (f.querySelector('[name="correo"]').value.trim() ? 'Te escribo a tu correo en cuanto tenga novedades.' : 'Lo reviso en los próximos días.') + '</p>'
           + '<button type="button">' + (bug ? 'Reportar otro error' : 'Enviar otra idea') + '</button>';
-        done.querySelector('button').onclick = () => { done.remove(); f.reset(); f.hidden = false; f.querySelector('input:not([type="hidden"]), textarea').focus(); };
+        done.querySelector('button').onclick = () => { done.remove(); f.reset(); f.querySelectorAll('[data-drop]').forEach(d => d.clear && d.clear()); f.hidden = false; f.querySelector('input:not([type="hidden"]), textarea').focus(); };
         card.appendChild(done); done.querySelector('h3').focus?.();
       } catch (err) {
-        status.textContent = 'No se pudo enviar. Revisa tu conexión e inténtalo de nuevo.';
+        status.textContent = /^\d+$/.test(err.message)
+          ? 'No se pudo enviar (error ' + err.message + ' del servidor). Inténtalo de nuevo en un momento.'
+          : 'No se pudo enviar. Revisa tu conexión e inténtalo de nuevo.';
       } finally { btn.disabled = false; lbl.textContent = label; }
     });
   });
@@ -1565,5 +1605,38 @@ build.bat</pre>
       });
     })
     .catch(() => { /* sin red o sin cuota de la API: se queda la versión escrita en la página */ });
+})();
+
+/* ── imagen adjunta: arrastrar, pegar (Ctrl+V) o elegir, con vista previa ── */
+(() => {
+  document.querySelectorAll('[data-drop]').forEach(d => {
+    const input = d.querySelector('input'), pv = d.querySelector('.pv'), img = pv.querySelector('img'), nm = pv.querySelector('.nm');
+    let url = '';
+    const kb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1).replace('.', ',') + ' MB';
+    const render = () => {
+      if (url) URL.revokeObjectURL(url), url = '';
+      const f = input.files[0];
+      d.classList.toggle('has', !!f); pv.hidden = !f;
+      if (f) { url = URL.createObjectURL(f); img.src = url; nm.textContent = f.name + ' · ' + kb(f.size); }
+      const box = d.closest('.field'); box.classList.remove('bad'); const er = box.querySelector(':scope > .err'); if (er) er.textContent = '';
+    };
+    const set = file => { try { const dt = new DataTransfer(); dt.items.add(file); input.files = dt.files; } catch { return; } render(); };
+    d.clear = () => { input.value = ''; render(); };
+    input.addEventListener('change', render);
+    pv.querySelector('.rm').addEventListener('click', e => { e.preventDefault(); d.clear(); });
+    ['dragenter', 'dragover'].forEach(t => d.addEventListener(t, e => { e.preventDefault(); d.classList.add('over'); }));
+    ['dragleave', 'drop'].forEach(t => d.addEventListener(t, () => d.classList.remove('over')));
+    d.addEventListener('drop', e => { e.preventDefault(); const f = [...(e.dataTransfer?.files || [])].find(x => x.type.startsWith('image/')); if (f) set(f); });
+    d.paste = e => { const f = [...(e.clipboardData?.files || [])].find(x => x.type.startsWith('image/')); if (f) { e.preventDefault(); set(f); return true; } return false; };
+  });
+  // Ctrl+V con una captura (Win+Shift+S): va al formulario visible
+  document.addEventListener('paste', e => {
+    const panel = [...document.querySelectorAll('.fcard')].find(p => !p.hidden && p.querySelector('form:not([hidden])'));
+    const d = panel && panel.querySelector('[data-drop]');
+    if (!d) return;
+    const r = panel.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > innerHeight) return;      /* solo si el formulario está a la vista */
+    d.paste(e);
+  });
 })();
 </script>

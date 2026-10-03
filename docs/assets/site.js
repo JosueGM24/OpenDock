@@ -655,8 +655,15 @@
     tabs.forEach(([t2, p2]) => { document.getElementById(t2).setAttribute('aria-selected', String(t2 === t)); document.getElementById(p2).hidden = p2 !== p; });
   }));
   const MSG = { 'que-paso': 'Cuéntame qué pasó (al menos 10 caracteres).', idea: 'Escribe tu idea en una frase.', detalle: 'Cuéntame un poco más (al menos 10 caracteres).', correo: 'Ese correo no parece válido.' };
+  const MAX = 8 * 1024 * 1024, TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
   const check = f => {
     let ok = true;
+    f.querySelectorAll('input[type="file"]').forEach(el => {
+      const box = el.closest('.field'), err = box.querySelector(':scope > .err'), file = el.files[0];
+      const msg = !file ? '' : !TYPES.includes(file.type) ? 'Solo imágenes PNG, JPG, GIF o WebP.' : file.size > MAX ? 'La imagen pesa más de 8 MB.' : '';
+      box.classList.toggle('bad', !!msg); if (err) err.textContent = msg;
+      if (msg) ok = false;
+    });
     f.querySelectorAll('input[required], textarea[required], input[type="email"]').forEach(el => {
       const box = el.closest('.field'), err = box.querySelector('.err');
       const bad = el.type === 'email' ? el.value.trim() !== '' && !el.checkValidity() : !el.checkValidity() || el.value.trim().length < (el.minLength || 1);
@@ -673,8 +680,11 @@
       if (!check(f)) return;
       btn.disabled = true; lbl.textContent = 'Enviando…';
       try {
-        const r = await fetch('/', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(f)).toString() });
-        if (!r.ok) throw new Error(r.status);
+        const data = new FormData(f);
+        const file = f.querySelector('input[type="file"]');
+        if (file && !file.files.length) data.delete(file.name);           /* sin imagen: sin campo vacío */
+        const r = await fetch('/', { method: 'POST', body: data });       /* multipart: así viaja la imagen */
+        if (!r.ok) throw new Error(String(r.status));
         const card = f.parentElement, bug = f.name === 'reportar-error';
         f.hidden = true;
         const done = document.createElement('div'); done.className = 'done'; done.setAttribute('role', 'status');
@@ -682,10 +692,12 @@
           + '<h3>' + (bug ? 'Gracias, ya me llegó el reporte' : 'Gracias, ya me llegó tu idea') + '</h3>'
           + '<p>' + (f.querySelector('[name="correo"]').value.trim() ? 'Te escribo a tu correo en cuanto tenga novedades.' : 'Lo reviso en los próximos días.') + '</p>'
           + '<button type="button">' + (bug ? 'Reportar otro error' : 'Enviar otra idea') + '</button>';
-        done.querySelector('button').onclick = () => { done.remove(); f.reset(); f.hidden = false; f.querySelector('input:not([type="hidden"]), textarea').focus(); };
+        done.querySelector('button').onclick = () => { done.remove(); f.reset(); f.querySelectorAll('[data-drop]').forEach(d => d.clear && d.clear()); f.hidden = false; f.querySelector('input:not([type="hidden"]), textarea').focus(); };
         card.appendChild(done); done.querySelector('h3').focus?.();
       } catch (err) {
-        status.textContent = 'No se pudo enviar. Revisa tu conexión e inténtalo de nuevo.';
+        status.textContent = /^\d+$/.test(err.message)
+          ? 'No se pudo enviar (error ' + err.message + ' del servidor). Inténtalo de nuevo en un momento.'
+          : 'No se pudo enviar. Revisa tu conexión e inténtalo de nuevo.';
       } finally { btn.disabled = false; lbl.textContent = label; }
     });
   });
@@ -764,4 +776,37 @@
       });
     })
     .catch(() => { /* sin red o sin cuota de la API: se queda la versión escrita en la página */ });
+})();
+
+/* ── imagen adjunta: arrastrar, pegar (Ctrl+V) o elegir, con vista previa ── */
+(() => {
+  document.querySelectorAll('[data-drop]').forEach(d => {
+    const input = d.querySelector('input'), pv = d.querySelector('.pv'), img = pv.querySelector('img'), nm = pv.querySelector('.nm');
+    let url = '';
+    const kb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1).replace('.', ',') + ' MB';
+    const render = () => {
+      if (url) URL.revokeObjectURL(url), url = '';
+      const f = input.files[0];
+      d.classList.toggle('has', !!f); pv.hidden = !f;
+      if (f) { url = URL.createObjectURL(f); img.src = url; nm.textContent = f.name + ' · ' + kb(f.size); }
+      const box = d.closest('.field'); box.classList.remove('bad'); const er = box.querySelector(':scope > .err'); if (er) er.textContent = '';
+    };
+    const set = file => { try { const dt = new DataTransfer(); dt.items.add(file); input.files = dt.files; } catch { return; } render(); };
+    d.clear = () => { input.value = ''; render(); };
+    input.addEventListener('change', render);
+    pv.querySelector('.rm').addEventListener('click', e => { e.preventDefault(); d.clear(); });
+    ['dragenter', 'dragover'].forEach(t => d.addEventListener(t, e => { e.preventDefault(); d.classList.add('over'); }));
+    ['dragleave', 'drop'].forEach(t => d.addEventListener(t, () => d.classList.remove('over')));
+    d.addEventListener('drop', e => { e.preventDefault(); const f = [...(e.dataTransfer?.files || [])].find(x => x.type.startsWith('image/')); if (f) set(f); });
+    d.paste = e => { const f = [...(e.clipboardData?.files || [])].find(x => x.type.startsWith('image/')); if (f) { e.preventDefault(); set(f); return true; } return false; };
+  });
+  // Ctrl+V con una captura (Win+Shift+S): va al formulario visible
+  document.addEventListener('paste', e => {
+    const panel = [...document.querySelectorAll('.fcard')].find(p => !p.hidden && p.querySelector('form:not([hidden])'));
+    const d = panel && panel.querySelector('[data-drop]');
+    if (!d) return;
+    const r = panel.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > innerHeight) return;      /* solo si el formulario está a la vista */
+    d.paste(e);
+  });
 })();
