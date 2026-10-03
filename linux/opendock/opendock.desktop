@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=OpenDock
+Comment=Esquinas redondeadas, notch, barra superior y dock
+Exec=opendock
+Icon=opendock
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+# En GNOME (Mutter no tiene layer-shell) va la extensión de GNOME Shell.
+NotShowIn=GNOME;

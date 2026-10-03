@@ -1,0 +1,191 @@
+name: Linux nativo (opendock)
+
+on:
+  push:
+    branches: [linux-native]
+    paths:
+      - 'linux/opendock/**'
+      - '.github/workflows/linux-native.yml'
+  workflow_dispatch: {}
+
+jobs:
+  build-arch:
+    name: Compilar (Arch Linux)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Paquetes
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel meson ninja pkgconf git \
+            gtk4 gtk4-layer-shell glib2 libpulse libcanberra libx11 \
+            wayland wayland-protocols wlr-protocols
+      - uses: actions/checkout@v4
+      - name: Configurar
+        working-directory: linux/opendock
+        run: meson setup build --werror
+      - name: Compilar
+        working-directory: linux/opendock
+        run: ninja -C build
+      - name: Comprobar --version
+        working-directory: linux/opendock
+        run: ./build/opendock --version
+
+  paquete-arch:
+    name: Paquete de Arch (makepkg)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Paquetes
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed base-devel git meson ninja \
+            gtk4 gtk4-layer-shell glib2 libpulse libcanberra libx11 wayland hicolor-icon-theme
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: makepkg con el código de este commit
+        run: |
+          useradd -m constructor
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          install -d -o constructor /tmp/pkg/src
+          cp linux/opendock/PKGBUILD /tmp/pkg/
+          git clone -q "$GITHUB_WORKSPACE" /tmp/pkg/src/OpenDock
+          chown -R constructor /tmp/pkg
+          cd /tmp/pkg
+          # -e: usa src/OpenDock tal cual (el clon de este commit) en vez de descargarlo.
+          runuser -u constructor -- makepkg -e -f --noconfirm
+      - name: Contenido del paquete
+        run: |
+          cd /tmp/pkg
+          PAQ=$(ls opendock-git-[0-9]*.pkg.tar.zst)   # sin el -debug
+          ls -la *.pkg.tar.zst
+          tar -tf "$PAQ" > lista.txt
+          for f in usr/bin/opendock etc/xdg/autostart/opendock.desktop \
+                   usr/share/opendock/sounds/simple2.wav \
+                   usr/share/icons/hicolor/512x512/apps/opendock.png \
+                   usr/share/licenses/opendock-git/LICENSE; do
+            if grep -qx "$f" lista.txt; then echo "ok: $f"; else echo "FALLO: falta $f"; exit 1; fi
+          done
+          pacman -U --noconfirm "$PAQ"
+          opendock --version
+
+  build-fedora:
+    name: Compilar (Fedora, como dice el README)
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Paquetes
+        run: |
+          dnf install -y gcc meson ninja-build pkgconf-pkg-config gtk4-devel gtk4-layer-shell-devel \
+            wayland-devel libX11-devel pulseaudio-libs-devel libcanberra-devel
+      - uses: actions/checkout@v4
+      - name: Configurar, compilar e instalar
+        run: |
+          meson setup build linux/opendock --prefix=/usr --werror
+          meson compile -C build
+          meson install -C build
+          opendock --version
+
+  build-ubuntu:
+    name: Compilar (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Paquetes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential meson ninja-build pkg-config git \
+            libgtk-4-dev libglib2.0-dev libpulse-dev libcanberra-dev \
+            libwayland-dev wayland-protocols libx11-dev libxext-dev
+      - name: gtk4-layer-shell (compilado desde fuente; no está empaquetado en Ubuntu 24.04)
+        run: |
+          sudo apt-get install -y --no-install-recommends gobject-introspection libgirepository1.0-dev
+          git clone --depth 1 https://github.com/wmww/gtk4-layer-shell.git /tmp/gtk4-layer-shell
+          cd /tmp/gtk4-layer-shell
+          meson setup build -Dexamples=false -Ddocs=false -Dtests=false -Dvapi=false -Dintrospection=false
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
+      - name: Configurar
+        working-directory: linux/opendock
+        run: meson setup build --werror
+      - name: Compilar
+        working-directory: linux/opendock
+        run: ninja -C build
+      - name: Comprobar --version
+        working-directory: linux/opendock
+        run: ./build/opendock --version
+
+  wayland-sway:
+    name: Prueba funcional (sway sin cabeza, Wayland)
+    runs-on: ubuntu-24.04
+    env:
+      PHASES: corners,bar,notch,centro,bandeja,dock
+    steps:
+      - uses: actions/checkout@v4
+      - name: Paquetes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential meson ninja-build pkg-config git \
+            libgtk-4-dev libglib2.0-dev libpulse-dev libcanberra-dev \
+            libwayland-dev wayland-protocols libx11-dev libxext-dev \
+            sway grim dbus-user-session python3 python3-pil \
+            foot libnotify-bin libglib2.0-bin adwaita-icon-theme python3-gi
+      - name: gtk4-layer-shell (compilado desde fuente)
+        run: |
+          sudo apt-get install -y --no-install-recommends gobject-introspection libgirepository1.0-dev
+          git clone --depth 1 https://github.com/wmww/gtk4-layer-shell.git /tmp/gtk4-layer-shell
+          cd /tmp/gtk4-layer-shell
+          meson setup build -Dexamples=false -Ddocs=false -Dtests=false -Dvapi=false -Dintrospection=false
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
+      - name: Configurar y compilar
+        working-directory: linux/opendock
+        run: |
+          meson setup build --werror
+          ninja -C build
+      - name: Prueba en sway sin cabeza
+        run: |
+          chmod +x linux/opendock/tests/run-sway-test.sh
+          linux/opendock/tests/run-sway-test.sh "$GITHUB_WORKSPACE/.ci-artifacts/sway"
+      - name: Subir capturas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturas-sway
+          path: .ci-artifacts/sway/*.png
+          if-no-files-found: warn
+
+  x11-xvfb:
+    name: Prueba de humo (Xvfb, X11)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Paquetes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential meson ninja-build pkg-config git \
+            libgtk-4-dev libglib2.0-dev libpulse-dev libcanberra-dev \
+            libwayland-dev wayland-protocols libx11-dev libxext-dev \
+            xvfb openbox x11-utils x11-apps imagemagick dbus-user-session python3 python3-pil adwaita-icon-theme
+      - name: Configurar y compilar
+        working-directory: linux/opendock
+        run: |
+          meson setup build --werror
+          ninja -C build
+      - name: Prueba en Xvfb
+        run: |
+          chmod +x linux/opendock/tests/run-x11-test.sh
+          linux/opendock/tests/run-x11-test.sh "$GITHUB_WORKSPACE/.ci-artifacts/x11"
+      - name: Subir capturas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturas-x11
+          path: .ci-artifacts/x11/*.png
+          if-no-files-found: warn
