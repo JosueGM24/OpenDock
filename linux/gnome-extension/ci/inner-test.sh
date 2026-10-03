@@ -108,10 +108,6 @@ take_screenshot() {
 
 STATE_JS='(() => { const g = Main.layoutManager.uiGroup.get_children(); const corners = g.filter(a => a.name && a.name.indexOf("opendock-corner") === 0).length; const notch = g.find(a => a.name === "opendock-notch"); const dock = g.find(a => a.name === "opendock-dock"); const bannerChildren = Main.messageTray._bannerBin ? Main.messageTray._bannerBin.get_n_children() : -1; let shellVersion = "?"; try { shellVersion = imports.misc.config.PACKAGE_VERSION; } catch (e) { /* no disponible */ } return "shellVersion=" + shellVersion + ";corners=" + corners + ";notch=" + (notch ? 1 : 0) + ";notchWidth=" + (notch ? Math.round(notch.width) : -1) + ";dock=" + (dock ? 1 : 0) + ";panelHeight=" + Math.round(Main.panel.height) + ";bannerChildren=" + bannerChildren; })()'
 
-# Informativo: los métodos de MessageTray cambian entre versiones de GNOME
-# y la extensión parchea uno privado para ocultar los banners nativos.
-echo "Métodos de MessageTray -> $(shell_eval '(() => Object.getOwnPropertyNames(Object.getPrototypeOf(Main.messageTray)).filter(n => /show|hide|banner|update|notif/i.test(n)).join(","))()')"
-
 echo "== Estado inicial (esquinas, barra, dock) =="
 take_screenshot "01-desktop.png"
 RESULT1="$(shell_eval "$STATE_JS")"
@@ -145,8 +141,12 @@ if command -v notify-send >/dev/null 2>&1; then
     echo "Eval -> $RESULT2"
     if echo "$RESULT2" | grep -q 'notch='; then
         check_field "el notch se muestra (notch=1)" 'notch=1' "$RESULT2"
-        check_field "el banner nativo de GNOME no aparece (bannerChildren=0)" 'bannerChildren=0' "$RESULT2"
-        if ! echo "$RESULT2" | grep -q 'bannerChildren=0'; then
+        # GNOME 50 deja un hijo fijo en _bannerBin aunque no haya banner: lo
+        # que cuenta es que la notificación no añada ninguno nuevo.
+        BANNERS_ANTES=$(echo "$RESULT1" | grep -oE 'bannerChildren=-?[0-9]+' | cut -d= -f2)
+        BANNERS_ANTES=${BANNERS_ANTES:-0}
+        check_field "el banner nativo de GNOME no aparece (bannerChildren=$BANNERS_ANTES, como al empezar)" "bannerChildren=$BANNERS_ANTES([^0-9]|$)" "$RESULT2"
+        if ! echo "$RESULT2" | grep -qE "bannerChildren=$BANNERS_ANTES([^0-9]|$)"; then
             DIAG_JS='(() => { const own = Object.prototype.hasOwnProperty.call(Main.messageTray, "_showNotification"); const proto = Object.getOwnPropertyNames(Object.getPrototypeOf(Main.messageTray)).filter(n => /show|banner|notif/i.test(n)); return "patchedOwnProp=" + own + ";protoMethods=" + proto.join(","); })()'
             echo "Diagnóstico del banner -> $(shell_eval "$DIAG_JS")"
         fi
@@ -184,7 +184,10 @@ else
 
     # --- Mini notch: tocar el borde central, seguir al cursor y abrir la
     # vista rápida a los 450 ms quieto. ------------------------------------
-    WARP_JS="(() => { const ext = $LOOKUP_EXPR; const m = ext._notch._monitor; if (!m) return 'sin-monitor'; const seat = Clutter.get_default_backend().get_default_seat(); const vd = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE); const t = GLib.get_monotonic_time(); vd.notify_absolute_motion(t, m.x + m.width / 2, m.y + 31); return 'ok'; })()"
+    # Puntero virtual para mover el cursor de verdad (entra por la misma ruta
+    # que un ratón). En GNOME 45+ Eval no trae Clutter/GLib como globales.
+    shell_eval "(() => { const Clutter = imports.gi.Clutter; const GLib = imports.gi.GLib; const seat = Clutter.get_default_backend().get_default_seat(); const vd = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE); globalThis._odPuntero = (x, y) => vd.notify_absolute_motion(GLib.get_monotonic_time(), x, y); return 'puntero-listo'; })()" >>"$LOG" 2>&1
+    WARP_JS="(() => { const ext = $LOOKUP_EXPR; const m = ext._notch._monitor; if (!m) return 'sin-monitor'; globalThis._odPuntero(m.x + m.width / 2, m.y + 31); return 'ok'; })()"
     WARP_RESULT="$(shell_eval "$WARP_JS")"
     echo "Puntero al centro bajo la barra -> $WARP_RESULT"
     sleep 0.3
@@ -207,7 +210,8 @@ else
     CARD_COUNT="$(shell_eval "$CARD_COUNT_JS")"
     echo "Eval tarjetas -> $CARD_COUNT"
 
-    if echo "$CARD_COUNT" | grep -q 'cards=2'; then
+    TARJETAS=$(echo "$CARD_COUNT" | grep -oE 'cards=[0-9]+' | cut -d= -f2)
+    if [ "${TARJETAS:-0}" -ge 2 ]; then
         HOVER_FIRST_JS="(() => { const ext = $LOOKUP_EXPR; const card = ext._notch._cardList.get_children()[0]; ext._notch._onCardEnter(card); return 'hover-iniciado'; })()"
         shell_eval "$HOVER_FIRST_JS" >>"$LOG" 2>&1
         sleep 0.4
@@ -223,7 +227,7 @@ else
         echo "Eval tarjeta expandida -> $EXPAND_RESULT"
         soft_check "a los 260 ms la tarjeta muestra el cuerpo y los botones" 'expanded=true;actionsVisible=true' "$EXPAND_RESULT"
 
-        TRASH_HOVER_JS="(() => { const ext = $LOOKUP_EXPR; const card = ext._notch._cardList.get_children()[0]; const trash = card.get_children().find(c => c.name === 'opendock-trash-strip'); if (!trash) return 'sin-papelera'; trash.emit('enter-event', Clutter.Event.new(Clutter.EventType.ENTER)); return 'width-antes=' + Math.round(trash.width); })()"
+        TRASH_HOVER_JS="(() => { const ext = $LOOKUP_EXPR; const card = ext._notch._cardList.get_children()[0]; const trash = card.get_children().find(c => c.name === 'opendock-trash-strip'); if (!trash) return 'sin-papelera'; const [x, y] = trash.get_transformed_position(); const [w, h] = trash.get_transformed_size(); globalThis._odPuntero(x + w / 2, y + h / 2); return 'width-antes=' + Math.round(trash.width); })()"
         shell_eval "$TRASH_HOVER_JS" >>"$LOG" 2>&1
         sleep 0.3
         TRASH_WIDTH_JS="(() => { const ext = $LOOKUP_EXPR; const card = ext._notch._cardList.get_children()[0]; const trash = card.get_children().find(c => c.name === 'opendock-trash-strip'); return trash ? ('trashWidth=' + Math.round(trash.width)) : 'sin-papelera'; })()"
@@ -238,7 +242,7 @@ else
         AFTER_DISMISS_JS="(() => { const ext = $LOOKUP_EXPR; return 'cards=' + ext._notch._cardList.get_n_children(); })()"
         AFTER_DISMISS="$(shell_eval "$AFTER_DISMISS_JS")"
         echo "Eval tras borrar -> $AFTER_DISMISS"
-        soft_check "la tarjeta borrada desaparece de la lista" 'cards=1' "$AFTER_DISMISS"
+        soft_check "la tarjeta borrada desaparece de la lista" "cards=$((TARJETAS - 1))([^0-9]|\$)" "$AFTER_DISMISS"
     else
         echo "AVISO: no había 2 tarjetas en el centro; se omiten las comprobaciones de hover/papelera/borrado."
         SKIPPED+=("interaccion:tarjetas-sin-2-notificaciones")
