@@ -6,6 +6,7 @@ import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 import {Spring, SpringRunner} from './spring.js';
 import {paletteFor, zetaFor} from './theme.js';
 import {playSoundFile} from './sound.js';
@@ -576,7 +577,13 @@ export class NotchManager {
             height: MAX_VISIBLE_CARDS * (CARD_HEIGHT + CARD_GAP),
             width: CENTER_WIDTH,
         });
-        scroll.set_child(this._cardList);
+        // En GNOME 45 St.ScrollView sólo coloca al hijo que entra por
+        // add_actor (set_child es el de St.Bin y lo deja sin colocar: el
+        // centro se veía vacío). Desde 46 tiene su propio set_child.
+        if (parseInt(Config.PACKAGE_VERSION, 10) < 46)
+            scroll.add_actor(this._cardList);
+        else
+            scroll.set_child(this._cardList);
         this._center.add_child(scroll);
 
         // Scroll de 60 px por paso animado con un muelle (k 260) en vez de

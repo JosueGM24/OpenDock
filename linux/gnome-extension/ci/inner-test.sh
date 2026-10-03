@@ -227,6 +227,12 @@ else
     echo "Eval tarjetas -> $CARD_COUNT"
 
     TARJETAS=$(echo "$CARD_COUNT" | grep -oE 'cards=[0-9]+' | cut -d= -f2)
+    # Las tarjetas tienen que estar colocadas en pantalla (en GNOME 45 el
+    # centro las dejaba sin colocar y se veía vacío).
+    COLOCADA_JS="(() => { const ext = $LOOKUP_EXPR; const c = ext._notch._cardList.get_children()[0]; if (!c) return 'sin-tarjetas'; const [x, y] = c.get_transformed_position(); const [w, h] = c.get_transformed_size(); return 'colocada=' + (Number.isFinite(x) && Number.isFinite(y) && w > 0 && h > 0) + ';x=' + Math.round(x) + ';y=' + Math.round(y); })()"
+    COLOCADA="$(shell_eval "$COLOCADA_JS")"
+    echo "Eval tarjeta colocada -> $COLOCADA"
+    check_field "las tarjetas del centro están colocadas en pantalla" 'colocada=true' "$COLOCADA"
     if [ "${TARJETAS:-0}" -ge 2 ]; then
         HOVER_FIRST_JS="(() => { const ext = $LOOKUP_EXPR; const card = ext._notch._cardList.get_children()[0]; ext._notch._onCardEnter(card); return 'hover-iniciado'; })()"
         shell_eval "$HOVER_FIRST_JS" >>"$LOG" 2>&1
