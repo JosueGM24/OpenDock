@@ -26,7 +26,8 @@ if have_layer_shell
 endif
 
 # Backend X11 de GDK: ventanas EWMH dock + _NET_WM_STRUT_PARTIAL.
-gdkx11_dep = dependency('gdk-x11-4.0', required: false)
+# (GTK4 lo publica como gtk4-x11; no existe un gdk-x11-4.0.)
+gdkx11_dep = dependency('gtk4-x11', required: false)
 x11_raw_dep = dependency('x11', required: false)
 have_x11 = gdkx11_dep.found() and x11_raw_dep.found()
 if have_x11

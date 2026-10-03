@@ -90,7 +90,8 @@ static void al_realizar_region_vacia(GtkWidget *widget, gpointer datos)
     cairo_region_destroy(vacia);
 }
 
-static GtkWidget *crear_ventana_esquina(GtkApplication *app, OdEsquina esquina, int radio)
+/* Sin uso si no hay ni layer-shell ni X11 (se compila igual, sin esquinas). */
+G_GNUC_UNUSED static GtkWidget *crear_ventana_esquina(GtkApplication *app, OdEsquina esquina, int radio)
 {
     GtkWidget *win = gtk_window_new();
     if (app) gtk_window_set_application(GTK_WINDOW(win), app);
@@ -208,17 +209,15 @@ void od_esquinas_iniciar(OdConfig *cfg, OdBackendTipo backend)
 {
     if (cfg->radio_esquinas <= 0) return;
 
-    GtkApplication *app = NULL; /* las ventanas no necesitan GtkApplication para existir */
-
 #if HAVE_LAYER_SHELL
     if (backend == OD_BACKEND_WAYLAND && gtk_layer_is_supported()) {
-        iniciar_wayland(app, cfg);
+        iniciar_wayland(NULL, cfg); /* no necesitan GtkApplication */
         return;
     }
 #endif
 #if HAVE_X11
     if (backend == OD_BACKEND_X11) {
-        iniciar_x11(app, cfg);
+        iniciar_x11(NULL, cfg);
         return;
     }
 #endif

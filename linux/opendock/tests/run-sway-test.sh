@@ -92,6 +92,9 @@ ejecutar_dentro_de_sway() {
             local foot_pid=$!
             sleep 1.5
             local y_ventana
+            # swaymsg busca a sway por SWAYSOCK, que sólo tienen sus hijos.
+            export SWAYSOCK
+            SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock 2>/dev/null | head -n1 || true)
             y_ventana=$(swaymsg -t get_tree | python3 -c '
 import json, sys
 def buscar(n):
@@ -103,7 +106,7 @@ def buscar(n):
             return r
 print(buscar(json.load(sys.stdin)))')
             echo "ventana foot en y=$y_ventana"
-            if [ "$y_ventana" = "None" ] || [ "$y_ventana" -lt "$BAR_ALTURA" ]; then
+            if ! [[ "$y_ventana" =~ ^[0-9]+$ ]] || [ "$y_ventana" -lt "$BAR_ALTURA" ]; then
                 echo "FALLO: la ventana no respeta la zona exclusiva de la barra"
                 ok=1
             else

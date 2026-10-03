@@ -287,7 +287,6 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
 
     GtkWidget *win = gtk_window_new();
     gtk_window_set_decorated(GTK_WINDOW(win), FALSE);
-    gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
     /* El título no se ve (ni en layer-shell ni sin decoración en X11); nos
      * sirve sólo para encontrar la ventana desde fuera (pruebas con xprop). */
     gtk_window_set_title(GTK_WINDOW(win), "OpenDock-Barra");
@@ -368,7 +367,9 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
 #if HAVE_X11
     if (backend == OD_BACKEND_X11) {
         GdkRectangle geo = geometria_monitor_principal();
-        /* No redimensionable: GTK usa el tamaño pedido, no el "por defecto". */
+        /* En X11 fijamos el tamaño; en Wayland lo da el compositor (ancla
+         * izquierda + derecha), por eso la ventana no puede ser fija allí. */
+        gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
         gtk_widget_set_size_request(win, geo.width, cfg->alto_barra);
         g_signal_connect(win, "realize", G_CALLBACK(al_realizar_x11),
             GINT_TO_POINTER(cfg->alto_barra));
