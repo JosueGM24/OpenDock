@@ -14,7 +14,7 @@ import os, io, wave, audioop, re
 from PIL import Image, ImageDraw, ImageFont
 
 REPO = 'https://github.com/JosueGM24/OpenDock'
-SITE = 'https://opendock.netlify.app/'   # cámbialo si tu sitio de Netlify tiene otro nombre o dominio
+SITE = 'https://open-dock.netlify.app/'   # cámbialo si usas otro dominio
 DOWNLOAD = REPO + '/releases/latest/download/OpenDock.exe'
 
 here = os.path.dirname(os.path.abspath(__file__))
