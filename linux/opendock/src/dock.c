@@ -540,6 +540,9 @@ static void activar(OdItem *it)
 static OdItem *g_item_menu;
 
 static void reconstruir(void);
+#if HAVE_X11
+static void colocar_x11(void);
+#endif
 
 static void menu_nueva_ventana(GtkButton *b, gpointer d)
 {
@@ -732,6 +735,15 @@ static void reconstruir(void)
         g_debug("dock: %s anclada=%d ventanas=%d activa=%d", it->id, it->anclada,
             it->n_ventanas, it->activa);
     }
+    /* Sin iconos no hay dock: un lienzo vacío no manda cuadro nuevo y el
+     * compositor seguiría enseñando el último. */
+    gboolean hay = g_d.items->len > 0;
+    if (g_d.ventana && gtk_widget_get_visible(g_d.ventana) != hay) {
+        gtk_widget_set_visible(g_d.ventana, hay);
+#if HAVE_X11
+        if (hay && g_d.backend == OD_BACKEND_X11) colocar_x11();
+#endif
+    }
 }
 
 static void al_cambiar_ventanas(gpointer datos)
@@ -828,6 +840,7 @@ void od_dock_iniciar(OdConfig *cfg, OdBackendTipo backend)
 
     GtkWidget *lienzo = g_object_new(OD_TIPO_LIENZO, NULL);
     gtk_widget_set_hexpand(lienzo, TRUE);
+    gtk_widget_set_size_request(lienzo, 1, -1);   /* ancho natural 0 = aviso de GDK */
     gtk_widget_set_vexpand(lienzo, TRUE);
     gtk_widget_set_has_tooltip(lienzo, TRUE);
     g_signal_connect(lienzo, "query-tooltip", G_CALLBACK(al_pedir_ayuda), NULL);
@@ -880,13 +893,9 @@ void od_dock_iniciar(OdConfig *cfg, OdBackendTipo backend)
     }
 #endif
 
+    gtk_widget_set_visible(win, FALSE);
     od_ventanas_iniciar(backend, al_cambiar_ventanas, NULL);
-    reconstruir();
-
-    gtk_widget_set_visible(win, TRUE);
-#if HAVE_X11
-    if (backend == OD_BACKEND_X11) colocar_x11();
-#endif
+    reconstruir();   /* la muestra si hay algún icono */
     /* Si empieza oculto, que se esconda tras el primer vistazo. */
     programar_ocultar();
 }
