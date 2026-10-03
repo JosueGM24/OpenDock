@@ -110,9 +110,13 @@ static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocaci
     GVariantIter *iter_acciones = NULL;
     GVariant *hints = NULL;
 
+    g_message("opendock: Notify: desempaquetando parámetros (tipo %s)",
+        g_variant_get_type_string(parametros));
     g_variant_get(parametros, "(&su&s&s&sasa{sv}i)",
         &app_name_in, &replaces_id, &app_icon_in, &summary_in, &body_in,
         &iter_acciones, &hints, &expire_timeout);
+    g_message("opendock: Notify: parámetros desempaquetados app=%s resumen=%s",
+        app_name_in ? app_name_in : "(null)", summary_in ? summary_in : "(null)");
     if (iter_acciones) g_variant_iter_free(iter_acciones);
     (void)expire_timeout; /* la duración del peek la fija el notch (DESIGN.md: 4,5 s) */
 
@@ -135,8 +139,10 @@ static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocaci
     if (g_srv.siguiente_id == 0) g_srv.siguiente_id = 1; /* por si desborda */
     g_srv.id_actual = id;
 
+    g_message("opendock: Notify: llamando al notch (id=%u)", id);
     od_notch_mostrar_aviso(app_name, summary, body, pixbuf,
         (app_icon && *app_icon) ? app_icon : NULL);
+    g_message("opendock: Notify: notch actualizado, devolviendo id=%u", id);
 
     if (pixbuf) g_object_unref(pixbuf);
     g_free(app_name);
@@ -169,9 +175,12 @@ static void manejar_close(GVariant *parametros, GDBusMethodInvocation *invocacio
 
 static void manejar_capacidades(GDBusMethodInvocation *invocacion)
 {
+    g_message("opendock: GetCapabilities: construyendo respuesta");
     const gchar *caps[] = { "body", "actions", "icon-static", "persistence", NULL };
-    g_dbus_method_invocation_return_value(invocacion,
-        g_variant_new("(^as)", (gchar **)caps));
+    GVariant *respuesta = g_variant_new("(^as)", (gchar **)caps);
+    g_message("opendock: GetCapabilities: respuesta lista, tipo %s",
+        g_variant_get_type_string(respuesta));
+    g_dbus_method_invocation_return_value(invocacion, respuesta);
 }
 
 static void manejar_info_servidor(GDBusMethodInvocation *invocacion)
@@ -185,6 +194,7 @@ static void al_llamar_metodo(GDBusConnection *conexion, const gchar *remitente,
     GVariant *parametros, GDBusMethodInvocation *invocacion, gpointer datos)
 {
     (void)conexion; (void)remitente; (void)ruta; (void)interfaz; (void)datos;
+    g_message("opendock: D-Bus Notifications.%s llamado por %s", metodo, remitente);
     if (g_strcmp0(metodo, "Notify") == 0) {
         manejar_notify(parametros, invocacion);
     } else if (g_strcmp0(metodo, "CloseNotification") == 0) {
