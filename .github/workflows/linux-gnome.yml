@@ -46,7 +46,7 @@ jobs:
   functional-test:
     needs: pack-and-lint
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     container:
       image: ${{ matrix.image }}
       options: --privileged
@@ -54,10 +54,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - distro: fedora
+          # Versiones de GNOME fijadas (no solo "latest" rolling release),
+          # para probar contra lo que de verdad se declara en metadata.json.
+          - distro: fedora39-gnome45
+            image: fedora:39
+            install_script: install-fedora.sh
+          - distro: ubuntu2404-gnome46
+            image: ubuntu:24.04
+            install_script: install-ubuntu.sh
+          - distro: fedora41-gnome47
+            image: fedora:41
+            install_script: install-fedora.sh
+          - distro: fedora42-gnome48
+            image: fedora:42
+            install_script: install-fedora.sh
+          - distro: fedora-latest
             image: fedora:latest
             install_script: install-fedora.sh
-          - distro: archlinux
+          - distro: archlinux-latest
             image: archlinux:latest
             install_script: install-arch.sh
     steps:
@@ -67,6 +81,10 @@ jobs:
             dnf install -y git
           elif command -v pacman >/dev/null 2>&1; then
             pacman -Sy --noconfirm --needed git
+          elif command -v apt-get >/dev/null 2>&1; then
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y --no-install-recommends git ca-certificates
           fi
 
       - uses: actions/checkout@v4

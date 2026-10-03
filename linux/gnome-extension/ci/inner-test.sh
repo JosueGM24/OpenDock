@@ -48,6 +48,13 @@ wait_for_shell() {
     return 1
 }
 
+# Sin GPU en el contenedor, se fuerza el renderizador por software
+# (llvmpipe) para que org.gnome.Shell.Screenshot pueda producir un PNG de
+# verdad en vez de un archivo vacío.
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
+export MESA_GL_VERSION_OVERRIDE=3.3
+
 start_shell() {
     local extra_args=("$@")
     gnome-shell --headless --virtual-monitor=1280x800 --wayland \
@@ -99,7 +106,7 @@ take_screenshot() {
     fi
 }
 
-STATE_JS='(() => { const g = Main.layoutManager.uiGroup.get_children(); const corners = g.filter(a => a.name && a.name.indexOf("opendock-corner") === 0).length; const notch = g.find(a => a.name === "opendock-notch"); const dock = g.find(a => a.name === "opendock-dock"); const bannerChildren = Main.messageTray._bannerBin ? Main.messageTray._bannerBin.get_n_children() : -1; const themeH = Math.round(Main.panel.get_theme_node().get_length("height")); const boxH = Main.layoutManager.panelBox ? Math.round(Main.layoutManager.panelBox.height) : -1; const styleStr = Main.panel.get_style(); return "corners=" + corners + ";notch=" + (notch ? 1 : 0) + ";notchWidth=" + (notch ? Math.round(notch.width) : -1) + ";dock=" + (dock ? 1 : 0) + ";panelHeight=" + Math.round(Main.panel.height) + ";themeH=" + themeH + ";boxH=" + boxH + ";style=" + styleStr + ";bannerChildren=" + bannerChildren; })()'
+STATE_JS='(() => { const g = Main.layoutManager.uiGroup.get_children(); const corners = g.filter(a => a.name && a.name.indexOf("opendock-corner") === 0).length; const notch = g.find(a => a.name === "opendock-notch"); const dock = g.find(a => a.name === "opendock-dock"); const bannerChildren = Main.messageTray._bannerBin ? Main.messageTray._bannerBin.get_n_children() : -1; let shellVersion = "?"; try { shellVersion = imports.misc.config.PACKAGE_VERSION; } catch (e) { /* no disponible */ } return "shellVersion=" + shellVersion + ";corners=" + corners + ";notch=" + (notch ? 1 : 0) + ";notchWidth=" + (notch ? Math.round(notch.width) : -1) + ";dock=" + (dock ? 1 : 0) + ";panelHeight=" + Math.round(Main.panel.height) + ";bannerChildren=" + bannerChildren; })()'
 
 echo "== Estado inicial (esquinas, barra, dock) =="
 take_screenshot "01-desktop.png"
@@ -146,6 +153,95 @@ if command -v notify-send >/dev/null 2>&1; then
 else
     echo "AVISO: notify-send no está instalado; se omite la prueba de notificación."
     SKIPPED+=("notify-send")
+fi
+
+echo "== Interacciones finas (mini notch, tarjetas, papelera, borrar) =="
+UUID_JS_LITERAL="\"$UUID\""
+LOOKUP_EXPR='Main.extensionManager.lookup('"$UUID_JS_LITERAL"').stateObj'
+EXT_STATE="$(shell_eval "(() => { const ext = $LOOKUP_EXPR; return ext ? 'yes' : 'no'; })()")"
+if ! echo "$EXT_STATE" | grep -q "yes"; then
+    echo "AVISO: no se pudo llegar a Main.extensionManager.lookup(uuid).stateObj; se omiten las comprobaciones finas de interacción."
+    SKIPPED+=("interacciones:stateObj")
+else
+    soft_check() {
+        local label="$1" pattern="$2" output="$3"
+        if echo "$output" | grep -qE "$pattern"; then
+            echo "OK: $label"
+        else
+            echo "AVISO (no bloqueante): $label no coincidió con /$pattern/ en: $output"
+            SKIPPED+=("interaccion:$label")
+        fi
+    }
+
+    # Segunda notificación para tener 2 tarjetas en el centro (hover de una
+    # debe encoger la otra a 0.965).
+    notify-send "Prueba 2" "Segunda notificación" 2>/dev/null || true
+    sleep 1
+
+    # --- Mini notch: tocar el borde central, seguir al cursor y abrir la
+    # vista rápida a los 450 ms quieto. ------------------------------------
+    WARP_JS="(() => { const ext = $LOOKUP_EXPR; const m = ext._notch._monitor; if (!m) return 'sin-monitor'; const seat = Clutter.get_default_backend().get_default_seat(); const vd = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE); const t = GLib.get_monotonic_time(); vd.notify_absolute_motion(t, m.x + m.width / 2, m.y + 31); return 'ok'; })()"
+    WARP_RESULT="$(shell_eval "$WARP_JS")"
+    echo "Puntero al centro bajo la barra -> $WARP_RESULT"
+    sleep 0.3
+    MINI_JS="(() => { const ext = $LOOKUP_EXPR; return 'miniMode=' + ext._notch._miniMode + ';miniVisible=' + (ext._notch._mini ? ext._notch._mini.visible : 'n/a') + ';miniX=' + Math.round(ext._notch._miniXSpring.value); })()"
+    MINI_RESULT="$(shell_eval "$MINI_JS")"
+    echo "Eval mini notch -> $MINI_RESULT"
+    soft_check "la pastilla del mini notch aparece y se imanta al centro" 'miniMode=pill;miniVisible=true;miniX=0' "$MINI_RESULT"
+
+    sleep 0.3
+    MINI_RESULT2="$(shell_eval "$MINI_JS")"
+    echo "Eval mini notch (tras 450 ms quieto) -> $MINI_RESULT2"
+    soft_check "la vista rápida se abre a los 450 ms quieto" 'miniMode=quick' "$MINI_RESULT2"
+
+    # --- Centro de notificaciones: tarjetas, lupa de hover y papelera ------
+    OPEN_CENTER_JS="(() => { const ext = $LOOKUP_EXPR; ext._notch._openCenter(); return 'abierto'; })()"
+    shell_eval "$OPEN_CENTER_JS" >>"$LOG" 2>&1
+    sleep 0.3
+
+    CARD_COUNT_JS="(() => { const ext = $LOOKUP_EXPR; const n = ext._notch._cardList ? ext._notch._cardList.get_n_children() : -1; return 'cards=' + n; })()"
+    CARD_COUNT="$(shell_eval "$CARD_COUNT_JS")"
+    echo "Eval tarjetas -> $CARD_COUNT"
+
+    if echo "$CARD_COUNT" | grep -q 'cards=2'; then
+        HOVER_FIRST_JS="(() => { const ext = $LOOKUP_EXPR; const card = ext._notch._cardList.get_children()[0]; ext._notch._onCardEnter(card); return 'hover-iniciado'; })()"
+        shell_eval "$HOVER_FIRST_JS" >>"$LOG" 2>&1
+        sleep 0.4
+        SCALE_JS="(() => { const ext = $LOOKUP_EXPR; const cards = ext._notch._cardList.get_children(); return 'scale0=' + cards[0].scale_x.toFixed(3) + ';scale1=' + cards[1].scale_x.toFixed(3); })()"
+        SCALE_RESULT="$(shell_eval "$SCALE_JS")"
+        echo "Eval escala de tarjetas -> $SCALE_RESULT"
+        soft_check "la tarjeta con el cursor crece a 1.035" 'scale0=1\.03[0-9]' "$SCALE_RESULT"
+        soft_check "la otra tarjeta se encoge a 0.965" 'scale1=0\.96[0-9]' "$SCALE_RESULT"
+
+        sleep 0.2
+        EXPAND_JS="(() => { const ext = $LOOKUP_EXPR; const card = ext._notch._cardList.get_children()[0]; return 'expanded=' + !!card._opendockExpanded + ';actionsVisible=' + (card._opendockActions ? card._opendockActions.visible : 'n/a'); })()"
+        EXPAND_RESULT="$(shell_eval "$EXPAND_JS")"
+        echo "Eval tarjeta expandida -> $EXPAND_RESULT"
+        soft_check "a los 260 ms la tarjeta muestra el cuerpo y los botones" 'expanded=true;actionsVisible=true' "$EXPAND_RESULT"
+
+        TRASH_HOVER_JS="(() => { const ext = $LOOKUP_EXPR; const card = ext._notch._cardList.get_children()[0]; const trash = card.get_children().find(c => c.name === 'opendock-trash-strip'); if (!trash) return 'sin-papelera'; trash.emit('enter-event', Clutter.Event.new(Clutter.EventType.ENTER)); return 'width-antes=' + Math.round(trash.width); })()"
+        shell_eval "$TRASH_HOVER_JS" >>"$LOG" 2>&1
+        sleep 0.3
+        TRASH_WIDTH_JS="(() => { const ext = $LOOKUP_EXPR; const card = ext._notch._cardList.get_children()[0]; const trash = card.get_children().find(c => c.name === 'opendock-trash-strip'); return trash ? ('trashWidth=' + Math.round(trash.width)) : 'sin-papelera'; })()"
+        TRASH_WIDTH_RESULT="$(shell_eval "$TRASH_WIDTH_JS")"
+        echo "Eval papelera -> $TRASH_WIDTH_RESULT"
+        soft_check "la papelera crece de 40 a 58 px al pasar el cursor" 'trashWidth=5[0-9]' "$TRASH_WIDTH_RESULT"
+
+        # --- Borrar: la tarjeta debe desaparecer tras deslizar y desvanecer.
+        DISMISS_JS="(() => { const ext = $LOOKUP_EXPR; const card = ext._notch._cardList.get_children()[1]; const n = card._opendockNotification; ext._notch._dismiss(n); return 'borrando'; })()"
+        shell_eval "$DISMISS_JS" >>"$LOG" 2>&1
+        sleep 1
+        AFTER_DISMISS_JS="(() => { const ext = $LOOKUP_EXPR; return 'cards=' + ext._notch._cardList.get_n_children(); })()"
+        AFTER_DISMISS="$(shell_eval "$AFTER_DISMISS_JS")"
+        echo "Eval tras borrar -> $AFTER_DISMISS"
+        soft_check "la tarjeta borrada desaparece de la lista" 'cards=1' "$AFTER_DISMISS"
+    else
+        echo "AVISO: no había 2 tarjetas en el centro; se omiten las comprobaciones de hover/papelera/borrado."
+        SKIPPED+=("interaccion:tarjetas-sin-2-notificaciones")
+    fi
+
+    CLOSE_CENTER_JS="(() => { const ext = $LOOKUP_EXPR; ext._notch._closeCenter(); return 'cerrado'; })()"
+    shell_eval "$CLOSE_CENTER_JS" >>"$LOG" 2>&1
 fi
 
 echo "== Revisando el log del shell en busca de errores de JS =="

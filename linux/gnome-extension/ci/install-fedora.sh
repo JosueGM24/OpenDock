@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Dependencias para probar la extensión en un contenedor fedora:latest.
+# Dependencias para probar la extensión en un contenedor fedora (latest,
+# o una versión fijada como fedora:41/fedora:42 para probar un GNOME
+# concreto). mesa-dri-drivers/mesa-libEGL/mesa-libgbm dan el renderizador
+# por software (llvmpipe) que necesita org.gnome.Shell.Screenshot para
+# producir un PNG real en un contenedor sin GPU.
 set -euo pipefail
 
 dnf install -y --setopt=install_weak_deps=False \
@@ -18,6 +22,11 @@ dnf install -y --setopt=install_weak_deps=False \
     shadow-utils \
     util-linux \
     which \
-    xorg-x11-server-Xvfb
+    xorg-x11-server-Xvfb \
+    mesa-dri-drivers \
+    mesa-libEGL \
+    mesa-libgbm \
+    ImageMagick \
+    xorg-x11-utils
 
 dnf clean all

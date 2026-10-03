@@ -15,4 +15,7 @@ pacman -Sy --noconfirm --needed \
     shadow \
     util-linux \
     which \
-    xorg-server-xvfb
+    xorg-server-xvfb \
+    mesa \
+    imagemagick \
+    xorg-xwd
