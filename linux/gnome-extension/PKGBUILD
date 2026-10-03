@@ -8,7 +8,7 @@ url="https://github.com/JosueGM24/OpenDock"
 license=('MIT')
 depends=('gnome-shell' 'glib2')
 optdepends=('gst-plugins-base: sonido de notificación')
-source=("git+https://github.com/JosueGM24/OpenDock.git#branch=linux-gnome")
+source=("git+https://github.com/JosueGM24/OpenDock.git")
 sha256sums=('SKIP')
 
 UUID=opendock@josuegm24.github.io

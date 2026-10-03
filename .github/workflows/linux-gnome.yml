@@ -2,7 +2,7 @@ name: Extensión de GNOME (OpenDock)
 
 on:
   push:
-    branches: [linux-gnome]
+    branches: [main, linux-gnome]
     paths:
       - 'linux/gnome-extension/**'
       - '.github/workflows/linux-gnome.yml'

@@ -2,7 +2,7 @@ name: Linux nativo (opendock)
 
 on:
   push:
-    branches: [linux-native]
+    branches: [main, linux-native]
     paths:
       - 'linux/opendock/**'
       - '.github/workflows/linux-native.yml'
