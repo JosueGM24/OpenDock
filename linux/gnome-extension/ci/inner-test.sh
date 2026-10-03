@@ -128,7 +128,7 @@ fi
 echo "== notify-send y notch =="
 if command -v notify-send >/dev/null 2>&1; then
     notify-send "Prueba" "Hola desde CI" || echo "AVISO: notify-send devolvió un error"
-    sleep 2
+    sleep 3
     take_screenshot "02-notification.png"
     RESULT2="$(shell_eval "$STATE_JS")"
     echo "Eval -> $RESULT2"

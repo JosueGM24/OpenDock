@@ -49,7 +49,7 @@ export class PanelStyler {
         const palette = paletteFor(this._settings.get_string('material'));
         Main.panel.set_style(
             `background-color: ${palette.background}; height: ${PANEL_HEIGHT}px; ` +
-            'border: none; box-shadow: none;');
+            'border: none; box-shadow: none; padding: 0px; margin: 0px;');
         this._styleApplied = true;
     }
 
