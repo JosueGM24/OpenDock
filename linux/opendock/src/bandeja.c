@@ -659,6 +659,7 @@ GtkWidget *od_bandeja_crear_boton(void)
     gtk_widget_set_tooltip_text(g_b.chevron, "Bandeja");
     gtk_widget_add_css_class(g_b.chevron, "opendock-icono");
     GtkWidget *popover = gtk_popover_new();
+    gtk_widget_add_css_class(popover, "opendock-popover");
     g_b.caja = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
     gtk_popover_set_child(GTK_POPOVER(popover), g_b.caja);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(g_b.chevron), popover);

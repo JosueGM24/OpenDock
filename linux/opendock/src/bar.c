@@ -66,9 +66,11 @@ static gboolean al_tic_reloj(gpointer datos)
 static void refrescar_wifi(void)
 {
     int on = od_wifi_activado();
-    const char *icono = (on == 1) ? "network-wireless-symbolic"
-        : (on == 0) ? "network-wireless-disabled-symbolic"
-        : "network-wireless-offline-symbolic";
+    /* Sin NetworkManager no sabemos nada del Wi-Fi: mejor no enseñarlo. */
+    gtk_widget_set_visible(g_barra.img_wifi, on >= 0);
+    if (g_barra.interruptor_wifi)
+        gtk_widget_set_sensitive(g_barra.interruptor_wifi, on >= 0);
+    const char *icono = on == 1 ? "network-wireless-symbolic" : "network-wireless-disabled-symbolic";
     gtk_image_set_from_icon_name(GTK_IMAGE(g_barra.img_wifi), icono);
     if (g_barra.interruptor_wifi)
         gtk_switch_set_state(GTK_SWITCH(g_barra.interruptor_wifi), on == 1);
@@ -412,6 +414,7 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
     GtkWidget *boton_ajustes = gtk_menu_button_new();
     gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(boton_ajustes), "emblem-system-symbolic");
     GtkWidget *popover = gtk_popover_new();
+    gtk_widget_add_css_class(popover, "opendock-popover");
     g_barra.popover = popover;
     gtk_popover_set_child(GTK_POPOVER(popover), crear_centro_control());
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(boton_ajustes), popover);
@@ -458,6 +461,12 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
         "  background: none; border: none; box-shadow: none; color: #FFFFFF; }"
         ".opendock-zona > image { color: #FFFFFF; -gtk-icon-size: 14px; }"
         ".opendock-zona > label { color: #FFFFFF; font-size: 13px; }"
+        /* Popovers de la barra (centro de control, bandeja): oscuros como ella. */
+        "popover.opendock-popover > contents, popover.opendock-popover > arrow {"
+        "  background-color: #1C1C1E; color: #FFFFFF; border: none; }"
+        "popover.opendock-popover > contents { border-radius: 16px; }"
+        "popover.opendock-popover label, popover.opendock-popover image { color: #FFFFFF; }"
+        "popover.opendock-popover button.flat:hover { background: rgba(255,255,255,0.10); }"
         /* DESIGN.md: pasar el cursor 1,16, pulsar 0,88. GTK no tiene muelles
          * en CSS; una curva con rebote se le parece (k 520 ≈ 0,18 s). */
         ".opendock-icono { transition: transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1); }"
