@@ -108,6 +108,10 @@ take_screenshot() {
 
 STATE_JS='(() => { const g = Main.layoutManager.uiGroup.get_children(); const corners = g.filter(a => a.name && a.name.indexOf("opendock-corner") === 0).length; const notch = g.find(a => a.name === "opendock-notch"); const dock = g.find(a => a.name === "opendock-dock"); const bannerChildren = Main.messageTray._bannerBin ? Main.messageTray._bannerBin.get_n_children() : -1; let shellVersion = "?"; try { shellVersion = imports.misc.config.PACKAGE_VERSION; } catch (e) { /* no disponible */ } return "shellVersion=" + shellVersion + ";corners=" + corners + ";notch=" + (notch ? 1 : 0) + ";notchWidth=" + (notch ? Math.round(notch.width) : -1) + ";dock=" + (dock ? 1 : 0) + ";panelHeight=" + Math.round(Main.panel.height) + ";bannerChildren=" + bannerChildren; })()'
 
+# Informativo: los métodos de MessageTray cambian entre versiones de GNOME
+# y la extensión parchea uno privado para ocultar los banners nativos.
+echo "Métodos de MessageTray -> $(shell_eval '(() => Object.getOwnPropertyNames(Object.getPrototypeOf(Main.messageTray)).filter(n => /show|hide|banner|update|notif/i.test(n)).join(","))()')"
+
 echo "== Estado inicial (esquinas, barra, dock) =="
 take_screenshot "01-desktop.png"
 RESULT1="$(shell_eval "$STATE_JS")"
