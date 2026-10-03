@@ -474,6 +474,23 @@ BOOL Wn_Changed(void)
 
 int Wn_Count(void) { return s_count; }
 
+/* Estado de "No molestar" (Asistente de concentración). Windows lo publica en el estado WNF
+ * WNF_SHEL_QUIETHOURS_ACTIVE_PROFILE_CHANGED; solo se lee: escribirlo no lo cambia (probado
+ * en 26200) y no hay API pública para activarlo, así que OpenDock solo lo muestra y avisa. */
+int Wn_QuietHours(void)
+{
+    typedef LONG (NTAPI *QueryWnf)(const ULONGLONG *, const void *, const void *, ULONG *, void *, ULONG *);
+    static QueryWnf q;
+    static BOOL tried;
+    if (!tried) { tried = TRUE; q = (QueryWnf)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryWnfStateData"); }
+    if (!q) return -1;
+    static const ULONGLONG kQuietHours = 0x0d83063ea3bf1c75ULL;
+    DWORD v = 0;
+    ULONG size = sizeof(v), stamp = 0;
+    if (q(&kQuietHours, NULL, NULL, &stamp, &v, &size) < 0 || size != sizeof(v)) return -1;
+    return v > 2 ? 1 : (int)v;
+}
+
 /* El icono propio de un aviso, decodificado con WIC (PNG, JPG, ICO, BMP…) y escalado a
  * px (encajado, sin deformar). Se guarda en caché: el navegador puede borrar el archivo. */
 static const GUID kCLSID_WICFactory = { 0xcacaf262, 0x9370, 0x4615, { 0xa1, 0x3b, 0x9f, 0x55, 0x39, 0xda, 0x4c, 0x0a } };

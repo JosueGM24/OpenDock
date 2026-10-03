@@ -245,6 +245,7 @@ void Wn_Stop(void);
 void Wn_Refresh(BOOL notify);
 BOOL Wn_Changed(void);
 int  Wn_Count(void);
+int  Wn_QuietHours(void);   /* "No molestar" de Windows: -1 no se sabe · 0 apagado · 1 prioridad · 2 solo alarmas */
 const WinNote *Wn_Get(int i);
 void Wn_Dismiss(LONGLONG id);
 void Wn_DismissAll(void);

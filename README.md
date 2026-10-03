@@ -43,6 +43,11 @@ Se leen en solo lectura de la base local de Windows (`wpndatabase.db`); nada sal
 rebote y se imanta al centro (y a la posición guardada). Déjalo quieto un instante y se
 abre la vista rápida con el contador; clic = centro de notificaciones.
 
+**"No molestar" de Windows**: es lo que hace que Windows no saque sus propios banners y
+deje los avisos en su centro, de donde los lee el notch. Windows no permite que una app lo
+active (su estado solo se puede leer), así que OpenDock lo muestra en la ficha del centro de
+control y, si el espejo está activo y "No molestar" apagado, lo sugiere una vez al día.
+
 **Notificaciones ofuscadas**: en vez del contenido, llega un notch pequeñito con una
 campanita que se balancea y un contador; clic = abrir el centro con el detalle.
 Para que Windows no muestre además su banner de la esquina, activa su **No molestar**
@@ -95,7 +100,9 @@ guardan en caché; todo se lanza vía explorer.exe (sin extensiones de shell en 
 Ajustes: **desenfoque del fondo** (no · suave · intenso; vidrio propio como el del notch, por
 eso con desenfoque el dock queda fuera de capturas), **opacidad** (30 · 55 · 75 · 92 %) y
 **tamaño de iconos** (pequeño · mediano · grande · enorme).
-"Desactivar barra de tareas": la de Windows desaparece mientras el dock está activo (se pone
+"Desactivar barra de tareas": la de Windows desaparece mientras el dock está activo
+(medido: Explorer pasa de 2,29 % a 0,68 % de un núcleo y usa 33 MB menos, porque deja de
+dibujarla) (se pone
 en autoocultar y se ocultan sus ventanas) y vuelve tal cual al quitarlo, al salir o al
 desinstalar. Se oculta solo a pantalla completa.
 

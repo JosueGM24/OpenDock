@@ -1212,8 +1212,9 @@ static void DrawTileCard(Canvas *c, RECT r, int k)
     const int tx = (int)(cx + bd * 0.5f) + CS(10), tw = r.right - tx - CS(10);
     Card(c, r);
     if (!k) {
-        Bubble(c, cx, cy, bd, FALSE, 0, L"\xE708");
-        TwoLines(c, tx, r.top, tw, r.bottom - r.top, L"No molestar", L"Ajustes");
+        const int q = Wn_QuietHours();     /* encendida si Windows tiene "No molestar" activo */
+        Bubble(c, cx, cy, bd, q > 0, 0, L"\xE708");
+        TwoLines(c, tx, r.top, tw, r.bottom - r.top, L"No molestar", q > 0 ? L"Activado" : q == 0 ? L"Desactivado" : L"Ajustes");
     } else {
         wsprintfW(sub, g_cfg.mirror ? L"%d en el notch" : L"Desactivadas", Wn_Count());
         Bubble(c, cx, cy, bd, g_cfg.mirror && Wn_Count() > 0, 0, L"\xEA8F");

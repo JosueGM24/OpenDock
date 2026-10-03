@@ -49,6 +49,7 @@
 #define TIMER_WN        6
 #define TIMER_WNPOLL    7
 #define TIMER_FSCHECK   20      /* la ventana de delante cambió de tamaño: ¿pantalla completa? */
+#define TIMER_DNDHINT   21      /* poco después de arrancar: ¿hace falta sugerir "No molestar"? */
 
 #define HK_TOGGLE       1
 #define HK_UP           2
@@ -918,6 +919,18 @@ static LRESULT CALLBACK CtrlProc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (w == TIMER_REBUILD) { KillTimer(h, TIMER_REBUILD); RebuildCorners(); Bar_Reposition(); Dock_Reposition(); }
         else if (w == TIMER_TOPMOST) RaiseCorners();
         else if (w == TIMER_FSCHECK) { KillTimer(h, TIMER_FSCHECK); CheckFullscreen(); }
+        else if (w == TIMER_DNDHINT) {
+            /* las notificaciones llegan al notch, pero Windows también saca su banner: se
+             * sugiere "No molestar" (los avisos siguen llegando al centro y al notch). Una vez al día. */
+            KillTimer(h, TIMER_DNDHINT);
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            const DWORD today = (DWORD)st.wYear * 10000 + st.wMonth * 100 + st.wDay;
+            if (g_cfg.notch && g_cfg.mirror && Wn_QuietHours() == 0 && RegReadDword(L"DndHintDay", 0) != today) {
+                RegWriteDword(L"DndHintDay", today);
+                Notch_Show(NI_INFO, L"Activa \x201CNo molestar\x201D", L"Así los avisos solo salen en el notch", -1, FALSE);
+            }
+        }
         else if (w == TIMER_CLIP) { KillTimer(h, TIMER_CLIP); CheckClipboardCapture(); }
         else if (w == TIMER_EDGE) CheckEdge();
         else if (w == TIMER_WN) { KillTimer(h, TIMER_WN); if (g_cfg.mirror) Wn_Refresh(TRUE); }
@@ -1131,6 +1144,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
     g_locHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, NULL,
                                 LocationHook, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
     SetTimer(g_ctrl, TIMER_TOPMOST, 1500, NULL);
+    SetTimer(g_ctrl, TIMER_DNDHINT, 15000, NULL);
 
     g_clipSeq = GetClipboardSequenceNumber();
     AddClipboardFormatListener(g_ctrl);
