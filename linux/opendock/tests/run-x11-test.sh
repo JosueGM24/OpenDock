@@ -32,13 +32,23 @@ sleep 1
 
 dbus-run-session -- "$OPENDOCK_BIN" >"$ARTEFACTOS/opendock.log" 2>&1 &
 OPENDOCK_PID=$!
-sleep 2
 
 fallo=0
 
-import -display "$DISPLAY" -window root "$ARTEFACTOS/x11-barra.png" || fallo=1
+# Espera a que aparezca la barra (en un runner cargado tarda más de 2 s).
+VENTANA=""
+for _ in $(seq 1 75); do
+    VENTANA=$(xwininfo -root -tree -display "$DISPLAY" | grep -F '"OpenDock-Barra"' | awk '{print $1}' | head -n1 || true)
+    [ -n "$VENTANA" ] && break
+    if ! kill -0 "$OPENDOCK_PID" 2>/dev/null; then
+        echo "FALLO: opendock terminó antes de mostrar la barra"
+        break
+    fi
+    sleep 0.2
+done
+sleep 1   # deja que pinte el primer cuadro
 
-VENTANA=$(xwininfo -root -tree -display "$DISPLAY" | grep -F "OpenDock-Barra" | awk '{print $1}' | head -n1 || true)
+import -display "$DISPLAY" -window root "$ARTEFACTOS/x11-barra.png" || fallo=1
 if [ -z "$VENTANA" ]; then
     echo "FALLO: no se encontró la ventana OpenDock-Barra"
     fallo=1
