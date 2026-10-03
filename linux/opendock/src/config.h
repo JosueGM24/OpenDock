@@ -12,6 +12,7 @@ typedef struct {
     int alto_barra;             /* px, por defecto 28 */
     int alto_dock;               /* px, por defecto 60 */
     gboolean oled;               /* fondo negro puro en vez de vidrio */
+    gboolean no_molestar;        /* sin avisos en el notch (salvo críticos) */
     gboolean reemplazar_notificaciones; /* --replace */
     gchar **apps_ancladas;       /* lista de ids .desktop, terminada en NULL */
     gchar *config_path;
@@ -20,5 +21,9 @@ typedef struct {
 /* Carga (o crea con valores por defecto) ~/.config/opendock/config.ini */
 OdConfig *od_config_cargar(void);
 void od_config_liberar(OdConfig *cfg);
+
+/* Cambia un valor booleano y lo guarda en config.ini sin tocar el resto. */
+void od_config_guardar_bool(OdConfig *cfg, const char *grupo, const char *clave,
+    gboolean valor);
 
 #endif

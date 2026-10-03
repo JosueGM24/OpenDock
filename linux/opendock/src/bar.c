@@ -34,6 +34,9 @@ typedef struct {
     GtkWidget *interruptor_bt;
     GtkWidget *control_brillo;
     GtkWidget *control_volumen;
+    GtkWidget *lbl_bateria_cc;   /* tarjeta de batería del centro de control */
+    GtkWidget *popover;
+    OdConfig *cfg;
     int alto;
     OdBackendTipo backend;
     gboolean iniciada;
@@ -70,6 +73,15 @@ static void refrescar_bateria(void)
 {
     int pct; gboolean cargando;
     od_bateria_leer(&pct, &cargando);
+    if (g_barra.lbl_bateria_cc) {
+        /* La tarjeta entera se oculta en equipos sin batería. */
+        gtk_widget_set_visible(gtk_widget_get_parent(g_barra.lbl_bateria_cc), pct >= 0);
+        if (pct >= 0) {
+            char *t = g_strdup_printf("%d %%%s", pct, cargando ? " · cargando" : "");
+            gtk_label_set_text(GTK_LABEL(g_barra.lbl_bateria_cc), t);
+            g_free(t);
+        }
+    }
     if (pct < 0) {
         gtk_widget_set_visible(g_barra.img_bateria, FALSE);
         gtk_widget_set_visible(g_barra.lbl_bateria, FALSE);
@@ -151,9 +163,50 @@ static void al_mover_volumen(GtkRange *r, gpointer datos)
     od_volumen_fijar((int)gtk_range_get_value(r));
 }
 
-/* Centro de control simplificado (DESIGN.md): Wi-Fi/Bluetooth, brillo y
- * volumen. No incluye todavía No molestar / notificaciones / "Ajustes"
- * (quedan para una iteración posterior del propio centro de control). */
+static gboolean al_mover_no_molestar(GtkSwitch *sw, gboolean estado, gpointer datos)
+{
+    (void)datos;
+    g_barra.cfg->no_molestar = estado;
+    od_config_guardar_bool(g_barra.cfg, "general", "no_molestar", estado);
+    gtk_switch_set_state(sw, estado);
+    return TRUE;
+}
+
+/* "Ajustes ›": abre config.ini con el editor predeterminado (sin shell). */
+static void al_pulsar_ajustes(GtkButton *b, gpointer datos)
+{
+    (void)b; (void)datos;
+    gtk_popover_popdown(GTK_POPOVER(g_barra.popover));
+    gchar *uri = g_filename_to_uri(g_barra.cfg->config_path, NULL, NULL);
+    GError *error = NULL;
+    if (!uri || !g_app_info_launch_default_for_uri(uri, NULL, &error)) {
+        g_message("opendock: no se pudo abrir %s: %s", g_barra.cfg->config_path,
+            error ? error->message : "?");
+        g_clear_error(&error);
+    }
+    g_free(uri);
+}
+
+static GtkWidget *crear_tarjeta_interruptor(const char *icono, const char *texto,
+    GCallback al_mover, GtkWidget **interruptor)
+{
+    GtkWidget *tarjeta = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_add_css_class(tarjeta, "opendock-tarjeta");
+    gtk_widget_set_hexpand(tarjeta, TRUE);
+    gtk_box_append(GTK_BOX(tarjeta), gtk_image_new_from_icon_name(icono));
+    gtk_box_append(GTK_BOX(tarjeta), gtk_label_new(texto));
+    GtkWidget *sw = gtk_switch_new();
+    gtk_widget_set_hexpand(sw, TRUE);
+    gtk_widget_set_halign(sw, GTK_ALIGN_END);
+    gtk_widget_set_valign(sw, GTK_ALIGN_CENTER);
+    g_signal_connect(sw, "state-set", al_mover, NULL);
+    gtk_box_append(GTK_BOX(tarjeta), sw);
+    *interruptor = sw;
+    return tarjeta;
+}
+
+/* Centro de control (DESIGN.md, simplificado): Wi-Fi y Bluetooth, No
+ * molestar, batería, brillo, volumen y "Ajustes ›". */
 static GtkWidget *crear_centro_control(void)
 {
     GtkWidget *caja = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
@@ -165,27 +218,11 @@ static GtkWidget *crear_centro_control(void)
 
     GtkWidget *fila_redes = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
 
-    GtkWidget *tarjeta_wifi = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_widget_add_css_class(tarjeta_wifi, "opendock-tarjeta");
-    gtk_box_append(GTK_BOX(tarjeta_wifi), gtk_image_new_from_icon_name("network-wireless-symbolic"));
-    gtk_box_append(GTK_BOX(tarjeta_wifi), gtk_label_new("Wi-Fi"));
-    GtkWidget *sw_wifi = gtk_switch_new();
-    gtk_widget_set_hexpand(sw_wifi, TRUE);
-    gtk_widget_set_halign(sw_wifi, GTK_ALIGN_END);
-    g_signal_connect(sw_wifi, "state-set", G_CALLBACK(al_mover_wifi), NULL);
-    gtk_box_append(GTK_BOX(tarjeta_wifi), sw_wifi);
-    g_barra.interruptor_wifi = sw_wifi;
-
-    GtkWidget *tarjeta_bt = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_widget_add_css_class(tarjeta_bt, "opendock-tarjeta");
-    gtk_box_append(GTK_BOX(tarjeta_bt), gtk_image_new_from_icon_name("bluetooth-symbolic"));
-    gtk_box_append(GTK_BOX(tarjeta_bt), gtk_label_new("Bluetooth"));
-    GtkWidget *sw_bt = gtk_switch_new();
-    gtk_widget_set_hexpand(sw_bt, TRUE);
-    gtk_widget_set_halign(sw_bt, GTK_ALIGN_END);
-    g_signal_connect(sw_bt, "state-set", G_CALLBACK(al_mover_bt), NULL);
-    gtk_box_append(GTK_BOX(tarjeta_bt), sw_bt);
-    g_barra.interruptor_bt = sw_bt;
+    GtkWidget *tarjeta_wifi = crear_tarjeta_interruptor("network-wireless-symbolic", "Wi-Fi",
+        G_CALLBACK(al_mover_wifi), &g_barra.interruptor_wifi);
+    GtkWidget *tarjeta_bt = crear_tarjeta_interruptor("bluetooth-symbolic", "Bluetooth",
+        G_CALLBACK(al_mover_bt), &g_barra.interruptor_bt);
+    GtkWidget *sw_bt = g_barra.interruptor_bt;
     int bt = od_bluetooth_activado();
     if (bt < 0) gtk_widget_set_sensitive(sw_bt, FALSE);
     else gtk_switch_set_state(GTK_SWITCH(sw_bt), bt == 1);
@@ -193,6 +230,24 @@ static GtkWidget *crear_centro_control(void)
     gtk_box_append(GTK_BOX(fila_redes), tarjeta_wifi);
     gtk_box_append(GTK_BOX(fila_redes), tarjeta_bt);
     gtk_box_append(GTK_BOX(caja), fila_redes);
+
+    GtkWidget *sw_nm = NULL;
+    GtkWidget *tarjeta_nm = crear_tarjeta_interruptor("notifications-disabled-symbolic",
+        "No molestar", G_CALLBACK(al_mover_no_molestar), &sw_nm);
+    gtk_switch_set_state(GTK_SWITCH(sw_nm), g_barra.cfg->no_molestar);
+    gtk_box_append(GTK_BOX(caja), tarjeta_nm);
+
+    GtkWidget *tarjeta_bateria = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_add_css_class(tarjeta_bateria, "opendock-tarjeta");
+    gtk_box_append(GTK_BOX(tarjeta_bateria), gtk_image_new_from_icon_name("battery-full-symbolic"));
+    gtk_box_append(GTK_BOX(tarjeta_bateria), gtk_label_new("Batería"));
+    GtkWidget *lbl_pct = gtk_label_new("");
+    gtk_widget_set_hexpand(lbl_pct, TRUE);
+    gtk_widget_set_halign(lbl_pct, GTK_ALIGN_END);
+    gtk_box_append(GTK_BOX(tarjeta_bateria), lbl_pct);
+    gtk_widget_set_visible(tarjeta_bateria, FALSE);
+    gtk_box_append(GTK_BOX(caja), tarjeta_bateria);
+    g_barra.lbl_bateria_cc = lbl_pct;
 
     GtkWidget *fila_brillo = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_box_append(GTK_BOX(fila_brillo), gtk_image_new_from_icon_name("display-brightness-symbolic"));
@@ -220,6 +275,12 @@ static GtkWidget *crear_centro_control(void)
     gtk_box_append(GTK_BOX(fila_volumen), r_vol);
     gtk_box_append(GTK_BOX(caja), fila_volumen);
     g_barra.control_volumen = r_vol;
+
+    GtkWidget *boton_ajustes = gtk_button_new_with_label("Ajustes ›");
+    gtk_widget_add_css_class(boton_ajustes, "flat");
+    gtk_widget_set_halign(boton_ajustes, GTK_ALIGN_END);
+    g_signal_connect(boton_ajustes, "clicked", G_CALLBACK(al_pulsar_ajustes), NULL);
+    gtk_box_append(GTK_BOX(caja), boton_ajustes);
 
     return caja;
 }
@@ -282,6 +343,7 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
     if (g_barra.iniciada) return;
     g_barra.iniciada = TRUE;
     g_barra.alto = cfg->alto_barra;
+    g_barra.cfg = cfg;
     g_barra.backend = backend;
 
     GtkWidget *win = gtk_window_new();
@@ -318,9 +380,14 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
     GtkWidget *boton_ajustes = gtk_menu_button_new();
     gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(boton_ajustes), "emblem-system-symbolic");
     GtkWidget *popover = gtk_popover_new();
+    g_barra.popover = popover;
     gtk_popover_set_child(GTK_POPOVER(popover), crear_centro_control());
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(boton_ajustes), popover);
 
+    gtk_widget_add_css_class(img_volumen, "opendock-icono");
+    gtk_widget_add_css_class(img_wifi, "opendock-icono");
+    gtk_widget_add_css_class(img_bateria, "opendock-icono");
+    gtk_widget_add_css_class(boton_ajustes, "opendock-icono");
     gtk_box_append(GTK_BOX(caja_der), img_volumen);
     gtk_box_append(GTK_BOX(caja_der), img_wifi);
     gtk_box_append(GTK_BOX(caja_der), img_bateria);
@@ -337,6 +404,11 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
         ".opendock-app-activa { color: #FFFFFF; font-weight: 600; font-size: 13px; }"
         ".opendock-reloj { color: #FFFFFF; font-weight: 600; font-size: 13px; }"
         ".opendock-tarjeta { background-color: rgba(255,255,255,0.08); border-radius: 12px; padding: 8px; }"
+        /* DESIGN.md: pasar el cursor 1,16, pulsar 0,88. GTK no tiene muelles
+         * en CSS; una curva con rebote se le parece (k 520 ≈ 0,18 s). */
+        ".opendock-icono { transition: transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1); }"
+        ".opendock-icono:hover { transform: scale(1.16); }"
+        ".opendock-icono:active { transform: scale(0.88); }"
         );
     gtk_style_context_add_provider_for_display(gtk_widget_get_display(win),
         GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);

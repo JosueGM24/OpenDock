@@ -139,8 +139,13 @@ static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocaci
     if (g_srv.siguiente_id == 0) g_srv.siguiente_id = 1; /* por si desborda */
     g_srv.id_actual = id;
 
-    od_notch_mostrar_aviso(app_name, summary, body, pixbuf,
-        (app_icon && *app_icon) ? app_icon : NULL);
+    /* No molestar: la notificación se acepta (devuelve su id) pero no se
+     * muestra, salvo las críticas (urgency = 2), igual que en Windows. */
+    guint8 urgencia = 1;
+    if (hints) g_variant_lookup(hints, "urgency", "y", &urgencia);
+    if (!g_srv.cfg->no_molestar || urgencia >= 2)
+        od_notch_mostrar_aviso(app_name, summary, body, pixbuf,
+            (app_icon && *app_icon) ? app_icon : NULL);
 
     if (pixbuf) g_object_unref(pixbuf);
     g_free(app_name);

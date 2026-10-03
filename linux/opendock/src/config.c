@@ -63,6 +63,8 @@ OdConfig *od_config_cargar(void)
         cfg->alto_dock = g_key_file_get_integer(kf, "general", "alto_dock", NULL);
     if (existe && g_key_file_has_key(kf, "general", "oled", NULL))
         cfg->oled = g_key_file_get_boolean(kf, "general", "oled", NULL);
+    if (existe && g_key_file_has_key(kf, "general", "no_molestar", NULL))
+        cfg->no_molestar = g_key_file_get_boolean(kf, "general", "no_molestar", NULL);
 
     if (existe && g_key_file_has_key(kf, "dock", "apps", NULL)) {
         gsize n = 0;
@@ -91,6 +93,22 @@ OdConfig *od_config_cargar(void)
 
     g_key_file_free(kf);
     return cfg;
+}
+
+void od_config_guardar_bool(OdConfig *cfg, const char *grupo, const char *clave,
+    gboolean valor)
+{
+    GKeyFile *kf = g_key_file_new();
+    /* Se relee para conservar lo que el usuario haya editado a mano. */
+    g_key_file_load_from_file(kf, cfg->config_path, G_KEY_FILE_KEEP_COMMENTS, NULL);
+    g_key_file_set_boolean(kf, grupo, clave, valor);
+    GError *error = NULL;
+    if (!g_key_file_save_to_file(kf, cfg->config_path, &error)) {
+        g_message("opendock: no se pudo guardar %s: %s", cfg->config_path,
+            error ? error->message : "?");
+        g_clear_error(&error);
+    }
+    g_key_file_free(kf);
 }
 
 void od_config_liberar(OdConfig *cfg)
