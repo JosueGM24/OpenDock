@@ -17,8 +17,7 @@
 #include <gtk4-layer-shell/gtk4-layer-shell.h>
 #endif
 #if HAVE_X11
-#include <gdk/x11/gdkx.h>
-#include <X11/Xlib.h>
+#include "x11.h"
 #include <X11/Xatom.h>
 #endif
 
@@ -245,8 +244,8 @@ static void al_realizar_x11(GtkWidget *win, gpointer datos)
     int alto = GPOINTER_TO_INT(datos);
     GdkSurface *surface = gtk_native_get_surface(gtk_widget_get_native(win));
     if (!GDK_IS_X11_SURFACE(surface)) return;
-    Display *xdisplay = GDK_SURFACE_XDISPLAY(surface);
-    Window xid = GDK_SURFACE_XID(surface);
+    Display *xdisplay = od_x11_display(surface);
+    Window xid = od_x11_ventana(surface);
     GdkRectangle geo = geometria_monitor_principal();
 
     Atom tipo = XInternAtom(xdisplay, "_NET_WM_WINDOW_TYPE", False);
@@ -273,7 +272,7 @@ static void colocar_x11(GtkWidget *win, int alto)
     GdkSurface *surface = gtk_native_get_surface(gtk_widget_get_native(win));
     if (!GDK_IS_X11_SURFACE(surface)) return;
     GdkRectangle geo = geometria_monitor_principal();
-    XMoveResizeWindow(GDK_SURFACE_XDISPLAY(surface), GDK_SURFACE_XID(surface),
+    XMoveResizeWindow(od_x11_display(surface), od_x11_ventana(surface),
         geo.x, geo.y, geo.width, alto);
 }
 #endif

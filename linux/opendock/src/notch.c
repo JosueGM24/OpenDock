@@ -16,8 +16,7 @@
 #include <gtk4-layer-shell/gtk4-layer-shell.h>
 #endif
 #if HAVE_X11
-#include <gdk/x11/gdkx.h>
-#include <X11/Xlib.h>
+#include "x11.h"
 #endif
 
 #define OD_AVISO_ANCHO   360
@@ -66,8 +65,8 @@ static void colocar_x11(void)
         gdk_monitor_get_geometry(mon, &geo);
         g_object_unref(mon);
     }
-    Display *xdisplay = GDK_SURFACE_XDISPLAY(surface);
-    Window xid = GDK_SURFACE_XID(surface);
+    Display *xdisplay = od_x11_display(surface);
+    Window xid = od_x11_ventana(surface);
     int x = geo.x + (geo.width - OD_AVISO_ANCHO) / 2;
     int y = geo.y + g_notch.alto_barra;
     XMoveWindow(xdisplay, xid, x, y);

@@ -8,8 +8,7 @@
 #endif
 
 #if HAVE_X11
-#include <gdk/x11/gdkx.h>
-#include <X11/Xlib.h>
+#include "x11.h"
 #include <X11/Xatom.h>
 #endif
 
@@ -172,8 +171,8 @@ static void colocar_x11(GtkWidget *win, GdkMonitor *monitor, OdEsquina esquina, 
     GdkSurface *surface = gtk_native_get_surface(gtk_widget_get_native(win));
     if (!GDK_IS_X11_SURFACE(surface)) return;
 
-    Display *xdisplay = GDK_SURFACE_XDISPLAY(surface);
-    Window xid = GDK_SURFACE_XID(surface);
+    Display *xdisplay = od_x11_display(surface);
+    Window xid = od_x11_ventana(surface);
 
     XSetWindowAttributes attrs = { 0 };
     attrs.override_redirect = True;
