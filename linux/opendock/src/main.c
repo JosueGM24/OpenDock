@@ -18,6 +18,8 @@
 #include "opendock-build-config.h"
 #include "session.h"
 #include "corners.h"
+#include "notch.h"
+#include "notifications.h"
 #include <gtk/gtk.h>
 #include <glib-unix.h>
 #include <locale.h>
@@ -71,9 +73,11 @@ static void al_activar(GApplication *app, gpointer datos)
     }
 
     od_esquinas_iniciar(e->cfg, backend);
+    od_notch_iniciar(e->cfg, backend);
+    e->cfg->reemplazar_notificaciones = e->reemplazar;
+    od_notificaciones_iniciar(e->cfg);
 
-    /* Las fases siguientes añaden aquí: notch/notificaciones, barra
-     * superior y dock. */
+    /* Las fases siguientes añaden aquí: barra superior y dock. */
 }
 
 int main(int argc, char **argv)

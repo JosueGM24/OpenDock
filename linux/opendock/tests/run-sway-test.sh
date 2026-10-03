@@ -92,7 +92,7 @@ ejecutar_dentro_de_sway() {
             if ! python3 "$CHECK_PY" "$ARTEFACTOS/03-notch.png" --width "$ANCHO" --check notch; then
                 ok=1
             fi
-            if command -v busctl >/dev/null; then
+            if command -v gdbus >/dev/null; then
                 NOMBRE_SERVIDOR=$(gdbus call --session \
                     --dest org.freedesktop.Notifications \
                     --object-path /org/freedesktop/Notifications \

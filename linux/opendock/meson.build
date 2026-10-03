@@ -63,6 +63,8 @@ sources = [
   'src/spring.c',
   'src/session.c',
   'src/corners.c',
+  'src/notch.c',
+  'src/notifications.c',
 ]
 
 # Protocolo wlr-foreign-toplevel-management: se añade en la fase 5 (dock), generado
