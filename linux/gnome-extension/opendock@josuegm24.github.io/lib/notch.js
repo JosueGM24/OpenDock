@@ -173,7 +173,6 @@ export class NotchManager {
 
         Main.layoutManager.addChrome(this._actor, {
             affectsStruts: false,
-            affectsInputRegion: true,
             trackFullscreen: false,
         });
         this._actor.set_size(0, 0);
@@ -199,13 +198,11 @@ export class NotchManager {
         });
         Main.layoutManager.addChrome(this._hotStrip, {
             affectsStruts: false,
-            affectsInputRegion: true,
         });
 
         this._mini = new St.Widget({visible: false, reactive: false});
         Main.layoutManager.addChrome(this._mini, {
             affectsStruts: false,
-            affectsInputRegion: false,
         });
     }
 
@@ -500,7 +497,6 @@ export class NotchManager {
 
         Main.layoutManager.addChrome(this._center, {
             affectsStruts: false,
-            affectsInputRegion: true,
         });
         this._centerOpen = true;
         this._refreshCenter();

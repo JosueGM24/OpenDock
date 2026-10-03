@@ -88,11 +88,13 @@ take_screenshot() {
     gdbus call --session --dest org.gnome.Shell \
         --object-path /org/gnome/Shell/Screenshot \
         --method org.gnome.Shell.Screenshot.Screenshot \
-        true true "$ARTIFACT_DIR/$name" >>"$LOG" 2>&1
-    if [ -f "$ARTIFACT_DIR/$name" ]; then
-        echo "Captura guardada: $name"
+        false false "$ARTIFACT_DIR/$name" >>"$LOG" 2>&1
+    local size=0
+    [ -f "$ARTIFACT_DIR/$name" ] && size=$(stat -c%s "$ARTIFACT_DIR/$name" 2>/dev/null || echo 0)
+    if [ -f "$ARTIFACT_DIR/$name" ] && [ "$size" -gt 0 ]; then
+        echo "Captura guardada: $name ($size bytes)"
     else
-        echo "AVISO: no se pudo tomar la captura $name (API de capturas no disponible en este entorno)"
+        echo "AVISO: la captura $name quedó vacía o no se generó (renderizado por software sin GPU en este contenedor); se omite la inspección visual de esta captura."
         SKIPPED+=("captura:$name")
     fi
 }

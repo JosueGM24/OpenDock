@@ -119,7 +119,6 @@ export class DockManager {
         Main.layoutManager.addChrome(this._actor, {
             affectsStruts: true,
             trackFullscreen: true,
-            affectsInputRegion: true,
         });
     }
 
