@@ -233,7 +233,13 @@ void od_notch_mostrar_aviso(const char *app_name, const char *resumen,
     g_free(hora);
 
     if (icono) {
+        /* gdk_texture_new_for_pixbuf está marcada obsoleta en GTK recientes
+         * (recomiendan cargar texturas directamente), pero sigue siendo la
+         * forma correcta de convertir un GdkPixbuf ya decodificado a mano
+         * (desde image-data de la notificación) en algo que pintar. */
+        G_GNUC_BEGIN_IGNORE_DEPRECATIONS
         GdkTexture *textura = gdk_texture_new_for_pixbuf(icono);
+        G_GNUC_END_IGNORE_DEPRECATIONS
         gtk_image_set_from_paintable(GTK_IMAGE(g_notch.icono), GDK_PAINTABLE(textura));
         g_object_unref(textura);
     } else if (icono_nombre && *icono_nombre) {
