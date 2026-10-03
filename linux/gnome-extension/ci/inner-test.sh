@@ -135,6 +135,10 @@ if command -v notify-send >/dev/null 2>&1; then
     if echo "$RESULT2" | grep -q 'notch='; then
         check_field "el notch se muestra (notch=1)" 'notch=1' "$RESULT2"
         check_field "el banner nativo de GNOME no aparece (bannerChildren=0)" 'bannerChildren=0' "$RESULT2"
+        if ! echo "$RESULT2" | grep -q 'bannerChildren=0'; then
+            DIAG_JS='(() => { const own = Object.prototype.hasOwnProperty.call(Main.messageTray, "_showNotification"); const proto = Object.getOwnPropertyNames(Object.getPrototypeOf(Main.messageTray)).filter(n => /show|banner|notif/i.test(n)); return "patchedOwnProp=" + own + ";protoMethods=" + proto.join(","); })()'
+            echo "Diagnóstico del banner -> $(shell_eval "$DIAG_JS")"
+        fi
     else
         echo "AVISO: no se pudo evaluar el estado tras notify-send; se omite esa comprobación."
         SKIPPED+=("eval:tras-notificacion")
