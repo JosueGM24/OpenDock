@@ -64,7 +64,8 @@ ejecutar_dentro_de_sway() {
     echo "sway listo: WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
     sleep 1
 
-    "$OPENDOCK_BIN" >"$ARTEFACTOS/opendock.log" 2>&1 &
+    # Mensajes de depuración de opendock (sin dominio) en el log de la prueba.
+    G_MESSAGES_DEBUG=all "$OPENDOCK_BIN" >"$ARTEFACTOS/opendock.log" 2>&1 &
     OPENDOCK_PID=$!
     sleep 2
 

@@ -146,6 +146,7 @@ static void cancelar(guint *id)
 
 static void entrar_modo(OdModoMini modo)
 {
+    g_debug("mini: modo %d -> %d", g_m.modo, modo);
     g_m.modo = modo;
     gtk_widget_set_visible(g_m.rapida, modo == OD_MINI_RAPIDA);
     if (modo == OD_MINI_OCULTO) {
@@ -170,6 +171,7 @@ static gboolean al_quedar_quieto(gpointer datos)
 {
     (void)datos;
     g_m.temporizador_quieto = 0;
+    g_debug("mini: quieto 450 ms (modo %d)", g_m.modo);
     if (g_m.modo == OD_MINI_PASTILLA) entrar_modo(OD_MINI_RAPIDA);
     return G_SOURCE_REMOVE;
 }
@@ -185,6 +187,7 @@ static gboolean al_vencer_salida(gpointer datos)
 void od_mini_cursor(gboolean dentro, double dx)
 {
     if (!g_m.iniciado) return;
+    g_debug("mini: cursor dentro=%d dx=%.0f modo=%d", dentro, dx, g_m.modo);
     /* Con el aviso o el centro a la vista, el mini notch sobra. */
     if (od_notch_visible() || od_centro_abierto()) {
         if (g_m.modo != OD_MINI_OCULTO) entrar_modo(OD_MINI_OCULTO);
