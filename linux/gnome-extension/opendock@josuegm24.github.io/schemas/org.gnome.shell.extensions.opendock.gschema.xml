@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="opendock">
+  <enum id="org.gnome.shell.extensions.opendock.material">
+    <value value="0" nick="oled"/>
+    <value value="1" nick="glass"/>
+    <value value="2" nick="system"/>
+  </enum>
+
+  <enum id="org.gnome.shell.extensions.opendock.bounce">
+    <value value="0" nick="soft"/>
+    <value value="1" nick="normal"/>
+    <value value="2" nick="bouncy"/>
+  </enum>
+
+  <enum id="org.gnome.shell.extensions.opendock.dock-hide-mode">
+    <value value="0" nick="never"/>
+    <value value="1" nick="half"/>
+    <value value="2" nick="full"/>
+  </enum>
+
+  <schema id="org.gnome.shell.extensions.opendock" path="/org/gnome/shell/extensions/opendock/">
+    <key name="material" enum="org.gnome.shell.extensions.opendock.material">
+      <default>"oled"</default>
+      <summary>Material visual</summary>
+      <description>OLED (negro puro), vidrio (desenfoque) o seguir el sistema.</description>
+    </key>
+
+    <key name="bounce" enum="org.gnome.shell.extensions.opendock.bounce">
+      <default>"normal"</default>
+      <summary>Estilo del rebote</summary>
+      <description>Controla la amortiguación (zeta) de los muelles: suave, normal o bouncy.</description>
+    </key>
+
+    <key name="corner-radius" type="i">
+      <range min="0" max="32"/>
+      <default>16</default>
+      <summary>Radio de las esquinas</summary>
+      <description>Radio en píxeles de las esquinas redondeadas de la pantalla.</description>
+    </key>
+
+    <key name="dock-hide-mode" enum="org.gnome.shell.extensions.opendock.dock-hide-mode">
+      <default>"never"</default>
+      <summary>Ocultación del dock</summary>
+      <description>Nunca, a la mitad o por completo tras 450 ms sin el cursor encima.</description>
+    </key>
+
+    <key name="show-corners" type="b">
+      <default>true</default>
+      <summary>Mostrar esquinas redondeadas</summary>
+      <description>Activa las cuatro máscaras de esquina en todos los monitores.</description>
+    </key>
+
+    <key name="show-notch" type="b">
+      <default>true</default>
+      <summary>Mostrar el notch</summary>
+      <description>Reemplaza los banners de GNOME por el notch y el centro de notificaciones de OpenDock.</description>
+    </key>
+
+    <key name="show-dock" type="b">
+      <default>true</default>
+      <summary>Mostrar el dock</summary>
+      <description>Activa el dock inferior con favoritos y aplicaciones abiertas.</description>
+    </key>
+
+    <key name="dock-icon-size" type="i">
+      <range min="24" max="64"/>
+      <default>38</default>
+      <summary>Tamaño de icono del dock</summary>
+      <description>Tamaño base en píxeles de los iconos del dock.</description>
+    </key>
+
+    <key name="sound-enabled" type="b">
+      <default>true</default>
+      <summary>Reproducir sonido</summary>
+      <description>Reproduce un sonido al llegar una notificación.</description>
+    </key>
+
+    <key name="sound-name" type="s">
+      <default>"confirm"</default>
+      <summary>Sonido de notificación</summary>
+      <description>Nombre del archivo (sin extensión) dentro de la carpeta sounds del paquete de la extensión.</description>
+    </key>
+
+    <key name="sound-volume" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>0.6</default>
+      <summary>Volumen</summary>
+      <description>Volumen del sonido de notificación, de 0 a 1.</description>
+    </key>
+  </schema>
+</schemalist>

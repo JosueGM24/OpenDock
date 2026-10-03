@@ -1,0 +1,27 @@
+# Mantenedor: Josué Gómez <josuegm24@github>
+pkgname=gnome-shell-extension-opendock
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Lleva el notch, el dock y las esquinas redondeadas de OpenDock a GNOME Shell"
+arch=('any')
+url="https://github.com/JosueGM24/OpenDock"
+license=('MIT')
+depends=('gnome-shell' 'glib2')
+optdepends=('gst-plugins-base: sonido de notificación')
+source=("git+https://github.com/JosueGM24/OpenDock.git#branch=linux-gnome")
+sha256sums=('SKIP')
+
+UUID=opendock@josuegm24.github.io
+
+package() {
+    cd "$srcdir/OpenDock"
+
+    local extdir="$pkgdir/usr/share/gnome-shell/extensions/$UUID"
+    install -d "$extdir"
+    cp -r "linux/gnome-extension/$UUID"/* "$extdir/"
+
+    install -d "$extdir/sounds"
+    cp sounds/*.wav "$extdir/sounds/"
+
+    glib-compile-schemas "$extdir/schemas"
+}
