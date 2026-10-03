@@ -274,9 +274,6 @@ void od_notch_mostrar_aviso(const char *app_name, const char *resumen,
         iniciar_animacion();
     }
 
-    g_message("opendock: notch mostrado, visible=%d margen=%.1f",
-        gtk_widget_get_visible(g_notch.ventana), g_notch.muelle_margen.valor);
-
     g_notch.temporizador_autocierre = g_timeout_add(
         (guint)(OD_AVISO_HOLD_S * 1000), al_expirar, NULL);
 }
