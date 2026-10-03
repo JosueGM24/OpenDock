@@ -1,0 +1,8 @@
+/* La mayoría del estilo de OpenDock se calcula en tiempo de ejecución
+ * (colores de material, radios animados por los muelles) con
+ * St.Widget.set_style() en lib/*.js, porque dependen de ajustes del
+ * usuario y del estado de las animaciones. Esta hoja cubre lo estático. */
+
+.opendock-icon-box {
+    spacing: 12px;
+}
