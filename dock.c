@@ -542,7 +542,14 @@ static BOOL CALLBACK EnumProc(HWND w, LPARAM lp)
     if (!IsAppWindow(w)) return TRUE;
     wchar_t path[MAX_PATH];
     if (!WindowExe(w, path)) return TRUE;
-    if (!lstrcmpiW(BaseName(path), L"explorer.exe")) return TRUE;
+    /* De explorer.exe sólo las ventanas del Explorador de archivos: el escritorio, la barra
+     * y demás piezas del shell viven en el mismo proceso y no son apps. */
+    const BOOL explorer = !lstrcmpiW(BaseName(path), L"explorer.exe");
+    if (explorer) {
+        wchar_t cls[32];
+        if (!GetClassNameW(w, cls, 32) || (lstrcmpW(cls, L"CabinetWClass") && lstrcmpW(cls, L"ExploreWClass")))
+            return TRUE;
+    }
 
     DockItem *it = FindByAumid(w);           /* app empaquetada o PWA: antes que por el .exe */
     if (!it) it = FindByExe(path);
@@ -551,7 +558,8 @@ static BOOL CALLBACK EnumProc(HWND w, LPARAM lp)
         NewItem(it);
         lstrcpynW(it->exe, path, MAX_PATH);
         lstrcpynW(it->launch, path, MAX_PATH);
-        AppName(path, it->name, 80);
+        if (explorer) lstrcpynW(it->name, L"Explorador de archivos", 80);
+        else AppName(path, it->name, 80);
         if (GetIcon(path, it)) D.count++;
         else return TRUE;
     }
