@@ -63,6 +63,7 @@ static gboolean emitir_aviso(gpointer datos)
 {
     (void)datos;
     g_v.aviso_pendiente = 0;
+    g_debug("ventanas: aviso (%u ventanas)", g_v.lista->len);
     if (g_v.cb) g_v.cb(g_v.cb_datos);
     return G_SOURCE_REMOVE;
 }

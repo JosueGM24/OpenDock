@@ -670,6 +670,7 @@ static void actualizar_estado_items(void)
  * que fueron apareciendo. Los items que siguen conservan sus muelles. */
 static void reconstruir(void)
 {
+    g_debug("dock: reconstruir (%u items antes)", g_d.items->len);
     GPtrArray *nuevos = g_ptr_array_new_with_free_func(item_liberar);
     GPtrArray *viejos = g_d.items;
     g_ptr_array_set_free_func(viejos, NULL);
