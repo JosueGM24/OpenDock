@@ -5,9 +5,16 @@
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import {paletteFor} from './theme.js';
+import {isSystemDark} from './theme.js';
 
 export const PANEL_HEIGHT = 28;
+
+const MATERIAL_CLASSES = [
+    'opendock-panel-oled',
+    'opendock-panel-glass',
+    'opendock-panel-system-dark',
+    'opendock-panel-system-light',
+];
 
 const WEEKDAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -46,21 +53,28 @@ export class PanelStyler {
     }
 
     _applyStyle() {
-        const palette = paletteFor(this._settings.get_string('material'));
-        // min-height/max-height porque algunos temas (p.ej. el de Fedora)
-        // fijan un min-height propio que, de lo contrario, gana sobre un
-        // height normal sin importar la especificidad.
-        Main.panel.set_style(
-            `background-color: ${palette.background}; height: ${PANEL_HEIGHT}px; ` +
-            `min-height: ${PANEL_HEIGHT}px; max-height: ${PANEL_HEIGHT}px; ` +
-            'border: none; box-shadow: none; padding: 0px; margin: 0px;');
+        // Clases de stylesheet.css en vez de set_style(): el alto y el color
+        // de fondo pasan así por la cascada real de temas, que es la que de
+        // verdad gana sobre el min-height que algunos temas (p.ej. el de
+        // Fedora) fijan para #panel; un estilo "en línea" no lo conseguía.
+        const material = this._settings.get_string('material');
+        const target = material === 'system'
+            ? `opendock-panel-system-${isSystemDark() ? 'dark' : 'light'}`
+            : `opendock-panel-${material}`;
+        for (const cls of MATERIAL_CLASSES) {
+            if (cls === target)
+                Main.panel.add_style_class_name(cls);
+            else
+                Main.panel.remove_style_class_name(cls);
+        }
         this._styleApplied = true;
     }
 
     _removeStyle() {
         if (!this._styleApplied)
             return;
-        Main.panel.set_style(null);
+        for (const cls of MATERIAL_CLASSES)
+            Main.panel.remove_style_class_name(cls);
         this._styleApplied = false;
     }
 
