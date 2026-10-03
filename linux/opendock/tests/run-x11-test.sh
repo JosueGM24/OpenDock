@@ -17,7 +17,9 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-runtime-opendock-x11}"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
 export XDG_CONFIG_HOME="$ARTEFACTOS/config"
-mkdir -p "$XDG_CONFIG_HOME"
+mkdir -p "$XDG_CONFIG_HOME/opendock"
+# Sin apps ancladas (el runner trae Firefox): el dock sólo debe salir con xclock.
+printf '[dock]\napps=\n' > "$XDG_CONFIG_HOME/opendock/config.ini"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 OPENDOCK_BIN="$REPO_ROOT/linux/opendock/build/opendock"
@@ -74,6 +76,48 @@ fi
 
 python3 "$REPO_ROOT/linux/opendock/tests/check_screenshot.py" "$ARTEFACTOS/x11-barra.png" \
     --width 1280 --bar-height 28 --check bar || fallo=1
+
+# Dock en X11: aparece al abrir una ventana (EWMH _NET_CLIENT_LIST), es
+# de tipo DOCK y reserva 42 px abajo (_NET_WM_STRUT_PARTIAL).
+dock_visible() {
+    local id
+    id=$(xwininfo -root -tree -display "$DISPLAY" | grep -F '"OpenDock-Dock"' | awk '{print $1}' | head -n1 || true)
+    [ -n "$id" ] && xwininfo -display "$DISPLAY" -id "$id" | grep -q "IsViewable" && echo "$id"
+}
+if [ -n "$(dock_visible || true)" ]; then
+    echo "FALLO: el dock se muestra sin ninguna app"
+    fallo=1
+else
+    echo "ok: sin apps, el dock no se muestra"
+fi
+if command -v xclock >/dev/null; then
+    xclock -display "$DISPLAY" &
+    XCLOCK_PID=$!
+    DOCK=""
+    for _ in $(seq 1 25); do DOCK=$(dock_visible || true); [ -n "$DOCK" ] && break; sleep 0.2; done
+    if [ -z "$DOCK" ]; then
+        echo "FALLO: el dock no aparece al abrir xclock"
+        fallo=1
+    else
+        echo "ok: el dock aparece con xclock abierto"
+        PROPS=$(xprop -display "$DISPLAY" -id "$DOCK" _NET_WM_WINDOW_TYPE _NET_WM_STRUT_PARTIAL)
+        echo "$PROPS"
+        if echo "$PROPS" | grep -q "_NET_WM_WINDOW_TYPE_DOCK"; then
+            echo "ok: el dock es de tipo DOCK"
+        else
+            echo "FALLO: el dock no es de tipo DOCK"; fallo=1
+        fi
+        if echo "$PROPS" | grep -qE '_NET_WM_STRUT_PARTIAL\(CARDINAL\) = 0, 0, 0, 42,'; then
+            echo "ok: el dock reserva 42 px abajo"
+        else
+            echo "FALLO: el dock no reserva 42 px abajo"; fallo=1
+        fi
+    fi
+    import -display "$DISPLAY" -window root "$ARTEFACTOS/x11-dock.png" || true
+    kill "$XCLOCK_PID" 2>/dev/null || true
+else
+    echo "AVISO: no hay xclock; se omite el dock en X11"
+fi
 
 kill "$OPENDOCK_PID" 2>/dev/null || true
 wait "$OPENDOCK_PID" 2>/dev/null || true
