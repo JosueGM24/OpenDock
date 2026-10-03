@@ -26,7 +26,6 @@ dnf install -y --setopt=install_weak_deps=False \
     mesa-dri-drivers \
     mesa-libEGL \
     mesa-libgbm \
-    ImageMagick \
-    xorg-x11-utils
+    ImageMagick
 
 dnf clean all

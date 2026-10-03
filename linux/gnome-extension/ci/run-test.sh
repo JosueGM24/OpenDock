@@ -16,6 +16,11 @@ if ! id tester &>/dev/null; then
 fi
 USER_HOME=$(getent passwd tester | cut -d: -f6)
 
+# Mutter arranca Xwayland y necesita poder crear su socket aquí; en la
+# imagen de Ubuntu el directorio no existe y /tmp no lo deja crear al usuario.
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix
+
 EXT_TARGET="$USER_HOME/.local/share/gnome-shell/extensions/$UUID"
 mkdir -p "$EXT_TARGET"
 cp -r "$REPO_ROOT/linux/gnome-extension/$UUID/." "$EXT_TARGET/"
