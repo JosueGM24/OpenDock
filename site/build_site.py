@@ -109,6 +109,12 @@ html = f'''<!doctype html>
 '''
 # el reset que antes ponía el visor de artifacts
 css = ':root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }\nbody { margin: 0; }\nimg { max-width: 100%; }\n[hidden] { display: none !important; }\n' + css
+# versión por contenido: si cambia el CSS o el JS cambia su URL, y ningún navegador mezcla
+# una página nueva con un archivo viejo de su caché
+import hashlib
+ver = lambda t: hashlib.sha256(t.encode('utf-8')).hexdigest()[:10]
+CSS_URL, JS_URL = f'assets/site.css?v={ver(css)}', f'assets/site.js?v={ver(js)}'
+html = html.replace('href="assets/site.css"', f'href="{CSS_URL}"').replace('src="assets/site.js"', f'src="{JS_URL}"')
 open(os.path.join(out, 'index.html'), 'w', encoding='utf-8', newline='\n').write(html)
 open(os.path.join(assets, 'site.css'), 'w', encoding='utf-8', newline='\n').write(css)
 open(os.path.join(assets, 'site.js'), 'w', encoding='utf-8', newline='\n').write(js)
@@ -121,7 +127,7 @@ gracias = f'''<!doctype html>
 <meta name="robots" content="noindex">
 <link rel="icon" type="image/png" href="assets/favicon.png">
 {fonts}
-<link rel="stylesheet" href="assets/site.css">
+<link rel="stylesheet" href="{CSS_URL}">
 </head>
 <body>
 <div class="wrap" style="min-height:100vh;display:grid;place-content:center;gap:18px;text-align:center;justify-items:center">

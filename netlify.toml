@@ -12,7 +12,5 @@
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "camera=(), microphone=(), geolocation=()"
 
-[[headers]]
-  for = "/assets/*"
-  [headers.values]
-    Cache-Control = "public, max-age=604800"
+# Sin caché larga: Netlify revalida con ETag, y el CSS y el JS llevan ?v=<huella> en su URL,
+# así que una página nueva nunca se mezcla con un archivo viejo.
