@@ -1,0 +1,63 @@
+name: Linux nativo (opendock)
+
+on:
+  push:
+    branches: [linux-native]
+    paths:
+      - 'linux/opendock/**'
+      - '.github/workflows/linux-native.yml'
+  workflow_dispatch: {}
+
+jobs:
+  build-arch:
+    name: Compilar (Arch Linux)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Paquetes
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel meson ninja pkgconf git \
+            gtk4 gtk4-layer-shell glib2 libpulse libcanberra \
+            wayland wayland-protocols wlr-protocols
+      - uses: actions/checkout@v4
+      - name: Configurar
+        working-directory: linux/opendock
+        run: meson setup build --werror -Dwarning_level=3
+      - name: Compilar
+        working-directory: linux/opendock
+        run: ninja -C build
+      - name: Comprobar --version
+        working-directory: linux/opendock
+        run: ./build/opendock --version
+
+  build-ubuntu:
+    name: Compilar (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Paquetes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential meson ninja-build pkg-config git \
+            libgtk-4-dev libglib2.0-dev libpulse-dev libcanberra-dev \
+            libwayland-dev wayland-protocols
+      - name: gtk4-layer-shell (compilado desde fuente; no está empaquetado en Ubuntu 24.04)
+        run: |
+          sudo apt-get install -y --no-install-recommends gobject-introspection libgirepository1.0-dev
+          git clone --depth 1 https://github.com/wmww/gtk4-layer-shell.git /tmp/gtk4-layer-shell
+          cd /tmp/gtk4-layer-shell
+          meson setup build -Dexamples=false -Ddocs=false -Dtests=false
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
+      - name: Configurar
+        working-directory: linux/opendock
+        run: meson setup build --werror -Dwarning_level=3
+      - name: Compilar
+        working-directory: linux/opendock
+        run: ninja -C build
+      - name: Comprobar --version
+        working-directory: linux/opendock
+        run: ./build/opendock --version

@@ -7,3 +7,4 @@
 
 # Restos de herramientas
 *.stackdump
+.ci-artifacts/
