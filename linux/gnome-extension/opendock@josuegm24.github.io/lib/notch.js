@@ -23,6 +23,18 @@ const MINI_HEIGHT = 9;
 const QUICK_WIDTH = 272;
 const QUICK_HEIGHT = 44;
 const HOVER_STILL_MS = 450;
+const MINI_SNAP_PX = 64;
+const HOT_STRIP_WIDTH = 480;
+const CARD_HOVER_SCALE = 1.035;
+const CARD_OTHER_SCALE = 0.965;
+const CARD_EXPAND_MS = 260;
+const CARD_ACTION_HEIGHT = 26;
+const TRASH_WIDTH = 40;
+const TRASH_WIDTH_HOVER = 58;
+const TRASH_COLOR = '#E5443C';
+const TRASH_COLOR_HOVER = '#FF453A';
+const DELETE_FADE_MS = 260;
+const SCROLL_STEP_PX = 60;
 
 function formatTime(date) {
     const hh = String(date.getHours()).padStart(2, '0');
@@ -59,7 +71,19 @@ export class NotchManager {
         this._hotStrip = null;
         this._mini = null;
         this._miniHoverId = null;
-        this._miniSettings = {open: false, quick: false};
+        this._miniActive = false;
+        this._miniMode = 'hidden'; // 'hidden' | 'pill' | 'quick'
+        this._miniXSpring = new Spring(240, 0.62, 0);
+        this._miniRunner = new SpringRunner(dt => this._miniTick(dt));
+
+        this._cardSprings = new Map(); // card actor -> Spring de escala
+        this._cardRunner = new SpringRunner(dt => this._cardTick(dt));
+        this._cardExpandTimeouts = new Map(); // card actor -> GLib source id
+        this._hoveredCard = null;
+
+        this._scrollSpring = new Spring(260, 0.62, 0);
+        this._scrollRunner = new SpringRunner(dt => this._scrollTick(dt));
+        this._scrollAdjustment = null;
 
         this._monitorsChangedId = null;
     }
@@ -99,6 +123,13 @@ export class NotchManager {
             this._miniHoverId = null;
         }
         this._runner.stop();
+        this._miniRunner.stop();
+        this._cardRunner.stop();
+        this._scrollRunner.stop();
+        for (const id of this._cardExpandTimeouts.values())
+            GLib.source_remove(id);
+        this._cardExpandTimeouts.clear();
+        this._cardSprings.clear();
         this._closeCenter();
 
         for (const actor of [this._actor, this._hotStrip, this._mini]) {
@@ -180,16 +211,21 @@ export class NotchManager {
 
     _buildHotStrip() {
         // Franja central invisible bajo la barra: detecta el cursor para el
-        // mini notch (110x9) y la vista rápida a los 450 ms quieto.
+        // mini notch (110x9), que lo sigue (muelle k 240) y se imanta al
+        // centro a menos de 64 px; quieto 450 ms, se abre la vista rápida.
         this._hotStrip = new St.Widget({
             name: 'opendock-notch-hotstrip',
             reactive: true,
-            width: 200,
-            height: 6,
+            width: HOT_STRIP_WIDTH,
+            height: 10,
             opacity: 0,
         });
         this._hotStrip.connect('enter-event', () => {
             this._onMiniEnter();
+            return Clutter.EVENT_PROPAGATE;
+        });
+        this._hotStrip.connect('motion-event', (_actor, event) => {
+            this._onMiniMotion(event);
             return Clutter.EVENT_PROPAGATE;
         });
         this._hotStrip.connect('leave-event', () => {
@@ -200,7 +236,7 @@ export class NotchManager {
             affectsStruts: false,
         });
 
-        this._mini = new St.Widget({visible: false, reactive: false});
+        this._mini = new St.Widget({name: 'opendock-notch-mini', visible: false, reactive: false});
         Main.layoutManager.addChrome(this._mini, {
             affectsStruts: false,
         });
@@ -217,6 +253,8 @@ export class NotchManager {
                 monitor.y + this._panelHeight);
         }
         this._positionPeek();
+        this._positionMini();
+        this._positionCenter();
     }
 
     _positionPeek() {
@@ -381,58 +419,104 @@ export class NotchManager {
     }
 
     // ---- mini notch / vista rápida ----------------------------------------
+    // Pastilla 110x9 que sigue al cursor con un muelle (k 240) y se imanta
+    // al centro a menos de 64 px; quieta 450 ms, crece a la vista rápida
+    // 272x44 ("Notificaciones" + contador); moverse de nuevo la colapsa nota.
 
     _onMiniEnter() {
-        if (this._miniHoverId)
+        this._miniActive = true;
+        if (this._miniMode === 'hidden') {
+            this._miniMode = 'pill';
+            this._renderMini();
+        }
+        this._resetMiniStillTimer();
+        if (!this._miniRunner.running)
+            this._miniRunner.start();
+    }
+
+    _onMiniMotion(event) {
+        if (!this._monitor)
             return;
-        this._showMiniPill();
+        const [stageX] = event.get_coords();
+        const centerX = this._monitor.x + this._monitor.width / 2;
+        const dx = stageX - centerX;
+        const maxRange = HOT_STRIP_WIDTH / 2 - MINI_WIDTH / 2;
+        const target = Math.abs(dx) < MINI_SNAP_PX ? 0 : Math.max(-maxRange, Math.min(maxRange, dx));
+        this._miniXSpring.setTarget(target);
+        if (this._miniMode === 'quick') {
+            this._miniMode = 'pill';
+            this._renderMini();
+        }
+        this._resetMiniStillTimer();
+        if (!this._miniRunner.running)
+            this._miniRunner.start();
+    }
+
+    _resetMiniStillTimer() {
+        if (this._miniHoverId)
+            GLib.source_remove(this._miniHoverId);
         this._miniHoverId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, HOVER_STILL_MS, () => {
             this._miniHoverId = null;
-            this._showQuickView();
+            if (this._miniActive && this._miniMode === 'pill') {
+                this._miniMode = 'quick';
+                this._renderMini();
+            }
             return GLib.SOURCE_REMOVE;
         });
     }
 
     _onMiniLeave() {
+        this._miniActive = false;
         if (this._miniHoverId) {
             GLib.source_remove(this._miniHoverId);
             this._miniHoverId = null;
         }
+        this._miniMode = 'hidden';
+        this._miniRunner.stop();
         this._hideMini();
     }
 
-    _showMiniPill() {
-        if (!this._mini || !this._monitor)
+    _renderMini() {
+        if (!this._mini)
             return;
         const palette = this._palette();
-        this._mini.set_style(`background-color: ${palette.card}; border-radius: 4.5px;`);
-        this._mini.set_size(MINI_WIDTH, MINI_HEIGHT);
-        this._mini.set_position(
-            this._monitor.x + Math.round(this._monitor.width / 2 - MINI_WIDTH / 2),
-            this._monitor.y + this._panelHeight);
-        this._mini.visible = true;
+        this._mini.destroy_all_children();
+        if (this._miniMode === 'pill') {
+            this._mini.set_style(`background-color: ${palette.card}; border-radius: 4.5px;`);
+            this._mini.set_size(MINI_WIDTH, MINI_HEIGHT);
+        } else if (this._miniMode === 'quick') {
+            const count = this._notificationCount();
+            this._mini.set_style(`background-color: ${palette.background}; border-radius: 16px;`);
+            this._mini.set_size(QUICK_WIDTH, QUICK_HEIGHT);
+            const label = new St.Label({
+                text: `Notificaciones  ${count}`,
+                style: `color: ${palette.text}; font-size: 13px; font-weight: 600;`,
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true,
+                y_expand: true,
+            });
+            this._mini.add_child(label);
+        }
+        this._mini.visible = this._miniMode !== 'hidden';
+        this._positionMini();
     }
 
-    _showQuickView() {
-        if (!this._mini || !this._monitor)
+    _positionMini() {
+        if (!this._mini || !this._monitor || this._miniMode === 'hidden')
             return;
-        const palette = this._palette();
-        const count = this._notificationCount();
-        this._mini.destroy_all_children();
-        this._mini.set_style(`background-color: ${palette.background}; border-radius: 16px;`);
-        this._mini.set_size(QUICK_WIDTH, QUICK_HEIGHT);
+        const width = this._miniMode === 'quick' ? QUICK_WIDTH : MINI_WIDTH;
+        const centerX = this._monitor.x + Math.round(this._monitor.width / 2);
+        const offset = this._miniMode === 'quick' ? 0 : Math.round(this._miniXSpring.value);
         this._mini.set_position(
-            this._monitor.x + Math.round(this._monitor.width / 2 - QUICK_WIDTH / 2),
+            centerX + offset - Math.round(width / 2),
             this._monitor.y + this._panelHeight);
-        const label = new St.Label({
-            text: `Notificaciones  ${count}`,
-            style: `color: ${palette.text}; font-size: 13px; font-weight: 600;`,
-            x_align: Clutter.ActorAlign.CENTER,
-            y_align: Clutter.ActorAlign.CENTER,
-            x_expand: true,
-            y_expand: true,
-        });
-        this._mini.add_child(label);
+    }
+
+    _miniTick(dt) {
+        this._miniXSpring.step(dt);
+        this._positionMini();
+        return false;
     }
 
     _hideMini() {
@@ -495,6 +579,15 @@ export class NotchManager {
         scroll.set_child(this._cardList);
         this._center.add_child(scroll);
 
+        // Scroll de 60 px por paso animado con un muelle (k 260) en vez de
+        // saltar directo al valor del adjustment.
+        const vscrollBar = scroll.vscroll ||
+            (typeof scroll.get_vscroll_bar === 'function' ? scroll.get_vscroll_bar() : null);
+        this._scrollAdjustment = vscrollBar ? vscrollBar.adjustment : null;
+        if (this._scrollAdjustment)
+            this._scrollSpring.jumpTo(this._scrollAdjustment.value);
+        scroll.connect('scroll-event', (_actor, event) => this._onScroll(event));
+
         Main.layoutManager.addChrome(this._center, {
             affectsStruts: false,
         });
@@ -511,11 +604,51 @@ export class NotchManager {
             this._monitor.y + this._panelHeight + PEEK_HEIGHT + 8);
     }
 
+    _onScroll(event) {
+        if (!this._scrollAdjustment)
+            return Clutter.EVENT_PROPAGATE;
+        const direction = event.get_scroll_direction();
+        let delta = 0;
+        if (direction === Clutter.ScrollDirection.UP)
+            delta = -SCROLL_STEP_PX;
+        else if (direction === Clutter.ScrollDirection.DOWN)
+            delta = SCROLL_STEP_PX;
+        else
+            return Clutter.EVENT_PROPAGATE;
+
+        const adj = this._scrollAdjustment;
+        const upper = Math.max(adj.lower, adj.upper - adj.page_size);
+        const target = Math.max(adj.lower, Math.min(upper, this._scrollSpring.target + delta));
+        this._scrollSpring.k = 260;
+        this._scrollSpring.zeta = zetaFor(this._settings.get_string('bounce'));
+        this._scrollSpring.setTarget(target);
+        if (!this._scrollRunner.running)
+            this._scrollRunner.start();
+        return Clutter.EVENT_STOP;
+    }
+
+    _scrollTick(dt) {
+        if (!this._scrollAdjustment)
+            return true;
+        this._scrollSpring.step(dt);
+        this._scrollAdjustment.value = this._scrollSpring.value;
+        return this._scrollSpring.isSettled();
+    }
+
     _closeCenter() {
+        this._cardRunner.stop();
+        this._scrollRunner.stop();
+        this._scrollAdjustment = null;
+        for (const id of this._cardExpandTimeouts.values())
+            GLib.source_remove(id);
+        this._cardExpandTimeouts.clear();
+        this._cardSprings.clear();
+        this._hoveredCard = null;
         if (this._center) {
             Main.layoutManager.removeChrome(this._center);
             this._center.destroy();
             this._center = null;
+            this._cardList = null;
         }
         this._centerOpen = false;
     }
@@ -524,6 +657,12 @@ export class NotchManager {
         if (!this._center || !this._cardList)
             return;
         this._cardList.destroy_all_children();
+        this._cardSprings.clear();
+        for (const id of this._cardExpandTimeouts.values())
+            GLib.source_remove(id);
+        this._cardExpandTimeouts.clear();
+        this._hoveredCard = null;
+
         const palette = this._palette();
         const notifications = [];
         for (const source of this._sourceIds.keys()) {
@@ -534,42 +673,186 @@ export class NotchManager {
             this._cardList.add_child(this._buildCard(notification, palette));
     }
 
+    // ---- tarjetas del centro de notificaciones -----------------------------
+    // Pasar el cursor: esta tarjeta a 1.035, las demás a 0.965 (muelle k 420);
+    // a los 260 ms crece y muestra el cuerpo entero + botones de acción.
+    // Papelera: franja de 40 -> 58 px (#E5443C -> #FF453A) al pasar el cursor;
+    // borrar desliza y se desvanece en 0.26 s y las tarjetas de abajo suben.
+
     _buildCard(notification, palette) {
-        const card = new St.BoxLayout({
+        const card = new St.Widget({
+            name: 'opendock-notification-card',
             width: CARD_WIDTH,
             height: CARD_HEIGHT,
             reactive: true,
             style: `background-color: ${palette.card}; border-radius: 16px;`,
         });
-        const text = new St.BoxLayout({vertical: true, x_expand: true, style: 'padding: 8px 12px;'});
-        text.add_child(new St.Label({
+        card.set_pivot_point(0.5, 0.5);
+        card._opendockNotification = notification;
+
+        const text = new St.BoxLayout({
+            vertical: true,
+            width: CARD_WIDTH - TRASH_WIDTH,
+            height: CARD_HEIGHT,
+            style: 'padding: 8px 12px;',
+        });
+        const titleLabel = new St.Label({
             text: notification.title || '',
             style: `color: ${palette.text}; font-size: 13px; font-weight: 600;`,
-        }));
-        text.add_child(new St.Label({
+        });
+        const bodyLabel = new St.Label({
             text: notification.body || '',
             style: `color: ${palette.secondary}; font-size: 12px;`,
-        }));
+        });
+        text.add_child(titleLabel);
+        text.add_child(bodyLabel);
         card.add_child(text);
+        card._opendockBodyLabel = bodyLabel;
+
+        const actions = new St.BoxLayout({
+            visible: false,
+            style: 'spacing: 8px;',
+        });
+        const pillStyle = `height: ${CARD_ACTION_HEIGHT}px; border-radius: ${CARD_ACTION_HEIGHT / 2}px; ` +
+            `background-color: ${palette.cardActive}; color: ${palette.text}; padding: 0 12px; font-size: 11px;`;
+        const openPill = new St.Button({label: 'Abrir', style: pillStyle});
+        openPill.connect('clicked', () => {
+            this._activate(notification);
+            return Clutter.EVENT_STOP;
+        });
+        const dismissPill = new St.Button({label: 'Descartar', style: pillStyle});
+        dismissPill.connect('clicked', () => {
+            this._dismiss(notification);
+            return Clutter.EVENT_STOP;
+        });
+        actions.add_child(openPill);
+        actions.add_child(dismissPill);
+        card.add_child(actions);
+        actions.set_position(52, CARD_HEIGHT - CARD_ACTION_HEIGHT - 8);
+        card._opendockActions = actions;
 
         const trash = new St.Button({
-            label: '🗑',
-            style: 'color: #E5443C; padding: 0 12px;',
-            y_align: Clutter.ActorAlign.CENTER,
+            name: 'opendock-trash-strip',
+            style: `background-color: ${TRASH_COLOR}; border-radius: 0 16px 16px 0;`,
+            width: TRASH_WIDTH,
+            height: CARD_HEIGHT,
         });
+        trash.set_position(CARD_WIDTH - TRASH_WIDTH, 0);
         trash.connect('clicked', () => {
             this._dismiss(notification);
             return Clutter.EVENT_STOP;
         });
+        trash.connect('enter-event', () => {
+            trash.set_style(`background-color: ${TRASH_COLOR_HOVER}; border-radius: 0 16px 16px 0;`);
+            trash.ease({
+                width: TRASH_WIDTH_HOVER,
+                duration: 150,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            });
+            trash.set_position(CARD_WIDTH - TRASH_WIDTH_HOVER, 0);
+            return Clutter.EVENT_PROPAGATE;
+        });
+        trash.connect('leave-event', () => {
+            trash.set_style(`background-color: ${TRASH_COLOR}; border-radius: 0 16px 16px 0;`);
+            trash.ease({
+                width: TRASH_WIDTH,
+                duration: 150,
+                mode: Clutter.AnimationMode.EASE_IN_QUAD,
+            });
+            trash.set_position(CARD_WIDTH - TRASH_WIDTH, 0);
+            return Clutter.EVENT_PROPAGATE;
+        });
         card.add_child(trash);
 
+        card.connect('enter-event', () => {
+            this._onCardEnter(card);
+            return Clutter.EVENT_PROPAGATE;
+        });
+        card.connect('leave-event', (_actor, event) => {
+            // Ignora el "leave" cuando el cursor solo pasó a un hijo (p.ej.
+            // la papelera o los botones de acción), que también lo dispara.
+            if (card.contains(event.get_related()))
+                return Clutter.EVENT_PROPAGATE;
+            this._onCardLeave(card);
+            return Clutter.EVENT_PROPAGATE;
+        });
         card.connect('button-press-event', (_actor, event) => {
-            if (event.get_source() === trash)
+            const source = event.get_source();
+            if (source === trash || source === openPill || source === dismissPill)
                 return Clutter.EVENT_PROPAGATE;
             this._activate(notification);
             return Clutter.EVENT_STOP;
         });
+
+        this._cardSprings.set(card, new Spring(420, zetaFor(this._settings.get_string('bounce')), 1));
         return card;
+    }
+
+    _onCardEnter(card) {
+        this._hoveredCard = card;
+        for (const [c, spring] of this._cardSprings)
+            spring.setTarget(c === card ? CARD_HOVER_SCALE : CARD_OTHER_SCALE);
+        if (!this._cardRunner.running)
+            this._cardRunner.start();
+
+        const existing = this._cardExpandTimeouts.get(card);
+        if (existing)
+            GLib.source_remove(existing);
+        const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, CARD_EXPAND_MS, () => {
+            this._cardExpandTimeouts.delete(card);
+            if (this._hoveredCard === card)
+                this._setCardExpanded(card, true);
+            return GLib.SOURCE_REMOVE;
+        });
+        this._cardExpandTimeouts.set(card, id);
+    }
+
+    _onCardLeave(card) {
+        if (this._hoveredCard === card)
+            this._hoveredCard = null;
+        for (const spring of this._cardSprings.values())
+            spring.setTarget(1);
+        if (!this._cardRunner.running)
+            this._cardRunner.start();
+
+        const id = this._cardExpandTimeouts.get(card);
+        if (id) {
+            GLib.source_remove(id);
+            this._cardExpandTimeouts.delete(card);
+        }
+        this._setCardExpanded(card, false);
+    }
+
+    _setCardExpanded(card, expanded) {
+        if (card._opendockExpanded === expanded)
+            return;
+        card._opendockExpanded = expanded;
+        if (card._opendockActions)
+            card._opendockActions.visible = expanded;
+        if (card._opendockBodyLabel)
+            card._opendockBodyLabel.clutter_text.set_line_wrap(expanded);
+        card.ease({
+            height: expanded ? CARD_HEIGHT + 32 : CARD_HEIGHT,
+            duration: 150,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        });
+    }
+
+    _cardTick(dt) {
+        let settled = true;
+        for (const [card, spring] of this._cardSprings) {
+            spring.step(dt);
+            card.set_scale(spring.value, spring.value);
+            if (!spring.isSettled())
+                settled = false;
+        }
+        return settled;
+    }
+
+    _findCardFor(notification) {
+        if (!this._cardList)
+            return null;
+        return this._cardList.get_children().find(c => c._opendockNotification === notification) || null;
     }
 
     _activate(notification) {
@@ -582,20 +865,58 @@ export class NotchManager {
         this._closeCenter();
     }
 
-    _dismiss(notification) {
+    _destroyNotification(notification) {
         try {
             if (typeof notification.destroy === 'function')
                 notification.destroy();
         } catch (e) {
             logError(e, 'OpenDock: no se pudo descartar la notificación');
         }
-        this._refreshCenter();
+    }
+
+    _dismiss(notification) {
+        const card = this._findCardFor(notification);
+        if (!card) {
+            this._destroyNotification(notification);
+            this._refreshCenter();
+            return;
+        }
+        this._cardSprings.delete(card);
+        const timeoutId = this._cardExpandTimeouts.get(card);
+        if (timeoutId) {
+            GLib.source_remove(timeoutId);
+            this._cardExpandTimeouts.delete(card);
+        }
+        if (this._hoveredCard === card)
+            this._hoveredCard = null;
+
+        card.ease({
+            translation_x: CARD_WIDTH,
+            opacity: 0,
+            duration: DELETE_FADE_MS,
+            mode: Clutter.AnimationMode.EASE_IN_QUAD,
+            onComplete: () => {
+                card.ease({
+                    height: 0,
+                    duration: 150,
+                    mode: Clutter.AnimationMode.EASE_IN_QUAD,
+                    onComplete: () => {
+                        this._destroyNotification(notification);
+                        this._refreshCenter();
+                    },
+                });
+            },
+        });
     }
 
     _clearAll() {
+        const notifications = [];
         for (const source of this._sourceIds.keys()) {
             for (const notification of [...(source.notifications || [])])
-                this._dismiss(notification);
+                notifications.push(notification);
         }
+        for (const notification of notifications)
+            this._destroyNotification(notification);
+        this._refreshCenter();
     }
 }
