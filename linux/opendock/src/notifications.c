@@ -110,52 +110,37 @@ static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocaci
     GVariantIter *iter_acciones = NULL;
     GVariant *hints = NULL;
 
-    g_message("opendock: Notify: desempaquetando parámetros (tipo %s)",
-        g_variant_get_type_string(parametros));
-    g_variant_get(parametros, "(&su&s&s&sasa{sv}i)",
+    /* Importante: "a{sv}" a secas en g_variant_get(), como cualquier tipo
+     * array, entrega un GVariantIter* para recorrerlo, NO el GVariant*
+     * completo. Para quedarnos con el diccionario entero hace falta el
+     * modificador '@'. */
+    g_variant_get(parametros, "(&su&s&s&sas@a{sv}i)",
         &app_name_in, &replaces_id, &app_icon_in, &summary_in, &body_in,
         &iter_acciones, &hints, &expire_timeout);
-    g_message("opendock: Notify: parámetros desempaquetados app=%s resumen=%s",
-        app_name_in ? app_name_in : "(null)", summary_in ? summary_in : "(null)");
     if (iter_acciones) g_variant_iter_free(iter_acciones);
-    g_message("opendock: Notify: iter_acciones liberado");
     (void)expire_timeout; /* la duración del peek la fija el notch (DESIGN.md: 4,5 s) */
 
     gchar *app_name = limitar_cadena(app_name_in);
-    g_message("opendock: Notify: app_name limitado");
     gchar *app_icon = limitar_cadena(app_icon_in);
-    g_message("opendock: Notify: app_icon limitado");
     gchar *summary = limitar_cadena(summary_in);
-    g_message("opendock: Notify: summary limitado");
     gchar *body = limitar_cadena(body_in);
-    g_message("opendock: Notify: body limitado");
 
     GdkPixbuf *pixbuf = NULL;
-    g_message("opendock: Notify: hints=%p tipo=%s", (void *)hints,
-        hints ? g_variant_get_type_string(hints) : "(null)");
     if (hints) {
         GVariant *img = g_variant_lookup_value(hints, "image-data", NULL);
-        g_message("opendock: Notify: lookup image-data -> %p", (void *)img);
         if (!img) img = g_variant_lookup_value(hints, "icon_data", NULL);
-        g_message("opendock: Notify: lookup icon_data -> %p", (void *)img);
         if (img) {
-            g_message("opendock: Notify: decodificando imagen, tipo %s",
-                g_variant_get_type_string(img));
             pixbuf = decodificar_image_data(img);
-            g_message("opendock: Notify: imagen decodificada -> %p", (void *)pixbuf);
             g_variant_unref(img);
         }
     }
-    g_message("opendock: Notify: bloque de hints terminado");
 
     guint32 id = replaces_id != 0 ? replaces_id : g_srv.siguiente_id++;
     if (g_srv.siguiente_id == 0) g_srv.siguiente_id = 1; /* por si desborda */
     g_srv.id_actual = id;
 
-    g_message("opendock: Notify: llamando al notch (id=%u)", id);
     od_notch_mostrar_aviso(app_name, summary, body, pixbuf,
         (app_icon && *app_icon) ? app_icon : NULL);
-    g_message("opendock: Notify: notch actualizado, devolviendo id=%u", id);
 
     if (pixbuf) g_object_unref(pixbuf);
     g_free(app_name);
@@ -188,12 +173,9 @@ static void manejar_close(GVariant *parametros, GDBusMethodInvocation *invocacio
 
 static void manejar_capacidades(GDBusMethodInvocation *invocacion)
 {
-    g_message("opendock: GetCapabilities: construyendo respuesta");
     const gchar *caps[] = { "body", "actions", "icon-static", "persistence", NULL };
-    GVariant *respuesta = g_variant_new("(^as)", (gchar **)caps);
-    g_message("opendock: GetCapabilities: respuesta lista, tipo %s",
-        g_variant_get_type_string(respuesta));
-    g_dbus_method_invocation_return_value(invocacion, respuesta);
+    g_dbus_method_invocation_return_value(invocacion,
+        g_variant_new("(^as)", (gchar **)caps));
 }
 
 static void manejar_info_servidor(GDBusMethodInvocation *invocacion)
@@ -207,7 +189,6 @@ static void al_llamar_metodo(GDBusConnection *conexion, const gchar *remitente,
     GVariant *parametros, GDBusMethodInvocation *invocacion, gpointer datos)
 {
     (void)conexion; (void)remitente; (void)ruta; (void)interfaz; (void)datos;
-    g_message("opendock: D-Bus Notifications.%s llamado por %s", metodo, remitente);
     if (g_strcmp0(metodo, "Notify") == 0) {
         manejar_notify(parametros, invocacion);
     } else if (g_strcmp0(metodo, "CloseNotification") == 0) {
