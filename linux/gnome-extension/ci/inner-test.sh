@@ -195,7 +195,11 @@ else
     # Puntero virtual para mover el cursor de verdad (entra por la misma ruta
     # que un ratón). En GNOME 45+ Eval no trae Clutter/GLib como globales.
     shell_eval "(() => { const Clutter = imports.gi.Clutter; const GLib = imports.gi.GLib; const seat = Clutter.get_default_backend().get_default_seat(); const vd = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE); globalThis._odPuntero = (x, y) => vd.notify_absolute_motion(GLib.get_monotonic_time(), x, y); return 'puntero-listo'; })()" >>"$LOG" 2>&1
-    WARP_JS="(() => { const ext = $LOOKUP_EXPR; const m = ext._notch._monitor; if (!m) return 'sin-monitor'; globalThis._odPuntero(m.x + m.width / 2, m.y + 31); return 'ok'; })()"
+    WARP_JS="(() => { const ext = $LOOKUP_EXPR; const m = ext._notch._monitor; if (!m) return 'sin-monitor'; globalThis._odPuntero(m.x + m.width / 2, m.y + 300); return 'fuera'; })()"
+    shell_eval "$WARP_JS" >>"$LOG" 2>&1
+    sleep 0.2
+    # Como un ratón de verdad: desde abajo hacia la franja, para que haya cruce.
+    WARP_JS="(() => { const ext = $LOOKUP_EXPR; const m = ext._notch._monitor; globalThis._odPuntero(m.x + m.width / 2, m.y + 31); return 'ok'; })()"
     WARP_RESULT="$(shell_eval "$WARP_JS")"
     echo "Puntero al centro bajo la barra -> $WARP_RESULT"
     sleep 0.3
@@ -257,7 +261,9 @@ else
         AFTER_DISMISS_JS="(() => { const ext = $LOOKUP_EXPR; return 'cards=' + ext._notch._cardList.get_n_children(); })()"
         AFTER_DISMISS="$(shell_eval "$AFTER_DISMISS_JS")"
         echo "Eval tras borrar -> $AFTER_DISMISS"
-        soft_check "la tarjeta borrada desaparece de la lista" "cards=$((TARJETAS - 1))([^0-9]|\$)" "$AFTER_DISMISS"
+        TARJETAS_DESPUES=$(echo "$AFTER_DISMISS" | grep -oE 'cards=[0-9]+' | cut -d= -f2)
+        # "Menos que antes": otra notificación puede caducar a la vez.
+        soft_check "la tarjeta borrada desaparece de la lista" "^menos$" "$([ "${TARJETAS_DESPUES:-99}" -lt "$TARJETAS" ] && echo menos || echo "cards=$TARJETAS_DESPUES")"
     else
         echo "AVISO: no había 2 tarjetas en el centro; se omiten las comprobaciones de hover/papelera/borrado."
         SKIPPED+=("interaccion:tarjetas-sin-2-notificaciones")
