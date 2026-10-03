@@ -125,8 +125,12 @@ def check_closed(img, w, bar_height, bg):
 
 
 def check_mini(img, w, bar_height):
-    """Pastilla del mini notch (110×9) justo bajo la barra, en el centro."""
-    return muestra(img, w // 2, bar_height + 3, PANEL, "pastilla del mini notch")
+    """Pastilla del mini notch (110×9) justo bajo la barra, en el centro, y
+    fondo a los lados (si no, podría ser cualquier otra cosa oscura)."""
+    ok = muestra(img, w // 2, bar_height + 3, PANEL, "pastilla del mini notch")
+    ok &= muestra(img, w // 2 + 90, bar_height + 3, (255, 255, 255), "fondo junto a la pastilla")
+    ok &= muestra(img, w // 2, bar_height + 20, (255, 255, 255), "fondo bajo la pastilla")
+    return ok
 
 
 def check_quick(img, w, bar_height):

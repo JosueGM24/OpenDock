@@ -16,6 +16,8 @@
  *
  * Acción por D-Bus (para un atajo de teclado del escritorio):
  *   gdbus call --session --dest io.github.josuegm24.OpenDock  *     --object-path /io/github/josuegm24/OpenDock  *     --method org.gtk.Actions.Activate centro [] {}
+ * y "cursor-barra" (double dx): simula el cursor sobre la barra a dx px
+ * del centro (más de OD_MINI_ZONA/2 = fuera), para automatizar pruebas.
  */
 #include "config.h"
 #include "opendock-build-config.h"
@@ -29,6 +31,7 @@
 #include <gtk/gtk.h>
 #include <glib-unix.h>
 #include <locale.h>
+#include <math.h>
 #include <stdio.h>
 
 typedef struct {
@@ -49,6 +52,13 @@ static void al_accion_centro(GSimpleAction *a, GVariant *p, gpointer datos)
 {
     (void)a; (void)p; (void)datos;
     od_centro_alternar();
+}
+
+static void al_accion_cursor_barra(GSimpleAction *a, GVariant *p, gpointer datos)
+{
+    (void)a; (void)datos;
+    double dx = g_variant_get_double(p);
+    od_mini_cursor(fabs(dx) < OD_MINI_ZONA / 2.0, dx);
 }
 
 static void al_activar(GApplication *app, gpointer datos)
@@ -95,6 +105,10 @@ static void al_activar(GApplication *app, gpointer datos)
     g_signal_connect(centro, "activate", G_CALLBACK(al_accion_centro), NULL);
     g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(centro));
     g_object_unref(centro);
+    GSimpleAction *cursor = g_simple_action_new("cursor-barra", G_VARIANT_TYPE_DOUBLE);
+    g_signal_connect(cursor, "activate", G_CALLBACK(al_accion_cursor_barra), NULL);
+    g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(cursor));
+    g_object_unref(cursor);
 
     /* La fase siguiente añade aquí: dock. */
 }

@@ -182,18 +182,20 @@ print(buscar(json.load(sys.stdin)))')
         SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock 2>/dev/null | head -n1 || true)
         # Mini notch: cursor al centro de la barra. sway sin cabeza puede no
         # tener puntero, así que esto sólo avisa.
-        # hide_cursor esconde el cursor al instante y sway lo cuenta como que
-        # salió de la barra: aquí tiene que quedarse quieto encima.
-        swaymsg seat seat0 hide_cursor 0 >/dev/null 2>&1 || true
-        if swaymsg seat seat0 cursor set "$((ANCHO / 2))" 10 >/dev/null 2>&1; then
-            sleep 0.2
-            captura 08-mini.png mini || echo "AVISO: no se vio la pastilla del mini notch"
-            sleep 0.6
-            captura 09-rapida.png quick || echo "AVISO: no se vio la vista rápida"
-            swaymsg seat seat0 cursor set "$((ANCHO / 2))" 400 >/dev/null 2>&1 || true
-        else
-            echo "AVISO: sway no acepta mover el cursor; se omite el mini notch"
-        fi
+        # Mini notch: sway sin cabeza no tiene puntero, así que se le pasa la
+        # posición del cursor con la acción "cursor-barra" (dx desde el centro).
+        cursor_barra() {
+            gdbus call --session --dest io.github.josuegm24.OpenDock                 --object-path /io/github/josuegm24/OpenDock                 --method org.gtk.Actions.Activate cursor-barra "[<$1>]" '{}' >/dev/null
+        }
+        captura 08-sin-mini.png closed || ok=1
+        cursor_barra 20.0     # a 20 px del centro: el imán la deja centrada
+        sleep 0.2
+        captura 09-mini.png mini || ok=1
+        sleep 0.6             # quieto más de 450 ms
+        captura 10-rapida.png quick || ok=1
+        cursor_barra 9999.0   # fuera de la zona: se esconde
+        sleep 0.5
+        captura 11-mini-fuera.png closed || ok=1
     fi
 
     if [[ "$PHASES" == *dock* ]]; then
