@@ -34,7 +34,12 @@ EOF
 
 export WLR_BACKENDS=headless
 export WLR_LIBINPUT_NO_DEVICES=1
+export WLR_RENDERER=pixman
 export GDK_BACKEND=wayland
+# Los runners de CI no tienen GPU: forzamos render por software tanto en
+# sway/wlroots (pixman) como en GTK4 (GSK con el renderizador "cairo").
+export LIBGL_ALWAYS_SOFTWARE=1
+export GSK_RENDERER=cairo
 
 fallo_general=0
 
