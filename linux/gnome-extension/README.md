@@ -1,6 +1,6 @@
 # OpenDock para GNOME Shell
 
-Extensión de GNOME Shell (GJS, GNOME 45–48) que lleva el aspecto y el comportamiento de
+Extensión de GNOME Shell (GJS, GNOME 45–50) que lleva el aspecto y el comportamiento de
 OpenDock al escritorio: esquinas redondeadas, un notch que reemplaza los banners de
 notificación, un dock inferior con lupa y ocultación, y una barra superior restyleada.
 Ver `linux/PLAN.md` y `linux/DESIGN.md` para la arquitectura y la especificación visual

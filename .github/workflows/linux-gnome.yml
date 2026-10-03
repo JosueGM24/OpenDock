@@ -68,6 +68,9 @@ jobs:
           - distro: fedora42-gnome48
             image: fedora:42
             install_script: install-fedora.sh
+          - distro: fedora43-gnome49
+            image: fedora:43
+            install_script: install-fedora.sh
           - distro: fedora-latest
             image: fedora:latest
             install_script: install-fedora.sh

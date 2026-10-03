@@ -6,7 +6,7 @@
 |---|---|---|---|
 | KDE Plasma 6 (Manjaro KDE) | Wayland | `zwlr_layer_shell_v1` (KWin lo soporta) | `opendock` (C + GTK4 + gtk4-layer-shell) |
 | Hyprland, Sway, river, labwc, Wayfire, COSMIC | Wayland (wlroots y afines) | `zwlr_layer_shell_v1` | `opendock` |
-| GNOME 45–48 (Manjaro GNOME, Ubuntu, Fedora) | Wayland | Mutter **no** tiene layer-shell: extensión de GNOME Shell (GJS) | `opendock@josuegm24.github.io` |
+| GNOME 45–50 (Manjaro GNOME, Ubuntu, Fedora) | Wayland | Mutter **no** tiene layer-shell: extensión de GNOME Shell (GJS) | `opendock@josuegm24.github.io` |
 | XFCE, MATE, Cinnamon, i3 | X11 | Ventanas `_NET_WM_WINDOW_TYPE_DOCK` + `_NET_WM_STRUT_PARTIAL` (EWMH) | `opendock` con backend X11 |
 
 Wayland es el presente de los escritorios principales (GNOME, Plasma 6, Hyprland), y layer-shell da justo lo que hace
