@@ -107,7 +107,11 @@ int main(int argc, char **argv)
     estado.cfg = od_config_cargar();
     estado.reemplazar = reemplazar;
 
+#if GLIB_CHECK_VERSION(2, 74, 0)
+    GApplication *app = g_application_new("io.github.josuegm24.OpenDock", G_APPLICATION_DEFAULT_FLAGS);
+#else
     GApplication *app = g_application_new("io.github.josuegm24.OpenDock", G_APPLICATION_FLAGS_NONE);
+#endif
     estado.app = app;
     g_signal_connect(app, "activate", G_CALLBACK(al_activar), &estado);
 
