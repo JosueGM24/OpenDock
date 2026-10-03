@@ -689,6 +689,11 @@ export class NotchManager {
         });
         card.set_pivot_point(0.5, 0.5);
         card._opendockNotification = notification;
+        // Al rehacer el centro se destruyen las tarjetas con el cursor encima,
+        // y aún llega su leave-event: hay que poder reconocerlas.
+        card.connect('destroy', () => {
+            card._opendockDestroyed = true;
+        });
 
         const text = new St.BoxLayout({
             vertical: true,
@@ -824,7 +829,7 @@ export class NotchManager {
     }
 
     _setCardExpanded(card, expanded) {
-        if (card._opendockExpanded === expanded)
+        if (card._opendockDestroyed || card._opendockExpanded === expanded)
             return;
         card._opendockExpanded = expanded;
         if (card._opendockActions)

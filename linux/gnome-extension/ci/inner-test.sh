@@ -141,12 +141,20 @@ if command -v notify-send >/dev/null 2>&1; then
     echo "Eval -> $RESULT2"
     if echo "$RESULT2" | grep -q 'notch='; then
         check_field "el notch se muestra (notch=1)" 'notch=1' "$RESULT2"
-        # GNOME 50 deja un hijo fijo en _bannerBin aunque no haya banner: lo
+        # Puede quedar un banner de antes de la prueba en _bannerBin: lo
         # que cuenta es que la notificación no añada ninguno nuevo.
         BANNERS_ANTES=$(echo "$RESULT1" | grep -oE 'bannerChildren=-?[0-9]+' | cut -d= -f2)
         BANNERS_ANTES=${BANNERS_ANTES:-0}
-        check_field "el banner nativo de GNOME no aparece (bannerChildren=$BANNERS_ANTES, como al empezar)" "bannerChildren=$BANNERS_ANTES([^0-9]|$)" "$RESULT2"
-        if ! echo "$RESULT2" | grep -qE "bannerChildren=$BANNERS_ANTES([^0-9]|$)"; then
+        BANNERS_DESPUES=$(echo "$RESULT2" | grep -oE 'bannerChildren=-?[0-9]+' | cut -d= -f2)
+        BANNERS_DESPUES=${BANNERS_DESPUES:-99}
+        # Puede bajar (un banner de arranque que se va), nunca subir.
+        if [ "$BANNERS_DESPUES" -le "$BANNERS_ANTES" ]; then
+            echo "OK: el banner nativo de GNOME no aparece (bannerChildren $BANNERS_ANTES -> $BANNERS_DESPUES)"
+        else
+            echo "FALLO: el banner nativo de GNOME aparece (bannerChildren $BANNERS_ANTES -> $BANNERS_DESPUES)"
+            FAIL=1
+        fi
+        if [ "$BANNERS_DESPUES" -gt "$BANNERS_ANTES" ]; then
             DIAG_JS='(() => { const own = Object.prototype.hasOwnProperty.call(Main.messageTray, "_showNotification"); const proto = Object.getOwnPropertyNames(Object.getPrototypeOf(Main.messageTray)).filter(n => /show|banner|notif/i.test(n)); return "patchedOwnProp=" + own + ";protoMethods=" + proto.join(","); })()'
             echo "Diagnóstico del banner -> $(shell_eval "$DIAG_JS")"
         fi
