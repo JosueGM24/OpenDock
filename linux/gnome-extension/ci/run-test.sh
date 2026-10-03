@@ -31,21 +31,34 @@ chown -R tester:tester "$USER_HOME" "$ARTIFACT_DIR" 2>/dev/null || chown -R test
 
 chmod +x "$CI_DIR/inner-test.sh"
 
-# gnome-shell elige LoginManagerSystemd en vez de LoginManagerDummy con solo
-# comprobar si existe /run/systemd/system (ver loginManager.js, haveSystemd);
-# algunas imágenes base dejan ese directorio aunque no haya systemd ni logind
-# corriendo de verdad, y entonces gnome-shell aborta (excepción sin capturar)
-# al intentar hablar con org.freedesktop.login1. Se borra para forzar el
-# backend dummy, que no necesita logind.
-rm -rf /run/systemd/system 2>/dev/null || true
-
-# Por si algo más mira el bus de sistema (UPower, NetworkManager...), se deja
-# uno mínimo disponible; no es necesario para el login manager una vez
-# forzado el backend dummy, pero no hace daño tenerlo.
+# gnome-shell exige hablar con logind (org.freedesktop.login1) al arrancar;
+# en esta versión no hay un backend "dummy" al que recurrir si falla, así
+# que se levanta un bus de sistema y el propio systemd-logind (standalone,
+# sin PID 1 real) para que esa conexión funcione de verdad.
 command -v dbus-uuidgen >/dev/null 2>&1 && dbus-uuidgen --ensure || true
 mkdir -p /run/dbus
 if [ ! -S /run/dbus/system_bus_socket ]; then
     dbus-daemon --system --fork || echo "AVISO: no se pudo levantar el bus de sistema; se continúa de todos modos"
+fi
+
+mkdir -p /run/systemd/system
+LOGIND_BIN=""
+for candidate in /usr/lib/systemd/systemd-logind /usr/libexec/systemd/systemd-logind /lib/systemd/systemd-logind; do
+    if [ -x "$candidate" ]; then
+        LOGIND_BIN="$candidate"
+        break
+    fi
+done
+if [ -n "$LOGIND_BIN" ]; then
+    "$LOGIND_BIN" &
+    echo "systemd-logind arrancado en segundo plano ($LOGIND_BIN, pid $!)"
+    for _ in $(seq 1 10); do
+        gdbus introspect --system --dest org.freedesktop.login1 \
+            --object-path /org/freedesktop/login1 &>/dev/null && break
+        sleep 1
+    done
+else
+    echo "AVISO: no se encontró el binario de systemd-logind; gnome-shell podría no arrancar sin logind"
 fi
 
 # Se ejecuta la prueba real como "tester", dentro de su propia sesión de
