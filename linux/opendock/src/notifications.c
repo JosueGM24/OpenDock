@@ -126,14 +126,22 @@ static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocaci
     gchar *body = limitar_cadena(body_in);
 
     GdkPixbuf *pixbuf = NULL;
+    g_message("opendock: Notify: hints=%p tipo=%s", (void *)hints,
+        hints ? g_variant_get_type_string(hints) : "(null)");
     if (hints) {
         GVariant *img = g_variant_lookup_value(hints, "image-data", NULL);
+        g_message("opendock: Notify: lookup image-data -> %p", (void *)img);
         if (!img) img = g_variant_lookup_value(hints, "icon_data", NULL);
+        g_message("opendock: Notify: lookup icon_data -> %p", (void *)img);
         if (img) {
+            g_message("opendock: Notify: decodificando imagen, tipo %s",
+                g_variant_get_type_string(img));
             pixbuf = decodificar_image_data(img);
+            g_message("opendock: Notify: imagen decodificada -> %p", (void *)pixbuf);
             g_variant_unref(img);
         }
     }
+    g_message("opendock: Notify: bloque de hints terminado");
 
     guint32 id = replaces_id != 0 ? replaces_id : g_srv.siguiente_id++;
     if (g_srv.siguiente_id == 0) g_srv.siguiente_id = 1; /* por si desborda */
