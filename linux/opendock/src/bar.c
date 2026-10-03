@@ -386,6 +386,7 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
     gtk_widget_set_size_request(centro, -1, cfg->alto_barra);
 
     GtkWidget *caja_izq = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_add_css_class(caja_izq, "opendock-zona");
     gtk_widget_set_margin_start(caja_izq, 16);
     GtkWidget *img_app = gtk_image_new_from_icon_name("application-x-executable-symbolic");
     gtk_image_set_pixel_size(GTK_IMAGE(img_app), 13);
@@ -396,6 +397,7 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
     gtk_center_box_set_start_widget(GTK_CENTER_BOX(centro), caja_izq);
 
     GtkWidget *caja_der = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_widget_add_css_class(caja_der, "opendock-zona");
     gtk_widget_set_margin_end(caja_der, 16);
     gtk_widget_set_halign(caja_der, GTK_ALIGN_END);
 
@@ -445,6 +447,14 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
         ".opendock-app-activa { color: #FFFFFF; font-weight: 600; font-size: 13px; }"
         ".opendock-reloj { color: #FFFFFF; font-weight: 600; font-size: 13px; }"
         ".opendock-tarjeta { background-color: rgba(255,255,255,0.08); border-radius: 12px; padding: 8px; }"
+        /* El botón del engranaje con el estilo del tema mide 34 px y estira la
+         * barra: aquí es un icono más, sin fondo ni relleno. */
+        /* Sólo los hijos directos de las zonas: el popover del centro de
+         * control también cuelga de la barra y conserva el tema. */
+        ".opendock-zona > menubutton > button { min-height: 0; min-width: 0; padding: 2px 4px;"
+        "  background: none; border: none; box-shadow: none; color: #FFFFFF; }"
+        ".opendock-zona > image { color: #FFFFFF; -gtk-icon-size: 14px; }"
+        ".opendock-zona > label { color: #FFFFFF; font-size: 13px; }"
         /* DESIGN.md: pasar el cursor 1,16, pulsar 0,88. GTK no tiene muelles
          * en CSS; una curva con rebote se le parece (k 520 ≈ 0,18 s). */
         ".opendock-icono { transition: transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1); }"

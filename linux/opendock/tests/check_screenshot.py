@@ -69,6 +69,11 @@ def check_bar(img, w, bar_height):
     color_barra = (0x1C, 0x1C, 0x1E)
     ok = all(casi(m[:3], color_barra, 12) for m in (muestra_izq, muestra_centro, muestra_der))
     print(f"{'ok' if ok else 'FALLO'}: banda superior del color de la barra: {muestra_izq}, {muestra_centro}, {muestra_der}")
+    # Y que mida eso y no más: justo debajo ya no es la barra.
+    debajo = img.getpixel((w // 4, bar_height + 2))
+    alto_ok = not casi(debajo[:3], color_barra, 12)
+    print(f"{'ok' if alto_ok else 'FALLO'}: la barra mide {bar_height} px (debajo, en ({w // 4},{bar_height + 2}) = {debajo})")
+    ok = ok and alto_ok
     # justo debajo de la barra no debería tener el mismo color exacto que dentro,
     # salvo que el fondo del escritorio coincida (poco probable con blanco puro)
     return ok

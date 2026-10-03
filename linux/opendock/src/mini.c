@@ -352,7 +352,9 @@ void od_mini_iniciar(OdConfig *cfg, OdBackendTipo backend)
         gtk_layer_init_for_window(GTK_WINDOW(win));
         gtk_layer_set_layer(GTK_WINDOW(win), GTK_LAYER_SHELL_LAYER_OVERLAY);
         gtk_layer_set_namespace(GTK_WINDOW(win), "opendock-mini");
-        gtk_layer_set_exclusive_zone(GTK_WINDOW(win), 0);
+        /* -1: se coloca desde el borde de la pantalla, sin apartarse de la
+         * zona exclusiva de la barra (el margen ya la salta). */
+        gtk_layer_set_exclusive_zone(GTK_WINDOW(win), -1);
         gtk_layer_set_keyboard_mode(GTK_WINDOW(win), GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
         gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_TOP, TRUE);
         gtk_layer_set_margin(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_TOP, cfg->alto_barra);
