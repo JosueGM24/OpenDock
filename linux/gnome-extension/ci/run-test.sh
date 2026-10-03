@@ -31,10 +31,17 @@ chown -R tester:tester "$USER_HOME" "$ARTIFACT_DIR" 2>/dev/null || chown -R test
 
 chmod +x "$CI_DIR/inner-test.sh"
 
-# gnome-shell espera poder hablar con logind sobre el bus de sistema; en un
-# contenedor sin systemd ese bus no existe y LoginManagerSystemd aborta el
-# proceso al conectar. Se levanta un dbus de sistema mínimo (y un
-# machine-id) para que esa conexión funcione, aunque no haya logind detrás.
+# gnome-shell elige LoginManagerSystemd en vez de LoginManagerDummy con solo
+# comprobar si existe /run/systemd/system (ver loginManager.js, haveSystemd);
+# algunas imágenes base dejan ese directorio aunque no haya systemd ni logind
+# corriendo de verdad, y entonces gnome-shell aborta (excepción sin capturar)
+# al intentar hablar con org.freedesktop.login1. Se borra para forzar el
+# backend dummy, que no necesita logind.
+rm -rf /run/systemd/system 2>/dev/null || true
+
+# Por si algo más mira el bus de sistema (UPower, NetworkManager...), se deja
+# uno mínimo disponible; no es necesario para el login manager una vez
+# forzado el backend dummy, pero no hace daño tenerlo.
 command -v dbus-uuidgen >/dev/null 2>&1 && dbus-uuidgen --ensure || true
 mkdir -p /run/dbus
 if [ ! -S /run/dbus/system_bus_socket ]; then
