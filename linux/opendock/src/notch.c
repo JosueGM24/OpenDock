@@ -183,10 +183,12 @@ static void fijar_alto_textos(double alto)
     }
 }
 
-static gboolean fotograma_alto(GtkWidget *widget, GdkFrameClock *clock, gpointer datos)
+/* Con un temporizador y no con el reloj de fotogramas, como el resto de la isla:
+ * hay compositores que no mandan fotogramas con regularidad (sway sin cabeza). */
+static gboolean fotograma_alto(gpointer datos)
 {
-    (void)widget; (void)datos;
-    gint64 ahora = gdk_frame_clock_get_frame_time(clock);
+    (void)datos;
+    gint64 ahora = g_get_monotonic_time();
     double dt = g_notch.ultimo_alto_us ? (ahora - g_notch.ultimo_alto_us) / 1000000.0 : (1.0 / 60.0);
     g_notch.ultimo_alto_us = ahora;
     if (dt > 0.05) dt = 0.05;
@@ -204,8 +206,7 @@ static gboolean fotograma_alto(GtkWidget *widget, GdkFrameClock *clock, gpointer
 static void animar_alto(double objetivo)
 {
     od_muelle_fijar_objetivo(&g_notch.muelle_alto, objetivo);
-    if (!g_notch.tic_alto)
-        g_notch.tic_alto = gtk_widget_add_tick_callback(g_notch.ventana, fotograma_alto, NULL, NULL);
+    if (!g_notch.tic_alto) g_notch.tic_alto = g_timeout_add(16, fotograma_alto, NULL);
 }
 
 /* Cierra la expansión de golpe (aviso nuevo) o con muelle (el cursor se fue). */
@@ -221,7 +222,7 @@ static void plegar(gboolean al_momento)
         return;
     }
     if (g_notch.tic_alto) {
-        gtk_widget_remove_tick_callback(g_notch.ventana, g_notch.tic_alto);
+        g_source_remove(g_notch.tic_alto);
         g_notch.tic_alto = 0;
     }
     g_notch.ultimo_alto_us = 0;
@@ -237,6 +238,9 @@ static gboolean al_vencer_expandir(gpointer datos)
     if (!g_notch.cursor_dentro || !g_notch.objetivo_visible) return G_SOURCE_REMOVE;
     if (g_strcmp0(gtk_stack_get_visible_child_name(GTK_STACK(g_notch.pila)), "aviso") != 0)
         return G_SOURCE_REMOVE;
+    /* En X11 la isla no cambia de tamaño (se coloca con Xlib y GTK deja de repintar
+     * mientras el gestor de ventanas confirma cada cambio): ahí sólo no se oculta. */
+    if (g_notch.backend == OD_BACKEND_X11) return G_SOURCE_REMOVE;
     /* alto que necesitan título y cuerpo con el cuerpo partido en líneas (hasta 7) */
     cuerpo_en_varias_lineas(TRUE);
     int ancho = gtk_widget_get_width(g_notch.desliz);
