@@ -70,7 +70,9 @@ static void refrescar_wifi(void)
     gtk_widget_set_visible(g_barra.img_wifi, on >= 0);
     if (g_barra.interruptor_wifi)
         gtk_widget_set_sensitive(g_barra.interruptor_wifi, on >= 0);
-    const char *icono = on == 1 ? "network-wireless-symbolic" : "network-wireless-disabled-symbolic";
+    /* Con cable conectado, el icono de la barra es el de Ethernet (como en Windows). */
+    const char *icono = od_red_por_cable() == 1 ? "network-wired-symbolic"
+        : on == 1 ? "network-wireless-symbolic" : "network-wireless-disabled-symbolic";
     gtk_image_set_from_icon_name(GTK_IMAGE(g_barra.img_wifi), icono);
     if (g_barra.interruptor_wifi)
         gtk_switch_set_state(GTK_SWITCH(g_barra.interruptor_wifi), on == 1);
@@ -525,6 +527,7 @@ void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend)
     g_timeout_add_seconds(1, al_tic_reloj, NULL);
     al_tic_estado(NULL);
     g_timeout_add_seconds(15, al_tic_estado, NULL);
+    od_red_vigilar(refrescar_wifi);     /* cable / Wi-Fi al momento, sin esperar al tic */
     refrescar_volumen();
 }
 

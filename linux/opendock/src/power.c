@@ -83,6 +83,35 @@ void od_wifi_fijar_activado(gboolean on)
         "WirelessEnabled", g_variant_new_boolean(on));
 }
 
+int od_red_por_cable(void)
+{
+    GVariant *v = propiedad_get("org.freedesktop.NetworkManager",
+        "/org/freedesktop/NetworkManager", "org.freedesktop.NetworkManager",
+        "PrimaryConnectionType");
+    if (!v) return -1;
+    gboolean cable = g_strcmp0(g_variant_get_string(v, NULL), "802-3-ethernet") == 0;
+    g_variant_unref(v);
+    return cable ? 1 : 0;
+}
+
+static void al_cambiar_nm(GDBusConnection *con, const gchar *emisor, const gchar *ruta,
+    const gchar *interfaz, const gchar *senal, GVariant *params, gpointer datos)
+{
+    (void)con; (void)emisor; (void)ruta; (void)interfaz; (void)senal; (void)params;
+    void (*fn)(void) = (void (*)(void))datos;
+    fn();
+}
+
+void od_red_vigilar(void (*fn)(void))
+{
+    GDBusConnection *con = bus_sistema();
+    if (!con || !fn) return;
+    g_dbus_connection_signal_subscribe(con, "org.freedesktop.NetworkManager",
+        "org.freedesktop.DBus.Properties", "PropertiesChanged",
+        "/org/freedesktop/NetworkManager", "org.freedesktop.NetworkManager",
+        G_DBUS_SIGNAL_FLAGS_NONE, al_cambiar_nm, (gpointer)fn, NULL);
+}
+
 /* ---- UPower (batería) ---- */
 
 void od_bateria_leer(int *pct, gboolean *cargando)
