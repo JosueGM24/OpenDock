@@ -1,0 +1,205 @@
+# Paquetes de Linux para cada versión: la extensión de GNOME Shell (.zip) y el OpenDock nativo
+# como .deb (Debian 13 / Ubuntu 24.10+), .rpm (Fedora, openSUSE) y paquete de Arch.
+# Con una etiqueta v* los sube a la misma versión de GitHub Releases que el .exe, con nombres
+# fijos para que releases/latest/download/... (lo que usa install.sh) siempre funcione.
+name: Versión para Linux
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  UUID: opendock@josuegm24.github.io
+
+jobs:
+  extension:
+    name: Extensión de GNOME (.zip)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Herramientas
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglib2.0-bin zip
+      - name: Empaquetar
+        run: bash linux/gnome-extension/build.sh "$PWD/out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-extension
+          path: out/${{ env.UUID }}.shell-extension.zip
+
+  deb:
+    name: Paquete .deb
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Paquetes
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git build-essential meson ninja-build \
+            pkg-config dpkg-dev libgtk-4-dev libglib2.0-dev libgtk4-layer-shell-dev libwayland-dev \
+            libwayland-bin libx11-dev libpulse-dev libcanberra-dev
+      - uses: actions/checkout@v4
+      - name: Versión
+        run: |
+          v=$(sed -n "s/^  version: '\(.*\)',$/\1/p" linux/opendock/meson.build)
+          case "$GITHUB_REF" in refs/tags/v*) v="${GITHUB_REF_NAME#v}" ;; esac
+          echo "VER=$v" >> "$GITHUB_ENV"
+          # la de la etiqueta también en el binario (opendock --version)
+          sed -i "s/^  version: '.*',\$/  version: '$v',/" linux/opendock/meson.build
+      - name: Compilar
+        run: |
+          meson setup build linux/opendock --prefix=/usr --buildtype=release -Dsysconfdir=/etc
+          meson compile -C build
+          ./build/opendock --version
+          DESTDIR="$PWD/pkg" meson install -C build
+          install -Dm644 LICENSE pkg/usr/share/doc/opendock/copyright
+      - name: Construir el .deb
+        run: |
+          # dpkg-shlibdeps calcula las dependencias de las bibliotecas que de verdad enlaza
+          mkdir -p debian && printf 'Source: opendock\n\nPackage: opendock\nArchitecture: any\n' > debian/control
+          deps=$(dpkg-shlibdeps -O -e pkg/usr/bin/opendock | sed -n 's/^shlibs:Depends=//p')
+          mkdir -p pkg/DEBIAN
+          cat > pkg/DEBIAN/control <<EOF
+          Package: opendock
+          Version: ${VER}
+          Architecture: amd64
+          Maintainer: OpenDock <noreply@github.com>
+          Depends: ${deps}
+          Recommends: network-manager, upower, bluez
+          Section: x11
+          Priority: optional
+          Homepage: https://open-dock.netlify.app/
+          Description: Esquinas redondeadas, notch con notificaciones, barra superior y dock
+           Para escritorios Wayland con layer-shell (KDE Plasma, Hyprland, Sway, labwc,
+           COSMIC...) y X11 (XFCE, MATE, Cinnamon, i3...). En GNOME usa la extensión.
+          EOF
+          sed -i 's/^          //' pkg/DEBIAN/control
+          echo /etc/xdg/autostart/opendock.desktop > pkg/DEBIAN/conffiles
+          cat pkg/DEBIAN/control
+          dpkg-deb --build --root-owner-group pkg opendock-linux-amd64.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-deb
+          path: opendock-linux-amd64.deb
+
+  rpm:
+    name: Paquete .rpm
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Paquetes
+        run: |
+          dnf install -y git gcc meson ninja-build pkgconf-pkg-config rpm-build gtk4-devel \
+            gtk4-layer-shell-devel wayland-devel libX11-devel pulseaudio-libs-devel libcanberra-devel
+      - uses: actions/checkout@v4
+      - name: Versión
+        run: |
+          v=$(sed -n "s/^  version: '\(.*\)',$/\1/p" linux/opendock/meson.build)
+          case "$GITHUB_REF" in refs/tags/v*) v="${GITHUB_REF_NAME#v}" ;; esac
+          echo "VER=$v" >> "$GITHUB_ENV"
+          # la de la etiqueta también en el binario (opendock --version)
+          sed -i "s/^  version: '.*',\$/  version: '$v',/" linux/opendock/meson.build
+      - name: Compilar
+        run: |
+          meson setup build linux/opendock --prefix=/usr --buildtype=release -Dsysconfdir=/etc
+          meson compile -C build
+          ./build/opendock --version
+          DESTDIR="$PWD/stage" meson install -C build
+      - name: Construir el .rpm
+        run: |
+          # rpmbuild saca los Requires de las bibliotecas del ejecutable (libgtk-4.so.1...),
+          # así el mismo paquete vale para Fedora y openSUSE.
+          cat > opendock.spec <<'EOF'
+          %global debug_package %{nil}
+          %global _build_id_links none
+          Name:     opendock
+          Version:  %{ver}
+          Release:  1
+          Summary:  Esquinas redondeadas, notch con notificaciones, barra superior y dock
+          License:  MIT
+          URL:      https://open-dock.netlify.app/
+          Recommends: NetworkManager upower bluez
+          %description
+          Para escritorios Wayland con layer-shell (KDE Plasma, Hyprland, Sway, labwc,
+          COSMIC...) y X11 (XFCE, MATE, Cinnamon, i3...). En GNOME usa la extensión.
+          %install
+          cp -a %{stage}/. %{buildroot}/
+          install -Dm644 %{top}/LICENSE %{buildroot}%{_datadir}/licenses/opendock/LICENSE
+          %files
+          %{_bindir}/opendock
+          %{_datadir}/opendock
+          %{_datadir}/icons/hicolor/512x512/apps/opendock.png
+          %{_datadir}/licenses/opendock
+          %config(noreplace) %{_sysconfdir}/xdg/autostart/opendock.desktop
+          EOF
+          sed -i 's/^          //' opendock.spec
+          rpmbuild -bb opendock.spec --define "ver ${VER//-/_}" --define "stage $PWD/stage" \
+            --define "top $PWD" --define "_rpmdir $PWD/rpms"
+          cp rpms/x86_64/opendock-*.rpm opendock-linux-x86_64.rpm
+          rpm -qpR opendock-linux-x86_64.rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-rpm
+          path: opendock-linux-x86_64.rpm
+
+  arch:
+    name: Paquete de Arch
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Paquetes
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed base-devel git meson ninja \
+            gtk4 gtk4-layer-shell glib2 libpulse libcanberra libx11 wayland hicolor-icon-theme
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: makepkg con el código de esta versión
+        run: |
+          useradd -m constructor
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          install -d -o constructor /tmp/pkg/src
+          cp linux/opendock/PKGBUILD /tmp/pkg/
+          git clone -q "$GITHUB_WORKSPACE" /tmp/pkg/src/OpenDock
+          case "$GITHUB_REF" in refs/tags/v*)
+            sed -i "s/^  version: '.*',\$/  version: '${GITHUB_REF_NAME#v}',/" /tmp/pkg/src/OpenDock/linux/opendock/meson.build ;;
+          esac
+          chown -R constructor /tmp/pkg
+          cd /tmp/pkg
+          runuser -u constructor -- makepkg -e -f --noconfirm
+          cp /tmp/pkg/opendock-git-*.pkg.tar.zst "$GITHUB_WORKSPACE/opendock-linux-x86_64.pkg.tar.zst"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arch
+          path: opendock-linux-x86_64.pkg.tar.zst
+
+  publicar:
+    name: Subir a la versión
+    needs: [extension, deb, rpm, arch]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*
+          merge-multiple: true
+          path: dist
+      - name: Subir
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS-linux.txt
+          cat SHA256SUMS-linux.txt >> "$GITHUB_STEP_SUMMARY"
+          # la versión la crea el workflow de Windows; si tarda o falló, la creamos aquí
+          for i in $(seq 1 40); do
+            gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && break
+            [ "$i" = 40 ] && gh release create "$GITHUB_REF_NAME" --title "OpenDock ${GITHUB_REF_NAME#v}" --generate-notes
+            sleep 30
+          done
+          gh release upload "$GITHUB_REF_NAME" * --clobber
