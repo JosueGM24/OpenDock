@@ -5,6 +5,7 @@
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
+import Pango from 'gi://Pango';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 import {Spring, SpringRunner} from './spring.js';
@@ -13,6 +14,12 @@ import {playSoundFile} from './sound.js';
 
 const PEEK_WIDTH = 360;
 const PEEK_HEIGHT = 54;
+const PEEK_BODY_X = 52;
+const PEEK_BODY_Y = 28;
+const PEEK_BODY_LINE = 18;     // alto de línea del cuerpo (13 px)
+const PEEK_LINES = 7;          // al expandirlo cabe el cuerpo entero
+const PEEK_HOVER_MS = 260;     // cursor quieto encima antes de expandir
+const PEEK_LEAVE_MS = 1200;    // al salir, se oculta tras este margen
 const CENTER_WIDTH = 384;
 const CARD_WIDTH = 348;
 const CARD_HEIGHT = 70;
@@ -61,6 +68,11 @@ export class NotchManager {
         this._runner = new SpringRunner(dt => this._tick(dt));
 
         this._hideTimeoutId = null;
+        this._peekHoverId = null;
+        this._peekHovered = false;
+        this._peekExpanded = false;
+        this._peekExtra = 0;
+        this._peekBody = '';
         this._sourceIds = new Map();
         this._trayIds = [];
         this._patched = false;
@@ -123,6 +135,10 @@ export class NotchManager {
             GLib.source_remove(this._miniHoverId);
             this._miniHoverId = null;
         }
+        if (this._peekHoverId) {
+            GLib.source_remove(this._peekHoverId);
+            this._peekHoverId = null;
+        }
         this._runner.stop();
         this._miniRunner.stop();
         this._cardRunner.stop();
@@ -163,6 +179,16 @@ export class NotchManager {
             this._toggleCenter();
             return Clutter.EVENT_STOP;
         });
+        this._actor.connect('enter-event', () => {
+            this._onPeekEnter();
+            return Clutter.EVENT_PROPAGATE;
+        });
+        this._actor.connect('leave-event', (_actor, event) => {
+            if (this._actor.contains(event.get_related()))
+                return Clutter.EVENT_PROPAGATE;
+            this._onPeekLeave();
+            return Clutter.EVENT_PROPAGATE;
+        });
 
         this._contentBox = new St.BoxLayout({
             visible: false,
@@ -187,14 +213,20 @@ export class NotchManager {
 
         this._titleLabel = new St.Label({
             x: 52, y: 8,
-            style: `color: ${palette.text}; font-weight: 600; font-size: 14px;`,
+            style: `color: ${palette.text}; font-weight: 700; font-size: 14px;`,
         });
         this._actor.add_child(this._titleLabel);
 
+        // Cerrado, una línea con puntos suspensivos; con el cursor encima se
+        // parte en líneas y el recorte del alto lo va descubriendo al crecer.
         this._bodyLabel = new St.Label({
-            x: 52, y: 28,
-            style: `color: ${palette.secondary}; font-size: 12px;`,
+            x: PEEK_BODY_X, y: PEEK_BODY_Y,
+            width: PEEK_WIDTH - PEEK_BODY_X - 16,
+            height: PEEK_BODY_LINE,
+            clip_to_allocation: true,
+            style: `color: ${palette.secondary}; font-size: 13px; font-weight: 600;`,
         });
+        this._bodyLabel.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
         this._actor.add_child(this._bodyLabel);
 
         this._timeLabel = new St.Label({
@@ -334,7 +366,10 @@ export class NotchManager {
             return;
         const palette = this._palette();
         this._titleLabel.set_text(notification.title || '');
-        this._bodyLabel.set_text(notification.body ? notification.body.replace(/\n/g, ' ') : '');
+        this._peekBody = notification.body || '';
+        this._peekExpanded = false;
+        this._peekExtra = 0;
+        this._setPeekBodyWrap(false);
         this._timeLabel.set_text(formatTime(new Date()));
         this._timeLabel.set_style(`color: ${palette.tertiary}; font-size: 12px;`);
         this._timeLabel.set_position(PEEK_WIDTH - 16 - this._timeLabel.width, 8);
@@ -375,21 +410,98 @@ export class NotchManager {
         this._heightSpring.k = 420;
         this._heightSpring.zeta = zetaH;
         this._widthSpring.setTarget(PEEK_WIDTH);
-        this._heightSpring.setTarget(PEEK_HEIGHT);
+        this._heightSpring.setTarget(PEEK_HEIGHT + this._peekExtra);
+        this._peekOpen = true;
         if (!this._runner.running)
             this._runner.start();
 
+        // con el cursor encima no se oculta; el aviso nuevo vuelve a expandirse
+        if (this._peekHovered)
+            this._onPeekEnter();
+        else
+            this._scheduleHide(AUTO_HIDE_MS);
+    }
+
+    _scheduleHide(ms) {
         if (this._hideTimeoutId)
             GLib.source_remove(this._hideTimeoutId);
-        this._hideTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, AUTO_HIDE_MS, () => {
+        this._hideTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
             this._hideTimeoutId = null;
-            if (!this._centerOpen)
+            if (!this._centerOpen && !this._peekHovered)
                 this._closePeek();
             return GLib.SOURCE_REMOVE;
         });
     }
 
+    // ---- aviso expandido al pasar el cursor --------------------------------
+    // Como en Windows: quieto encima 260 ms, la isla crece con su muelle hasta
+    // enseñar el cuerpo completo (hasta 7 líneas) y no se oculta; al salir se
+    // cierra de nuevo y desaparece 1,2 s después.
+
+    _onPeekEnter() {
+        this._peekHovered = true;
+        if (this._hideTimeoutId) {
+            GLib.source_remove(this._hideTimeoutId);
+            this._hideTimeoutId = null;
+        }
+        if (this._peekHoverId)
+            GLib.source_remove(this._peekHoverId);
+        this._peekHoverId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, PEEK_HOVER_MS, () => {
+            this._peekHoverId = null;
+            if (this._peekHovered && this._peekOpen)
+                this._setPeekExpanded(true);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _onPeekLeave() {
+        this._peekHovered = false;
+        if (this._peekHoverId) {
+            GLib.source_remove(this._peekHoverId);
+            this._peekHoverId = null;
+        }
+        this._setPeekExpanded(false);
+        if (this._peekOpen)
+            this._scheduleHide(PEEK_LEAVE_MS);
+    }
+
+    _setPeekBodyWrap(wrap) {
+        if (!this._bodyLabel)
+            return;
+        this._bodyLabel.clutter_text.set_line_wrap(wrap);
+        this._bodyLabel.set_text(wrap ? this._peekBody : this._peekBody.replace(/\s*\n\s*/g, ' '));
+    }
+
+    // Alto extra que necesita el cuerpo partido en líneas (0 si cabe en una).
+    _peekNeed() {
+        if (!this._peekBody)
+            return 0;
+        this._setPeekBodyWrap(true);
+        const [, natural] = this._bodyLabel.clutter_text.get_preferred_height(this._bodyLabel.width);
+        return Math.max(0, Math.min(Math.ceil(natural), PEEK_BODY_LINE * PEEK_LINES) - PEEK_BODY_LINE);
+    }
+
+    _setPeekExpanded(expanded) {
+        if (this._peekExpanded === expanded)
+            return;
+        this._peekExpanded = expanded;
+        this._peekExtra = expanded ? this._peekNeed() : 0;
+        if (expanded && this._peekExtra === 0)
+            this._setPeekBodyWrap(false);
+        if (!this._peekOpen)
+            return;
+        const zeta = zetaFor(this._settings.get_string('bounce'));
+        this._heightSpring.k = 340;
+        this._heightSpring.zeta = Math.max(0.7, zeta);
+        this._heightSpring.setTarget(PEEK_HEIGHT + this._peekExtra);
+        if (!this._runner.running)
+            this._runner.start();
+    }
+
     _closePeek() {
+        this._peekOpen = false;
+        this._peekExpanded = false;
+        this._peekExtra = 0;
         this._widthSpring.k = 300;
         this._widthSpring.zeta = 1;
         this._heightSpring.k = 300;
@@ -407,6 +519,11 @@ export class NotchManager {
         const h = Math.max(0, this._heightSpring.value);
         this._actor.set_size(w, h);
         this._positionPeek();
+        // el cuerpo ocupa lo que la isla ha crecido; cerrado, vuelve a una línea
+        const bottomPad = PEEK_HEIGHT - PEEK_BODY_Y - PEEK_BODY_LINE;
+        this._bodyLabel.set_height(Math.max(PEEK_BODY_LINE, Math.round(h) - PEEK_BODY_Y - bottomPad));
+        if (!this._peekExpanded && h <= PEEK_HEIGHT + 1 && this._bodyLabel.clutter_text.get_line_wrap())
+            this._setPeekBodyWrap(false);
 
         const shoulder = Math.min(7, h / 2);
         this._actor.set_style(
