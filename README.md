@@ -4,6 +4,18 @@
 y esquinas redondeadas para Windows 10/11. Si tenías CornerRadius instalada, al abrir
 OpenDock la cierra, conserva tus ajustes y ocupa su lugar.
 
+**Linux** (GNOME, KDE Plasma, Hyprland, Sway, labwc, COSMIC, XFCE, MATE, Cinnamon, i3…), con un
+solo comando:
+
+```sh
+curl -fsSL https://open-dock.netlify.app/install.sh | sh
+```
+
+En GNOME instala la extensión de GNOME Shell (sin sudo); en el resto, el paquete de tu
+distribución (.deb, .rpm o Arch) de la última versión, tras comprobar su SHA-256. Para quitarlo:
+`… | sh -s -- --desinstalar`. Detalles en [`linux/opendock`](linux/opendock/README.md) y
+[`linux/gnome-extension`](linux/gnome-extension/README.md).
+
 ## Esquinas redondeadas
 Esquinas redondeadas por software para la pantalla de tu laptop.
 Dibuja una máscara negra antialiasada en cada esquina de cada monitor. En pantallas
