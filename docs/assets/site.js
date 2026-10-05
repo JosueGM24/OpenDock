@@ -734,6 +734,21 @@
     nums.forEach(n => io2.observe(n));
   }
 
+  // instalar: pestañas Windows / Linux; desde Linux (no Android ni ChromeOS) se abre la de Linux
+  const osTabs = [['tabWin', 'panelWin'], ['tabLin', 'panelLin']].map(([t, p]) => [document.getElementById(t), document.getElementById(p)]);
+  const showOs = i => osTabs.forEach(([t, p], k) => { t.setAttribute('aria-selected', String(k === i)); t.tabIndex = k === i ? 0 : -1; p.hidden = k !== i; });
+  osTabs.forEach(([t], i) => {
+    t.addEventListener('click', () => showOs(i));
+    t.addEventListener('keydown', e => { if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { const j = 1 - i; showOs(j); osTabs[j][0].focus(); } });
+  });
+  const ua = navigator.userAgent;
+  const onLinux = /Linux/i.test(ua + ' ' + (navigator.userAgentData ? navigator.userAgentData.platform : '') + ' ' + (navigator.platform || '')) && !/Android|CrOS/.test(ua);
+  showOs(onLinux ? 1 : 0);
+  if (onLinux) {
+    const hero = document.querySelector('.hero .btn-primary');
+    if (hero && hero.firstChild) { hero.href = '#instalar'; hero.firstChild.textContent = 'Instalar en Linux '; }
+  }
+
   // copiar con confirmación
   document.addEventListener('click', async e => {
     const b = e.target.closest('.copy'); if (!b) return;

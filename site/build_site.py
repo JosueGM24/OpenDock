@@ -7,6 +7,7 @@
 - docs/assets/logo.png, favicon.png, apple-touch-icon.png, og.png
 - docs/assets/sounds/*.wav   los sonidos de la demo (de sounds/, a 24 kHz)
 - docs/gracias.html          destino de los formularios sin JavaScript
+- docs/install.sh            el instalador de Linux (curl -fsSL .../install.sh | sh), de linux/install.sh
 Se publica en Netlify (Netlify Forms) conectando el repo; ver netlify.toml.
 Requiere Pillow. REPO y SITE son las únicas direcciones del sitio.
 """
@@ -62,7 +63,7 @@ def font(names, size):
     return ImageFont.load_default()
 big = font(['segoeuib.ttf', 'arialbd.ttf'], 92); mid = font(['segoeui.ttf', 'arial.ttf'], 36)
 d.text((90, 300), 'OpenDock', font=big, fill=(238, 241, 246))
-d.text((90, 420), 'Notch, barra superior y dock para Windows.', font=mid, fill=(170, 177, 190))
+d.text((90, 420), 'Notch, barra superior y dock para Windows y Linux.', font=mid, fill=(170, 177, 190))
 d.text((90, 470), 'Código abierto · sin red · menos de 15 MB de memoria', font=mid, fill=(120, 128, 142))
 og.save(os.path.join(assets, 'og.png'), optimize=True)
 
@@ -79,13 +80,13 @@ body = body.replace('<span class="meta">Hecho en C, sin frameworks.</span>',
 assert '__LOGO__' not in body and DOWNLOAD in body
 
 fonts = page[page.index('<link rel="preconnect"'):page.index('<style>')].strip()
-desc = 'OpenDock pone tus notificaciones en un notch y añade una barra superior con centro de control y un dock a Windows 10 y 11. Código abierto, sin red, menos de 15 MB de memoria.'
+desc = 'OpenDock pone tus notificaciones en un notch y añade una barra superior con centro de control y un dock a Windows 10 y 11 y a Linux. Código abierto, sin red, menos de 15 MB de memoria.'
 html = f'''<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>OpenDock — notch, barra superior y dock para Windows</title>
+<title>OpenDock — notch, barra superior y dock para Windows y Linux</title>
 <meta name="description" content="{desc}">
 <meta name="theme-color" content="#000000">
 <link rel="canonical" href="{SITE}">
@@ -118,6 +119,10 @@ html = html.replace('href="assets/site.css"', f'href="{CSS_URL}"').replace('src=
 open(os.path.join(out, 'index.html'), 'w', encoding='utf-8', newline='\n').write(html)
 open(os.path.join(assets, 'site.css'), 'w', encoding='utf-8', newline='\n').write(css)
 open(os.path.join(assets, 'site.js'), 'w', encoding='utf-8', newline='\n').write(js)
+# el instalador de Linux, siempre con LF (un CR rompe el script en sh)
+inst = open(os.path.join(root, 'linux', 'install.sh'), encoding='utf-8').read()
+assert inst.startswith('#!/bin/sh') and inst.rstrip().endswith('main "$@"')
+open(os.path.join(out, 'install.sh'), 'w', encoding='utf-8', newline='\n').write(inst)
 gracias = f'''<!doctype html>
 <html lang="es">
 <head>
