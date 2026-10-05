@@ -12,7 +12,7 @@ export default class OpenDockExtension extends Extension {
         this._corners = new CornerManager(this._settings);
         this._panel = new PanelStyler(this._settings);
         this._notch = new NotchManager(this._settings, this, PANEL_HEIGHT);
-        this._dock = new DockManager(this._settings);
+        this._dock = new DockManager(this._settings, this);
 
         // Cada pieza se habilita por separado y de forma defensiva: un fallo
         // en una no debe dejar a las demás sin poder deshabilitarse.

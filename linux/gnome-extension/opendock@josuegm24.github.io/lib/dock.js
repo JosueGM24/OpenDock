@@ -8,6 +8,8 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as AppFavorites from 'resource:///org/gnome/shell/ui/appFavorites.js';
+import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Spring, SpringRunner} from './spring.js';
 import {paletteFor, zetaFor, cssRgba} from './theme.js';
 
@@ -20,8 +22,13 @@ const PAD_Y = 11;
 const HIDE_DELAY_MS = 450;
 
 export class DockManager {
-    constructor(settings) {
+    constructor(settings, extensionObject) {
         this._settings = settings;
+        this._extensionObject = extensionObject;
+        this._menu = null;
+        this._menuManager = null;
+        this._menuIdleId = null;
+        this._rebuildPending = false;
         this._actor = null;
         this._iconBox = null;
         this._icons = [];
@@ -71,6 +78,12 @@ export class DockManager {
             this._hideTimeoutId = null;
         }
         this._runner.stop();
+        if (this._menuIdleId) {
+            GLib.source_remove(this._menuIdleId);
+            this._menuIdleId = null;
+        }
+        this._destroyMenu(true);
+        this._menuManager = null;
         if (this._actor) {
             Main.layoutManager.removeChrome(this._actor);
             this._actor.destroy();
@@ -120,6 +133,7 @@ export class DockManager {
             affectsStruts: true,
             trackFullscreen: true,
         });
+        this._menuManager = new PopupMenu.PopupMenuManager(this._actor);
     }
 
     _relayout() {
@@ -147,6 +161,11 @@ export class DockManager {
     }
 
     _rebuild() {
+        // con el menú abierto, su icono no puede desaparecer: se rehace al cerrarlo
+        if (this._menu) {
+            this._rebuildPending = true;
+            return;
+        }
         if (!this._settings.get_boolean('show-dock')) {
             if (this._actor)
                 this._actor.visible = false;
@@ -190,6 +209,12 @@ export class DockManager {
         const texture = app.create_icon_texture(baseSize);
         const iconButton = new St.Button({child: texture});
         iconButton.connect('clicked', () => this._activate(app, iconButton));
+        iconButton.connect('button-press-event', (_actor, event) => {
+            if (event.get_button() !== Clutter.BUTTON_SECONDARY)
+                return Clutter.EVENT_PROPAGATE;
+            this._openMenu(app, iconButton);
+            return Clutter.EVENT_STOP;
+        });
         wrapper.add_child(iconButton);
 
         const indicator = new St.Widget({
@@ -215,6 +240,115 @@ export class DockManager {
         } catch (e) {
             logError(e, `OpenDock: no se pudo abrir ${app.get_id()}`);
         }
+    }
+
+    // ---- menú del clic derecho -------------------------------------------
+    // Como el de Windows: ventanas abiertas, acciones de la app (.desktop),
+    // nueva ventana, anclar, ajustes del dock, cerrar y finalizar tarea.
+
+    _openMenu(app, source) {
+        this._destroyMenu();
+        const menu = new PopupMenu.PopupMenu(source, 0.5, St.Side.BOTTOM);
+        const palette = this._palette();
+        menu.box.set_style(
+            `background-color: ${cssRgba(palette.background, 0.92)}; color: ${palette.text}; ` +
+            'border-radius: 16px; padding: 6px;');
+        Main.uiGroup.add_child(menu.actor);
+        menu.actor.hide();
+        this._menuManager.addMenu(menu);
+        this._menu = menu;
+
+        const time = () => global.get_current_time();
+        const windows = app.get_windows();
+        const appInfo = app.get_app_info();
+        const favorites = AppFavorites.getAppFavorites();
+        const id = app.get_id();
+
+        const title = new PopupMenu.PopupMenuItem(app.get_name(), {reactive: false});
+        title.label.set_style('font-weight: 700;');
+        menu.addMenuItem(title);
+
+        if (windows.length > 0) {
+            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            for (const win of windows) {
+                const item = menu.addAction(win.get_title() || app.get_name(),
+                    () => Main.activateWindow(win));
+                if (win === global.display.focus_window)
+                    item.setOrnament(PopupMenu.Ornament.DOT);
+            }
+        }
+
+        const actions = appInfo ? appInfo.list_actions() : [];
+        if (actions.length > 0) {
+            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            for (const action of actions) {
+                menu.addAction(appInfo.get_action_name(action),
+                    () => app.launch_action(action, time(), -1));
+            }
+        }
+
+        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        if (windows.length === 0)
+            menu.addAction('Abrir', () => this._activate(app, source));
+        else if (app.can_open_new_window())
+            menu.addAction('Nueva ventana', () => app.open_new_window(-1));
+        if (favorites.isFavorite(id))
+            menu.addAction('Quitar del dock', () => favorites.removeFavorite(id));
+        else if (appInfo)
+            menu.addAction('Anclar al dock', () => favorites.addFavorite(id));
+        menu.addAction('Ajustes del dock', () => {
+            try {
+                this._extensionObject?.openPreferences();
+            } catch (e) {
+                logError(e, 'OpenDock: no se pudieron abrir los ajustes');
+            }
+        });
+
+        if (windows.length > 0) {
+            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            menu.addAction(windows.length > 1 ? 'Cerrar todas las ventanas' : 'Cerrar ventana',
+                () => windows.forEach(w => w.delete(time())));
+            // Finalizar tarea: Mutter mata el cliente de cada ventana (SIGKILL al
+            // proceso), sin lanzar `kill` ni ningún otro programa.
+            menu.addAction('Finalizar tarea', () => windows.forEach(w => w.kill()));
+        }
+
+        menu.connect('open-state-changed', (_menu, open) => {
+            if (open)
+                return;
+            // se destruye cuando termina de cerrarse, fuera de esta señal
+            if (this._menuIdleId)
+                GLib.source_remove(this._menuIdleId);
+            this._menuIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                this._menuIdleId = null;
+                if (this._menu === menu)
+                    this._destroyMenu();
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+        source.connect('destroy', () => {
+            if (this._menu === menu)
+                this._destroyMenu();
+        });
+        menu.open(BoxPointer.PopupAnimation.FULL);
+    }
+
+    _destroyMenu(disabling = false) {
+        const menu = this._menu;
+        if (!menu)
+            return;
+        this._menu = null;
+        menu.destroy();
+        if (disabling) {
+            this._rebuildPending = false;
+            return;
+        }
+        if (this._rebuildPending && this._actor) {
+            this._rebuildPending = false;
+            this._rebuild();
+        }
+        if (!this._hovering)
+            this._scheduleHide();
     }
 
     _bounce(actor) {
@@ -282,7 +416,7 @@ export class DockManager {
             GLib.source_remove(this._hideTimeoutId);
         this._hideTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, HIDE_DELAY_MS, () => {
             this._hideTimeoutId = null;
-            if (!this._hovering)
+            if (!this._hovering && !this._menu)
                 this._hide(mode);
             return GLib.SOURCE_REMOVE;
         });
