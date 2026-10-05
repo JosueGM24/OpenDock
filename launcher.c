@@ -47,10 +47,10 @@
 #define LW      680
 #define LPAD    12
 #define QH      58
-#define ROWH    46
+#define ROWH    52
 #define LABELH  28
-#define TILEH   90
-#define FROWH   42
+#define TILEH   100
+#define FROWH   48
 
 /* ───────────────────────── Comparación sin mayúsculas ni acentos ───────────────────────── */
 static WCHAR *volatile s_fold;      /* por carácter: minúscula y sin tilde */
@@ -739,8 +739,8 @@ static void MakeFonts(void)
     FreeFonts();
     LPCWSTR ui = Gfx_UiFace();
     L.fQuery = Gfx_Font(ui, SS(20), FW_NORMAL, CLEARTYPE_QUALITY);
-    L.fTitle = Gfx_Font(ui, SS(14), FW_NORMAL, CLEARTYPE_QUALITY);
-    L.fSub   = Gfx_Font(ui, SS(12), FW_NORMAL, CLEARTYPE_QUALITY);
+    L.fTitle = Gfx_Font(ui, SS(15), FW_NORMAL, CLEARTYPE_QUALITY);
+    L.fSub   = Gfx_Font(ui, SS(13), FW_NORMAL, CLEARTYPE_QUALITY);
     L.fLabel = Gfx_Font(ui, SS(12), FW_SEMIBOLD, CLEARTYPE_QUALITY);
     L.fIcon  = Gfx_Font(Gfx_IconFace(), SS(18), FW_NORMAL, CLEARTYPE_QUALITY);
     L.fGlyph = Gfx_Font(Gfx_IconFace(), SS(20), FW_NORMAL, CLEARTYPE_QUALITY);
@@ -1049,7 +1049,7 @@ static void Paint(void)
             const int is = SS(44);
             const float pop = (0.55f + 0.45f * r->ap) * (r->iconUp ? r->is : 1.0f) * r->hs;
             BlitIcon(c, RowIcon(r, is), rc.left + rw * 0.5f, rc.top + SS(10) + is * 0.5f, pop, a);
-            Gfx_Text(c, L.fSub, r->title, rc.left + SS(4), rc.top + SS(10) + is + SS(4), rw - SS(8), SS(32), Gfx_Mix(L.bgBase, L.fg, a),
+            Gfx_Text(c, L.fSub, r->title, rc.left + SS(4), rc.top + SS(10) + is + SS(4), rw - SS(8), SS(38), Gfx_Mix(L.bgBase, L.fg, a),
                      DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
             continue;
         }
@@ -1399,8 +1399,8 @@ static void Open(void)
     Theme th;
     Theme_Load(&th);
     L.light = g_cfg.material == MAT_SYSTEM && !th.dark;
-    if (L.light) { L.fg = 0x1C1C1E; L.fg2 = 0x6E6E73; L.fg3 = 0x8E8E93; L.line = 0xD1D1D6; }
-    else         { L.fg = 0xFFFFFF; L.fg2 = 0xA1A1A6; L.fg3 = 0x6E6E73; L.line = 0x2C2C2E; }
+    if (L.light) { L.fg = 0x1C1C1E; L.fg2 = 0x55555A; L.fg3 = 0x7C7C82; L.line = 0xD1D1D6; }
+    else         { L.fg = 0xFFFFFF; L.fg2 = 0xB8B8BD; L.fg3 = 0x8E8E93; L.line = 0x2C2C2E; }
     L.accent = g_cfg.accent ? kAccentPresets[g_cfg.accent] : th.accentOnBlack;
 
     L.w = min(SS(LW), (int)(mi.rcWork.right - mi.rcWork.left) - SS(32));
