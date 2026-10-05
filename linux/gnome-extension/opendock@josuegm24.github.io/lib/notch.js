@@ -37,6 +37,9 @@ const CARD_HOVER_SCALE = 1.035;
 const CARD_OTHER_SCALE = 0.965;
 const CARD_EXPAND_MS = 260;
 const CARD_ACTION_HEIGHT = 26;
+const CARD_ACTION_ROW = 40;    // fila de botones de la tarjeta expandida
+const CARD_BODY_LINE = 18;     // alto de línea del cuerpo (13 px)
+const CARD_BODY_MAX = 4;       // líneas de cuerpo como mucho al expandir
 const TRASH_WIDTH = 40;
 const TRASH_WIDTH_HOVER = 58;
 const TRASH_COLOR = '#E5443C';
@@ -822,17 +825,19 @@ export class NotchManager {
         const text = new St.BoxLayout({
             vertical: true,
             width: CARD_WIDTH - TRASH_WIDTH,
-            height: CARD_HEIGHT,
             style: 'padding: 8px 12px;',
         });
         const titleLabel = new St.Label({
             text: notification.title || '',
-            style: `color: ${palette.text}; font-size: 13px; font-weight: 600;`,
+            style: `color: ${palette.text}; font-size: 14px; font-weight: 700;`,
         });
         const bodyLabel = new St.Label({
             text: notification.body || '',
-            style: `color: ${palette.secondary}; font-size: 12px;`,
+            height: CARD_BODY_LINE,
+            clip_to_allocation: true,
+            style: `color: ${palette.secondary}; font-size: 13px; font-weight: 600;`,
         });
+        bodyLabel.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
         text.add_child(titleLabel);
         text.add_child(bodyLabel);
         card.add_child(text);
@@ -892,6 +897,7 @@ export class NotchManager {
             return Clutter.EVENT_PROPAGATE;
         });
         card.add_child(trash);
+        card._opendockTrash = trash;
 
         card.connect('enter-event', () => {
             this._onCardEnter(card);
@@ -952,16 +958,46 @@ export class NotchManager {
         this._setCardExpanded(card, false);
     }
 
+    // Alto extra del cuerpo partido en líneas (como mucho 4), como en Windows.
+    _cardBodyExtra(card) {
+        const label = card._opendockBodyLabel;
+        if (!label || !label.text)
+            return 0;
+        label.clutter_text.set_line_wrap(true);
+        const width = CARD_WIDTH - TRASH_WIDTH - 24;
+        const [, natural] = label.clutter_text.get_preferred_height(width);
+        return Math.max(0, Math.min(Math.ceil(natural), CARD_BODY_LINE * CARD_BODY_MAX) - CARD_BODY_LINE);
+    }
+
     _setCardExpanded(card, expanded) {
         if (card._opendockDestroyed || card._opendockExpanded === expanded)
             return;
         card._opendockExpanded = expanded;
-        if (card._opendockActions)
+        const label = card._opendockBodyLabel;
+        const extra = expanded ? this._cardBodyExtra(card) : 0;
+        const height = expanded ? CARD_HEIGHT + extra + CARD_ACTION_ROW : CARD_HEIGHT;
+        if (card._opendockActions) {
+            card._opendockActions.set_position(52, height - CARD_ACTION_HEIGHT - 8);
             card._opendockActions.visible = expanded;
-        if (card._opendockBodyLabel)
-            card._opendockBodyLabel.clutter_text.set_line_wrap(expanded);
+        }
+        if (label) {
+            label.ease({
+                height: CARD_BODY_LINE + extra,
+                duration: 150,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                onComplete: () => {
+                    if (!card._opendockDestroyed && !card._opendockExpanded)
+                        label.clutter_text.set_line_wrap(false);
+                },
+            });
+        }
+        card._opendockTrash?.ease({
+            height,
+            duration: 150,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        });
         card.ease({
-            height: expanded ? CARD_HEIGHT + 32 : CARD_HEIGHT,
+            height,
             duration: 150,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
         });
