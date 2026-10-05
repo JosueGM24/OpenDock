@@ -271,6 +271,7 @@ void Bar_ForegroundChanged(void);
 int  Bar_HeightOn(const RECT *mon);
 BOOL App_Covered(HWND h);
 BOOL App_ShellOpen(LPCWSTR target);         /* abre algo con %WINDIR%\\explorer.exe "target" (validado) */
+BOOL App_ShellSelect(LPCWSTR path);        /* explorer /select,"path": abre su carpeta con él marcado */
 void App_BarSurfaceChanged(void);           /* la barra cambió de color o de vidrio: repintar las esquinas */
 BOOL Bar_Surface(const RECT *mon, int sx, int sy, DWORD *rgb, BOOL *glass);                   /* ¿alguna ventana ajena (visible) está por encima? */
 void Bar_Raise(void);

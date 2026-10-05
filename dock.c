@@ -20,6 +20,7 @@
 #include <shobjidl.h>
 #include <dwmapi.h>
 #include <propsys.h>
+#include <knownfolders.h>
 #include <math.h>
 
 #define DOCK_CLASS    L"OpenDock.Dock"
@@ -266,6 +267,8 @@ static void ResolveLnk(LPCWSTR lnk, wchar_t *exeOut)
     IShellLinkW_Release(sl);
 }
 
+static const wchar_t *ItemKey(const DockItem *it) { return it->aumid[0] ? it->aumid : it->exe[0] ? it->exe : it->launch; }
+
 static void NewItem(DockItem *it)
 {
     ZeroMemory(it, sizeof(*it));
@@ -384,6 +387,82 @@ static int ReadPinOrder(wchar_t (*lnks)[MAX_PATH], int nlnk, PinRef *refs, int m
     return n;
 }
 
+/* ───────────────────────── Anclados propios del dock ─────────────────────────
+ * Windows no deja anclar a su barra con una API pública, así que "Anclar al dock" y
+ * "Quitar del dock" guardan dos listas propias (REG_MULTI_SZ en la clave de OpenDock):
+ *   DockAnclas   apps añadidas (ruta del .exe, o "aumid:" + AppUserModelID)
+ *   DockOcultas  anclados de la barra de Windows que el dock no enseña (su ItemKey)
+ * La barra de tareas de Windows no se toca. */
+#define PIN_CAP 32
+static wchar_t s_pinAdd[PIN_CAP][MAX_PATH], s_pinHide[PIN_CAP][MAX_PATH];
+static int     s_npinAdd, s_npinHide;
+static DWORD   s_pinVer;               /* cambia al editar las listas: invalida la caché */
+static BOOL    s_pinLoaded;
+
+static int ReadMulti(LPCWSTR name, wchar_t list[][MAX_PATH])
+{
+    static wchar_t buf[PIN_CAP * MAX_PATH + 2];
+    DWORD size = sizeof(buf) - 2 * sizeof(wchar_t);
+    ZeroMemory(buf, sizeof(buf));
+    if (RegGetValueW(HKEY_CURRENT_USER, REG_KEY, name, RRF_RT_REG_MULTI_SZ, NULL, buf, &size) != ERROR_SUCCESS) return 0;
+    int n = 0;
+    for (const wchar_t *p = buf; *p && n < PIN_CAP; p += lstrlenW(p) + 1) lstrcpynW(list[n++], p, MAX_PATH);
+    return n;
+}
+
+static void WriteMulti(LPCWSTR name, wchar_t list[][MAX_PATH], int n)
+{
+    static wchar_t buf[PIN_CAP * MAX_PATH + 2];
+    int o = 0;
+    for (int i = 0; i < n; ++i) { lstrcpyW(buf + o, list[i]); o += lstrlenW(list[i]) + 1; }
+    buf[o++] = 0;
+    HKEY k;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &k, NULL) == ERROR_SUCCESS) {
+        RegSetValueExW(k, name, 0, REG_MULTI_SZ, (const BYTE *)buf, (DWORD)(o * sizeof(wchar_t)));
+        RegCloseKey(k);
+    }
+}
+
+static void LoadPinLists(void)
+{
+    if (s_pinLoaded) return;
+    s_pinLoaded = TRUE;
+    s_npinAdd = ReadMulti(L"DockAnclas", s_pinAdd);
+    s_npinHide = ReadMulti(L"DockOcultas", s_pinHide);
+}
+
+static int FindIn(wchar_t list[][MAX_PATH], int n, const wchar_t *key)
+{
+    for (int i = 0; i < n; ++i) if (!lstrcmpiW(list[i], key)) return i;
+    return -1;
+}
+
+static void RemoveAt(wchar_t list[][MAX_PATH], int *n, int i)
+{
+    MoveMemory(list[i], list[i + 1], (SIZE_T)(*n - i - 1) * sizeof(list[0]));
+    --*n;
+}
+
+static void AppendTo(wchar_t list[][MAX_PATH], int *n, const wchar_t *key)
+{
+    if (*n < PIN_CAP && FindIn(list, *n, key) < 0) lstrcpynW(list[(*n)++], key, MAX_PATH);
+}
+
+/* Una app añadida con "Anclar al dock" a partir de su .exe. */
+static void AppName(const wchar_t *exe, wchar_t *out, int cch);
+static void AddExePin(const wchar_t *exe)
+{
+    if (D.count >= MAX_ITEMS || GetFileAttributesW(exe) == INVALID_FILE_ATTRIBUTES) return;
+    DockItem *it = &D.items[D.count];
+    NewItem(it);
+    it->pinned = TRUE;
+    lstrcpynW(it->exe, exe, MAX_PATH);
+    lstrcpynW(it->launch, exe, MAX_PATH);
+    if (!lstrcmpiW(BaseName(exe), L"explorer.exe")) lstrcpynW(it->name, L"Explorador de archivos", 80);
+    else AppName(exe, it->name, 80);
+    if (GetIcon(exe, it)) D.count++;
+}
+
 /* Firma de lo anclado: la fecha de la carpeta de accesos, la lista de Explorer en el
  * registro y la generación de la caché de iconos. Si no cambió, los anclados son los mismos
  * y no hace falta volver a resolver cada .lnk (lo más caro del repaso del dock). */
@@ -414,7 +493,8 @@ static void AddPinned(void)
     static DockItem cache[MAX_ITEMS];
     static int ncache;
     static DWORD sig;
-    const DWORD now = PinSignature(dir);
+    LoadPinLists();
+    const DWORD now = PinSignature(dir) ^ (s_pinVer * 2654435761u);
     if (now == sig) {
         const int n = min(ncache, MAX_ITEMS - D.count);
         CopyMemory(&D.items[D.count], cache, sizeof(DockItem) * n);
@@ -440,6 +520,20 @@ static void AddPinned(void)
         else AddPackaged(refs[i].aumid);
     }
     for (int k = 0; k < nlnk; ++k) if (!used[k]) AddLnk(dir, lnks[k]);
+    /* fuera las que se quitaron del dock; luego las añadidas con "Anclar al dock" */
+    for (int i = D.count - 1; i >= first; --i)
+        if (FindIn(s_pinHide, s_npinHide, ItemKey(&D.items[i])) >= 0) {
+            MoveMemory(&D.items[i], &D.items[i + 1], (SIZE_T)(D.count - i - 1) * sizeof(DockItem));
+            --D.count;
+        }
+    for (int i = 0; i < s_npinAdd; ++i) {
+        BOOL dup = FALSE;
+        const wchar_t *key = s_pinAdd[i], *aumid = !wcsncmp(key, L"aumid:", 6) ? key + 6 : NULL;
+        for (int j = first; j < D.count && !dup; ++j) dup = !lstrcmpiW(ItemKey(&D.items[j]), aumid ? aumid : key);
+        if (dup) continue;
+        if (aumid) AddPackaged(aumid);
+        else AddExePin(key);
+    }
     ncache = D.count - first;
     CopyMemory(cache, &D.items[first], sizeof(DockItem) * ncache);
     sig = now;
@@ -597,7 +691,6 @@ static void UpdateActive(void)
     }
 }
 
-static const wchar_t *ItemKey(const DockItem *it) { return it->aumid[0] ? it->aumid : it->exe[0] ? it->exe : it->launch; }
 
 static void Rescan(void)
 {
@@ -1118,11 +1211,152 @@ static void Activate(int i)
     FocusWindow(front ? it->wins[n - 1] : it->wins[0]);    /* wins[] va en orden z: [0] arriba */
 }
 
-/* Clic derecho en una app: sus ventanas para elegir, y abrir otra o cerrarlas. */
-#define IDM_WIN0   100
-#define IDM_NEW    200
-#define IDM_CLOSE  201
-#define IDM_PREFS  202
+/* ───────────────────────── Clic derecho ─────────────────────────
+ * Como la barra de tareas de Windows: los archivos recientes de la app (los mismos que
+ * enseña su lista de saltos), sus ventanas, abrir otra, anclar o quitar del dock,
+ * ejecutar como administrador, abrir la ubicación del archivo y cerrar. Las tareas propias
+ * de cada app (p. ej. "Nueva ventana InPrivate") no tienen API pública de lectura. */
+#define IDM_WIN0    100
+#define IDM_RECENT0 150
+#define IDM_NEW     200
+#define IDM_CLOSE   201
+#define IDM_PREFS   202
+#define IDM_PIN     203
+#define IDM_ADMIN   204
+#define IDM_FOLDER  205
+#define MAX_RECENT  8
+
+static BOOL LnkAumid(const wchar_t *lnk, wchar_t *out, int cch)
+{
+    out[0] = 0;
+    IShellLinkW *sl = NULL;
+    if (FAILED(CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLinkW, (void **)&sl))) return FALSE;
+    IPersistFile *pf = NULL;
+    if (SUCCEEDED(IShellLinkW_QueryInterface(sl, &IID_IPersistFile, (void **)&pf))) {
+        if (SUCCEEDED(IPersistFile_Load(pf, lnk, STGM_READ))) {
+            IPropertyStore *ps = NULL;
+            if (SUCCEEDED(IShellLinkW_QueryInterface(sl, &IID_IPropertyStore, (void **)&ps))) {
+                PROPVARIANT v;
+                PropVariantInit(&v);
+                if (SUCCEEDED(IPropertyStore_GetValue(ps, &kPKEY_AumId, &v)) && v.vt == VT_LPWSTR && v.pwszVal)
+                    lstrcpynW(out, v.pwszVal, cch);
+                PropVariantClear(&v);
+                IPropertyStore_Release(ps);
+            }
+        }
+        IPersistFile_Release(pf);
+    }
+    IShellLinkW_Release(sl);
+    return out[0] != 0;
+}
+
+/* AppUserModelID implícito de un .exe sin uno propio: su ruta con la carpeta conocida
+ * cambiada por su GUID ("{1AC14E77-…}\notepad.exe"), como lo calcula Windows. */
+static void ImplicitAumid(const wchar_t *exe, wchar_t *out, int cch)
+{
+    static const KNOWNFOLDERID *kf[] = { &FOLDERID_System, &FOLDERID_SystemX86, &FOLDERID_ProgramFilesX86,
+                                         &FOLDERID_ProgramFilesX64, &FOLDERID_UserProgramFiles, &FOLDERID_Windows };
+    lstrcpynW(out, exe, cch);
+    for (int i = 0; i < (int)(sizeof(kf) / sizeof(kf[0])); ++i) {
+        PWSTR dir = NULL;
+        if (FAILED(SHGetKnownFolderPath(kf[i], 0, NULL, &dir)) || !dir) continue;
+        const int n = lstrlenW(dir);
+        const BOOL hit = n && CompareStringOrdinal(exe, n, dir, n, TRUE) == CSTR_EQUAL && exe[n] == L'\\';
+        CoTaskMemFree(dir);
+        if (hit) {
+            wchar_t g[40];
+            if (StringFromGUID2(kf[i], g, 40) && lstrlenW(g) + lstrlenW(exe + n) < cch) wsprintfW(out, L"%s%s", g, exe + n);
+            return;
+        }
+    }
+}
+
+/* El id con el que Windows guarda la lista de saltos de la app. */
+static BOOL AppIdFor(const DockItem *it, wchar_t *out, int cch)
+{
+    if (it->aumid[0]) { lstrcpynW(out, it->aumid, cch); return TRUE; }
+    for (int k = 0; k < it->nwin; ++k) if (IsWindow(it->wins[k]) && WindowAumid(it->wins[k], out, cch)) return TRUE;
+    const int ll = lstrlenW(it->launch);
+    if (ll > 4 && !lstrcmpiW(it->launch + ll - 4, L".lnk") && LnkAumid(it->launch, out, cch)) return TRUE;
+    if (it->exe[0]) { ImplicitAumid(it->exe, out, cch); return TRUE; }
+    return FALSE;
+}
+
+/* Archivos recientes de la app (sólo archivos del disco, que es lo que se puede abrir). */
+static int RecentFiles(const DockItem *it, wchar_t paths[][MAX_PATH], wchar_t names[][64])
+{
+    wchar_t id[MAX_PATH];
+    if (!AppIdFor(it, id, MAX_PATH)) return 0;
+    IApplicationDocumentLists *dl = NULL;
+    if (FAILED(CoCreateInstance(&CLSID_ApplicationDocumentLists, NULL, CLSCTX_INPROC_SERVER,
+                                &IID_IApplicationDocumentLists, (void **)&dl))) return 0;
+    int n = 0;
+    IObjectArray *oa = NULL;
+    if (SUCCEEDED(IApplicationDocumentLists_SetAppID(dl, id)) &&
+        SUCCEEDED(IApplicationDocumentLists_GetList(dl, ADLT_RECENT, 20, &IID_IObjectArray, (void **)&oa))) {
+        UINT c = 0;
+        IObjectArray_GetCount(oa, &c);
+        for (UINT i = 0; i < c && n < MAX_RECENT; ++i) {
+            IShellItem *si = NULL;
+            PWSTR path = NULL, dn = NULL;
+            if (FAILED(IObjectArray_GetAt(oa, i, &IID_IShellItem, (void **)&si)) || !si) continue;
+            if (SUCCEEDED(IShellItem_GetDisplayName(si, SIGDN_FILESYSPATH, &path)) && path &&
+                GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
+                lstrcpynW(paths[n], path, MAX_PATH);
+                if (SUCCEEDED(IShellItem_GetDisplayName(si, SIGDN_NORMALDISPLAY, &dn)) && dn) lstrcpynW(names[n], dn, 64);
+                else lstrcpynW(names[n], BaseName(path), 64);
+                ++n;
+            }
+            if (path) CoTaskMemFree(path);
+            if (dn) CoTaskMemFree(dn);
+            IShellItem_Release(si);
+        }
+        IObjectArray_Release(oa);
+    }
+    IApplicationDocumentLists_Release(dl);
+    return n;
+}
+
+static void MenuText(const wchar_t *t, wchar_t *esc, int cap)
+{
+    int o = 0;                                   /* "&" es atajo en los menús: duplicarlo */
+    for (const wchar_t *q = t; *q && o < cap - 3; ++q) { if (*q == L'&') esc[o++] = L'&'; esc[o++] = *q; }
+    esc[o] = 0;
+}
+
+static void TogglePin(const DockItem *it)
+{
+    LoadPinLists();
+    const wchar_t *key = ItemKey(it);
+    wchar_t add[MAX_PATH];
+    if (it->aumid[0]) wsprintfW(add, L"aumid:%.250s", it->aumid);
+    else lstrcpynW(add, it->exe[0] ? it->exe : it->launch, MAX_PATH);
+    if (it->pinned) {
+        const int a = FindIn(s_pinAdd, s_npinAdd, add);
+        if (a >= 0) RemoveAt(s_pinAdd, &s_npinAdd, a);     /* lo añadió el dock: se quita */
+        else AppendTo(s_pinHide, &s_npinHide, key);         /* anclado en la barra: se oculta */
+    } else {
+        const int h = FindIn(s_pinHide, s_npinHide, key);
+        if (h >= 0) RemoveAt(s_pinHide, &s_npinHide, h);
+        else AppendTo(s_pinAdd, &s_npinAdd, add);
+    }
+    WriteMulti(L"DockAnclas", s_pinAdd, s_npinAdd);
+    WriteMulti(L"DockOcultas", s_pinHide, s_npinHide);
+    ++s_pinVer;
+}
+
+static void RunAsAdmin(const DockItem *it)
+{
+    const wchar_t *target = it->exe[0] ? it->exe : it->launch;
+    for (const wchar_t *q = target; *q; ++q) if (*q == L'"' || *q < 0x20) return;
+    SHELLEXECUTEINFOW sei = { sizeof(sei) };
+    sei.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+    sei.lpVerb = L"runas";
+    sei.lpFile = target;
+    sei.nShow = SW_SHOWNORMAL;
+    ShellExecuteExW(&sei);
+}
+
 static void AppMenu(int i, POINT at)
 {
     DockItem *it = &D.items[i];
@@ -1130,20 +1364,39 @@ static void AppMenu(int i, POINT at)
     if (!m) return;
     HWND fg = GetForegroundWindow();
     if (fg) fg = GetAncestor(fg, GA_ROOTOWNER);
+    wchar_t esc[160];
+
+    static wchar_t rpath[MAX_RECENT][MAX_PATH], rname[MAX_RECENT][64];
+    const int nrec = RecentFiles(it, rpath, rname);
+    if (nrec) {
+        AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"Recientes");
+        for (int r = 0; r < nrec; ++r) { MenuText(rname[r], esc, 160); AppendMenuW(m, MF_STRING, IDM_RECENT0 + r, esc); }
+        AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    }
+
     int shown = 0;
     for (int k = 0; k < it->nwin; ++k) {
         if (!IsWindow(it->wins[k])) continue;
-        wchar_t t[64], esc[130];
+        wchar_t t[64];
         if (GetWindowTextW(it->wins[k], t, 64) <= 0) lstrcpynW(t, it->name, 64);
-        int o = 0;                               /* "&" es atajo en los menús: duplicarlo */
-        for (const wchar_t *q = t; *q && o < 126; ++q) { if (*q == L'&') esc[o++] = L'&'; esc[o++] = *q; }
-        esc[o] = 0;
+        MenuText(t, esc, 160);
         AppendMenuW(m, MF_STRING | (it->wins[k] == fg ? MF_CHECKED : 0), IDM_WIN0 + k, esc);
         ++shown;
     }
     if (shown) AppendMenuW(m, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(m, MF_STRING, IDM_NEW, shown ? L"Nueva ventana" : L"Abrir");
-    if (shown) AppendMenuW(m, MF_STRING, IDM_CLOSE, shown > 1 ? L"Cerrar todas las ventanas" : L"Cerrar ventana");
+
+    MenuText(it->name, esc, 160);
+    AppendMenuW(m, MF_STRING, IDM_NEW, shown ? L"Nueva ventana" : esc);
+    AppendMenuW(m, MF_STRING, IDM_PIN, it->pinned ? L"Quitar del dock" : L"Anclar al dock");
+    const BOOL classic = !it->aumid[0] && (it->exe[0] || it->launch[0]);
+    if (classic) {
+        AppendMenuW(m, MF_STRING, IDM_ADMIN, L"Ejecutar como administrador");
+        if (it->exe[0]) AppendMenuW(m, MF_STRING, IDM_FOLDER, L"Abrir ubicación del archivo");
+    }
+    if (shown) {
+        AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(m, MF_STRING, IDM_CLOSE, shown > 1 ? L"Cerrar todas las ventanas" : L"Cerrar ventana");
+    }
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
     AppendMenuW(m, MF_STRING, IDM_PREFS, L"Ajustes del dock\x2026");
 
@@ -1157,9 +1410,13 @@ static void AppMenu(int i, POINT at)
     DestroyMenu(m);
     PostMessageW(D.hwnd, WM_NULL, 0, 0);
     if (cmd >= IDM_WIN0 && cmd < IDM_WIN0 + it->nwin) { StartHop(it, FALSE); FocusWindow(it->wins[cmd - IDM_WIN0]); }
-    else if (cmd == IDM_NEW)   { StartHop(it, TRUE); Launch(it); }
-    else if (cmd == IDM_CLOSE) { for (int k = 0; k < it->nwin; ++k) if (IsWindow(it->wins[k])) PostMessageW(it->wins[k], WM_CLOSE, 0, 0); }
-    else if (cmd == IDM_PREFS) Panel_ShowTab(2);
+    else if (cmd >= IDM_RECENT0 && cmd < IDM_RECENT0 + nrec) App_ShellOpen(rpath[cmd - IDM_RECENT0]);
+    else if (cmd == IDM_NEW)    { StartHop(it, TRUE); Launch(it); }
+    else if (cmd == IDM_PIN)    { TogglePin(it); Rescan(); Kick(); }
+    else if (cmd == IDM_ADMIN)  RunAsAdmin(it);
+    else if (cmd == IDM_FOLDER) App_ShellSelect(it->exe);
+    else if (cmd == IDM_CLOSE)  { for (int k = 0; k < it->nwin; ++k) if (IsWindow(it->wins[k])) PostMessageW(it->wins[k], WM_CLOSE, 0, 0); }
+    else if (cmd == IDM_PREFS)  Panel_ShowTab(2);
 }
 
 /* ───────────────────────── Barra de tareas de Windows ─────────────────────────

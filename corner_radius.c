@@ -1026,6 +1026,32 @@ BOOL App_ShellOpen(LPCWSTR target)
     return ok;
 }
 
+/* Abre una ventana del Explorador con el archivo seleccionado (explorer /select,"ruta").
+ * Mismas validaciones que App_ShellOpen: sólo rutas absolutas sin comillas ni controles. */
+BOOL App_ShellSelect(LPCWSTR path)
+{
+    if (!path || lstrlenW(path) < 3 || path[1] != L':' || path[2] != L'\\') return FALSE;
+    const int n = lstrlenW(path);
+    if (n > 2048) return FALSE;
+    for (int i = 0; i < n; ++i) if (path[i] == L'"' || path[i] < 0x20 || path[i] == 0x7F) return FALSE;
+    wchar_t exe[MAX_PATH];
+    const UINT wl = GetSystemWindowsDirectoryW(exe, MAX_PATH);
+    if (!wl || wl > MAX_PATH - 16) return FALSE;
+    lstrcatW(exe, L"\\explorer.exe");
+    const SIZE_T cap = (SIZE_T)(lstrlenW(exe) + n + 20);
+    wchar_t *cmd = (wchar_t *)HeapAlloc(GetProcessHeap(), 0, cap * sizeof(wchar_t));
+    if (!cmd) return FALSE;
+    wsprintfW(cmd, L"\"%s\" /select,\"", exe);
+    lstrcatW(cmd, path);
+    lstrcatW(cmd, L"\"");
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
+    const BOOL ok = CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+    if (ok) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
+    HeapFree(GetProcessHeap(), 0, cmd);
+    return ok;
+}
+
 /* Cierra la instancia en ejecución y espera a que termine. */
 static void CloseRunningInstance(void)
 {
