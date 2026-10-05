@@ -695,6 +695,9 @@ typedef struct {
     WCHAR icon[300];
     RECT  rc;
     BOOL  tile;
+    /* entrada con muelle: ap 0→1 (posición y opacidad), tras `delay`; el icono hace "pop" al llegar */
+    float ap, av, delay, is, isv;
+    BOOL  iconUp;
 } Res;
 
 static struct {
@@ -715,6 +718,12 @@ static struct {
     int      labelY[2];             /* sin texto: "Recientes" y "Archivos recientes" (-1 si no van) */
     int      w, h, maxH, ox, oy;
     DWORD    openedAt, closedAt;
+    DWORD    bgBase;                /* color medio del fondo: hacia él se funde lo que entra */
+    /* animación: alto del panel y resaltado que se desliza entre resultados */
+    float    hcur, hv;
+    float    sx, sy, sw, sh, svx, svy, svw, svh;
+    BOOL     selInit, anim;
+    LARGE_INTEGER last;
 } L;
 
 static int SS(int v) { return MulDiv(v, (int)L.dpi, 96); }
@@ -928,39 +937,69 @@ static int Layout(void)
     return min(L.maxH, y + SS(8));
 }
 
-static void BlitIcon(Canvas *c, const IconC *ic, int x, int y, int size)
+/* Icono (premultiplicado) centrado en (cx, cy), escalado y con opacidad: bilineal. */
+static void BlitIcon(Canvas *c, const IconC *ic, float cx, float cy, float scale, float alpha)
 {
-    if (!ic || !ic->bits) return;
-    const int ox = x + (size - ic->w) / 2, oy = y + (size - ic->h) / 2;
+    if (!ic || !ic->bits || scale < 0.02f || alpha < 0.004f) return;
+    alpha = min(1.0f, alpha);
+    const float w = ic->w * scale, h = ic->h * scale, x0f = cx - w * 0.5f, y0f = cy - h * 0.5f, inv = 1.0f / scale;
+    const int x0 = max(0, (int)floorf(x0f)), x1 = min(c->w, (int)ceilf(x0f + w));
+    const int y0 = max(0, (int)floorf(y0f)), y1 = min(c->h, (int)ceilf(y0f + h));
+    const int W = ic->w, H = ic->h;
     GdiFlush();
-    for (int j = 0; j < ic->h; ++j) {
-        const int py = oy + j;
-        if (py < 0 || py >= c->h) continue;
-        for (int i = 0; i < ic->w; ++i) {
-            const int px = ox + i;
-            if (px < 0 || px >= c->w) continue;
-            const DWORD s = ic->bits[j * ic->w + i], a = s >> 24;
-            if (!a) continue;
-            DWORD *d = &c->px[py * c->w + px];
-            if (a == 255) { *d = s & 0xFFFFFF; continue; }
-            const DWORD ia = 255 - a;
-            const DWORD rb = ((s & 0xFF00FF) + ((((*d & 0xFF00FF) * ia) >> 8) & 0xFF00FF)) & 0xFF00FF;
-            const DWORD g  = ((s & 0x00FF00) + ((((*d & 0x00FF00) * ia) >> 8) & 0x00FF00)) & 0x00FF00;
-            *d = rb | g;
+    for (int y = y0; y < y1; ++y) {
+        const float fy = (y + 0.5f - y0f) * inv - 0.5f;
+        const int iy = (int)floorf(fy);
+        const float ty = fy - iy;
+        for (int x = x0; x < x1; ++x) {
+            const float fx = (x + 0.5f - x0f) * inv - 0.5f;
+            const int ix = (int)floorf(fx);
+            const float tx = fx - ix;
+            float acc[4] = { 0, 0, 0, 0 };
+            for (int q = 0; q < 4; ++q) {
+                const int sx = ix + (q & 1), sy = iy + (q >> 1);
+                if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
+                const float wq = ((q & 1) ? tx : 1 - tx) * ((q >> 1) ? ty : 1 - ty);
+                const DWORD p = ic->bits[sy * W + sx];
+                acc[0] += (p & 255) * wq; acc[1] += ((p >> 8) & 255) * wq; acc[2] += ((p >> 16) & 255) * wq; acc[3] += (p >> 24) * wq;
+            }
+            const float a = acc[3] * alpha;
+            if (a < 0.5f) continue;
+            DWORD *d = &c->px[y * c->w + x];
+            const float ia = 1.0f - a / 255.0f;
+            DWORD o = 0;
+            for (int ch = 0; ch < 3; ++ch) {
+                const float v = ((*d >> (ch * 8)) & 255) * ia + acc[ch] * alpha;
+                o |= (DWORD)max(0, min(255, (int)(v + 0.5f))) << (ch * 8);
+            }
+            *d = o;
         }
     }
 }
 
+static float Clamp01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+
+/* Pide el icono; la primera vez que llega empieza su "pop" con rebote. */
+static const IconC *RowIcon(Res *r, int px)
+{
+    const IconC *ic = GetIcon(r->icon, px);
+    if (ic && !r->iconUp) { r->iconUp = TRUE; r->is = 0.45f; r->isv = 0; }
+    return ic;
+}
+
+static void Kick(void);
+
 static void Paint(void)
 {
     if (!L.hwnd) return;
-    if (L.cv.w != L.w || L.cv.h != L.h) {
+    const int H = max(SS(QH) + 2, min(L.bg.h, (int)(L.hcur + 0.5f)));
+    if (L.cv.w != L.w || L.cv.h != H) {
         Canvas_Free(&L.cv);
-        if (!Canvas_Init(&L.cv, L.w, L.h)) return;
+        if (!Canvas_Init(&L.cv, L.w, H)) return;
     }
     Canvas *c = &L.cv;
     GdiFlush();
-    for (int y = 0; y < L.h; ++y) CopyMemory(&c->px[y * c->w], &L.bg.px[min(y, L.bg.h - 1) * L.bg.w], (SIZE_T)L.w * 4);
+    for (int y = 0; y < H; ++y) CopyMemory(&c->px[y * c->w], &L.bg.px[y * L.bg.w], (SIZE_T)L.w * 4);
     const int pad = SS(LPAD), qh = SS(QH);
 
     /* caja de búsqueda */
@@ -987,51 +1026,143 @@ static void Paint(void)
         ReleaseSRWLockShared(&s_flock);
         if (!ready) Gfx_Text(c, L.fSub, L"Indexando\x2026", L.w - pad - SS(100), 0, SS(96), qh, L.fg3, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
-    Gfx_FillRRect(c, (float)pad, (float)qh, (float)(L.w - 2 * pad), 1.0f, 0, L.line, 1.0f);
+    if (H > qh + 1) Gfx_FillRRect(c, (float)pad, (float)qh, (float)(L.w - 2 * pad), 1.0f, 0, L.line, Clamp01((L.hcur - qh) / SS(16)));
 
-    if (L.labelY[0] >= 0) Gfx_Text(c, L.fLabel, L"Recientes", pad + SS(8), L.labelY[0], L.w, SS(LABELH), L.fg2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    if (L.labelY[1] >= 0) Gfx_Text(c, L.fLabel, L"Archivos recientes", pad + SS(8), L.labelY[1], L.w, SS(LABELH), L.fg2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    /* rótulos: entran con la primera fila de su sección */
+    if (L.labelY[0] >= 0 && L.ngrid)
+        Gfx_Text(c, L.fLabel, L"Recientes", pad + SS(8), L.labelY[0], L.w, SS(LABELH), Gfx_Mix(L.bgBase, L.fg2, Clamp01(L.res[0].ap)), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    if (L.labelY[1] >= 0 && L.nres > L.ngrid)
+        Gfx_Text(c, L.fLabel, L"Archivos recientes", pad + SS(8), L.labelY[1], L.w, SS(LABELH), Gfx_Mix(L.bgBase, L.fg2, Clamp01(L.res[L.ngrid].ap)), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     if (!L.qlen && !L.nres)
         Gfx_Text(c, L.fSub, L"Escribe para buscar entre tus apps y archivos", 0, qh + SS(6), L.w, SS(30), L.fg3, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
+    /* el resaltado, que se desliza de un resultado a otro */
+    if (L.sel >= 0 && L.sel < L.nres && L.selInit)
+        Gfx_FillRRect(c, L.sx, L.sy, L.sw, L.sh, (float)SS(8), L.hl, Clamp01(L.res[L.sel].ap));
+
     for (int i = 0; i < L.nres; ++i) {
-        const Res *r = &L.res[i];
-        const RECT *rc = &r->rc;
-        if (rc->bottom > L.h) break;
-        const int rw = rc->right - rc->left, rh = rc->bottom - rc->top;
-        if (i == L.sel) Gfx_FillRRect(c, (float)rc->left, (float)rc->top, (float)rw, (float)rh, (float)SS(8), L.hl, 1.0f);
+        Res *r = &L.res[i];
+        const float a = Clamp01(r->ap);
+        if (a < 0.01f) continue;
+        const int lift = (int)lroundf((1.0f - r->ap) * SS(14));     /* sube a su sitio (y rebota) */
+        RECT rc = r->rc;
+        OffsetRect(&rc, 0, lift);
+        if (rc.top >= H) continue;
+        const int rw = rc.right - rc.left, rh = rc.bottom - rc.top;
         if (r->tile) {
             const int is = SS(44);
-            BlitIcon(c, GetIcon(r->icon, is), rc->left + (rw - is) / 2, rc->top + SS(10), is);
-            Gfx_Text(c, L.fSub, r->title, rc->left + SS(4), rc->top + SS(10) + is + SS(4), rw - SS(8), SS(32), L.fg,
+            const float pop = (0.55f + 0.45f * r->ap) * (r->iconUp ? r->is : 1.0f);
+            BlitIcon(c, RowIcon(r, is), rc.left + rw * 0.5f, rc.top + SS(10) + is * 0.5f, pop, a);
+            Gfx_Text(c, L.fSub, r->title, rc.left + SS(4), rc.top + SS(10) + is + SS(4), rw - SS(8), SS(32), Gfx_Mix(L.bgBase, L.fg, a),
                      DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
             continue;
         }
-        const int is = r->kind == RK_APP ? SS(32) : SS(28), ix = rc->left + SS(8), iy = rc->top + (rh - is) / 2;
-        if (r->kind == RK_WEB) Gfx_Text(c, L.fIcon, L"\xE774", ix, rc->top, is, rh, L.fg2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        else BlitIcon(c, GetIcon(r->icon, is), ix, iy, is);
-        const int lx = ix + is + SS(12), lw = rw - (lx - rc->left) - SS(80), half = rh / 2;
-        Gfx_Text(c, L.fTitle, r->title, lx, rc->top + SS(3), lw, half, L.fg, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
-        Gfx_Text(c, L.fSub, r->sub, lx, rc->top + half + SS(1), lw, half - SS(3), L.fg2, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_PATH_ELLIPSIS);
+        const int is = r->kind == RK_APP ? SS(32) : SS(28), ix = rc.left + SS(8);
+        if (r->kind == RK_WEB) Gfx_Text(c, L.fIcon, L"\xE774", ix, rc.top, is, rh, Gfx_Mix(L.bgBase, L.fg2, a), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        else BlitIcon(c, RowIcon(r, is), ix + is * 0.5f, rc.top + rh * 0.5f, r->iconUp ? r->is : 1.0f, a);
+        const int lx = ix + is + SS(12), lw = rw - (lx - rc.left) - SS(80), half = rh / 2;
+        Gfx_Text(c, L.fTitle, r->title, lx, rc.top + SS(3), lw, half, Gfx_Mix(L.bgBase, L.fg, a), DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
+        Gfx_Text(c, L.fSub, r->sub, lx, rc.top + half + SS(1), lw, half - SS(3), Gfx_Mix(L.bgBase, L.fg2, a), DT_LEFT | DT_TOP | DT_SINGLELINE | DT_PATH_ELLIPSIS);
         static const WCHAR *const kKind[] = { L"App", L"Archivo", L"Carpeta", L"Web" };
-        if (L.qlen) Gfx_Text(c, L.fSub, kKind[r->kind], rc->right - SS(80), rc->top, SS(70), rh, L.fg3, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        if (L.qlen) Gfx_Text(c, L.fSub, kKind[r->kind], rc.right - SS(80), rc.top, SS(70), rh, Gfx_Mix(L.bgBase, L.fg3, a), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
     Pop_Present(&L.pop, c);
+    /* un icono que acaba de llegar empieza su "pop": que haya fotogramas */
+    for (int i = 0; i < L.nres; ++i) if (L.res[i].iconUp && L.res[i].is < 0.999f && !L.anim) { Kick(); break; }
+}
+
+/* ── animación (el "Rebote" configurado decide cuánto rebota) ── */
+static void Spring(float *x, float *v, float target, float dt, float k, float z)
+{
+    const float acc = (target - *x) * k - *v * 2.0f * sqrtf(k) * z;
+    *v += acc * dt; *x += *v * dt;
+}
+
+static BOOL Settled(float *x, float *v, float t, float eps, float veps)
+{
+    if (fabsf(*x - t) < eps && fabsf(*v) < veps) { *x = t; *v = 0; return TRUE; }
+    return FALSE;
+}
+
+static void Kick(void)
+{
+    if (!L.hwnd) return;
+    /* el reloj sólo se pone a cero si estaba parado (si no, cada tecla frenaría los muelles) */
+    if (!L.anim) { QueryPerformanceCounter(&L.last); L.anim = TRUE; }
+    Pop_Hold(&L.pop, TRUE);
+}
+
+static BOOL Advance(void)
+{
+    LARGE_INTEGER t, f;
+    QueryPerformanceCounter(&t);
+    QueryPerformanceFrequency(&f);
+    float dt = (float)(t.QuadPart - L.last.QuadPart) / (float)f.QuadPart;
+    L.last = t;
+    if (dt > 0.05f) dt = 0.05f;
+    const float z = Pop_Zeta();
+    BOOL moving = FALSE;
+
+    for (int k = 0; k < 2; ++k) Spring(&L.hcur, &L.hv, (float)L.h, dt * 0.5f, 240.0f, max(0.42f, z));
+    if (!Settled(&L.hcur, &L.hv, (float)L.h, 0.4f, 3.0f)) moving = TRUE;
+
+    if (L.sel >= 0 && L.sel < L.nres) {
+        const RECT *rc = &L.res[L.sel].rc;
+        const float tx = (float)rc->left, ty = (float)rc->top, tw = (float)(rc->right - rc->left), th = (float)(rc->bottom - rc->top);
+        if (!L.selInit) { L.sx = tx; L.sy = ty; L.sw = tw; L.sh = th; L.svx = L.svy = L.svw = L.svh = 0; L.selInit = TRUE; }
+        const float zs = min(1.0f, z + 0.18f);
+        for (int k = 0; k < 2; ++k) {
+            Spring(&L.sx, &L.svx, tx, dt * 0.5f, 560.0f, zs);
+            Spring(&L.sy, &L.svy, ty, dt * 0.5f, 560.0f, zs);
+            Spring(&L.sw, &L.svw, tw, dt * 0.5f, 560.0f, zs);
+            Spring(&L.sh, &L.svh, th, dt * 0.5f, 560.0f, zs);
+        }
+        BOOL ok = Settled(&L.sx, &L.svx, tx, 0.3f, 3.0f);
+        ok = Settled(&L.sy, &L.svy, ty, 0.3f, 3.0f) && ok;
+        ok = Settled(&L.sw, &L.svw, tw, 0.3f, 3.0f) && ok;
+        ok = Settled(&L.sh, &L.svh, th, 0.3f, 3.0f) && ok;
+        if (!ok) moving = TRUE;
+    } else L.selInit = FALSE;
+
+    for (int i = 0; i < L.nres; ++i) {
+        Res *r = &L.res[i];
+        if (r->delay > 0) { r->delay -= dt; moving = TRUE; continue; }
+        for (int k = 0; k < 2; ++k) Spring(&r->ap, &r->av, 1.0f, dt * 0.5f, 300.0f, max(0.40f, z));
+        if (!Settled(&r->ap, &r->av, 1.0f, 0.002f, 0.02f)) moving = TRUE;
+        if (r->iconUp) {
+            for (int k = 0; k < 2; ++k) Spring(&r->is, &r->isv, 1.0f, dt * 0.5f, 430.0f, max(0.30f, z * 0.8f));
+            if (!Settled(&r->is, &r->isv, 1.0f, 0.002f, 0.02f)) moving = TRUE;
+        }
+    }
+    return moving;
 }
 
 static void Relayout(void)
 {
-    const int h = Layout();
-    if (h != L.h) {
-        L.h = h;
-        Pop_SetBounds(&L.pop, L.ox, L.oy, L.w, L.h);
-    }
+    L.h = Layout();
+    Kick();
     Paint();
 }
 
+/* Nuevos resultados: los que siguen en su sitio conservan su estado; los que cambian
+ * entran escalonados desde abajo. */
 static void Rebuild_UI(void)
 {
+    static Res old[MAX_RES + RECENT_N + GRID_N];
+    const int oldN = L.nres;
+    CopyMemory(old, L.res, sizeof(Res) * oldN);
     if (L.qlen) BuildResults(); else BuildEmpty();
+    int fresh = 0;
+    for (int i = 0; i < L.nres; ++i) {
+        Res *r = &L.res[i];
+        if (i < oldN && old[i].kind == r->kind && old[i].tile == r->tile && !lstrcmpiW(old[i].target, r->target)) {
+            r->ap = old[i].ap; r->av = old[i].av; r->delay = old[i].delay;
+            r->is = old[i].is; r->isv = old[i].isv; r->iconUp = old[i].iconUp;
+        } else {
+            r->ap = r->av = 0; r->is = 1; r->isv = 0; r->iconUp = FALSE;
+            r->delay = 0.018f * fresh++;
+        }
+    }
     L.sel = L.nres ? 0 : -1;
     Relayout();
 }
@@ -1125,7 +1256,7 @@ static void Paste(void)
 static void MoveSel(int dx, int dy)
 {
     if (!L.nres) return;
-    if (L.sel < 0) { L.sel = 0; Paint(); return; }
+    if (L.sel < 0) { L.sel = 0; Kick(); return; }
     int s = L.sel;
     if (L.sel < L.ngrid) {                          /* en la fila de apps */
         if (dx) s = max(0, min(L.ngrid - 1, s + dx));
@@ -1134,7 +1265,7 @@ static void MoveSel(int dx, int dy)
         if (dy < 0) s = s - 1 >= L.ngrid ? s - 1 : (L.ngrid ? 0 : s);
         else if (dy > 0) s = min(L.nres - 1, s + 1);
     }
-    if (s != L.sel) { L.sel = s; Paint(); }
+    if (s != L.sel) { L.sel = s; Kick(); }
 }
 
 static int HitRes(int x, int y)
@@ -1160,7 +1291,12 @@ static LRESULT CALLBACK LnProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_MOUSEACTIVATE: return MA_ACTIVATE;
     case WM_POPFRAME:
         Pop_Step(&L.pop);
-        if (L.hwnd && L.cv.px) Pop_Present(&L.pop, &L.cv);
+        if (!L.hwnd) return 0;
+        if (L.anim) {
+            const BOOL moving = Advance();
+            Paint();
+            if (!moving) { L.anim = FALSE; Pop_Hold(&L.pop, FALSE); }
+        } else if (L.cv.px) Pop_Present(&L.pop, &L.cv);
         return 0;
     case WM_LN_ICON: {                              /* llegaron iconos: un repintado por ráfaga */
         MSG more;
@@ -1224,7 +1360,7 @@ static LRESULT CALLBACK LnProc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
     case WM_MOUSEMOVE: {
         const int hit = HitRes((short)LOWORD(l), (short)HIWORD(l));
-        if (hit >= 0 && hit != L.sel) { L.sel = hit; Paint(); }
+        if (hit >= 0 && hit != L.sel) { L.sel = hit; Kick(); }
         return 0;
     }
     case WM_LBUTTONUP: {
@@ -1296,6 +1432,14 @@ static void Open(void)
         Pop_CaptureGlass(&L.glass, L.ox, L.oy, L.w, L.maxH, SS(28));
         Pop_PaintGlass(&L.bg, &L.glass, L.ox, L.oy, 0x1C1C1E, 0.62f);
     } else                                    Canvas_Clear(&L.bg, g_cfg.material == MAT_OLED ? 0x000000 : 0x161618);
+    {   /* su color medio: lo que entra se funde desde él */
+        GdiFlush();
+        unsigned long long acc[3] = { 0, 0, 0 };
+        int n = 0;
+        for (int i = 0; i < L.bg.w * L.bg.h; i += 37, ++n)
+            for (int ch = 0; ch < 3; ++ch) acc[ch] += (L.bg.px[i] >> (ch * 8)) & 255;
+        L.bgBase = n ? (DWORD)(acc[2] / n) << 16 | (DWORD)(acc[1] / n) << 8 | (DWORD)(acc[0] / n) : 0;
+    }
 
     L.q[0] = 0; L.qlen = L.caret = 0; L.selAll = FALSE; L.caretOn = TRUE;
     L.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED, LN_CLASS, L"Buscar", WS_POPUP,
@@ -1304,11 +1448,20 @@ static void Open(void)
     if (g_cfg.hideCapture) SetWindowDisplayAffinity(L.hwnd, WDA_EXCLUDEFROMCAPTURE);
     s_iconHwnd = L.hwnd;
     Pop_Open(&L.pop, L.hwnd, SS(30), (float)SS(18), 0.5f, 0.0f);
-    L.h = 0;
+    L.nres = 0;
     BuildEmpty();
+    /* nace como la barra de búsqueda sola y se despliega; las apps entran una tras otra */
+    for (int i = 0; i < L.nres; ++i) {
+        Res *r = &L.res[i];
+        r->ap = r->av = 0; r->is = 1; r->isv = 0; r->iconUp = FALSE;
+        r->delay = i < L.ngrid ? 0.06f + 0.032f * i : 0.10f + 0.03f * (i - L.ngrid);
+    }
     L.sel = L.nres ? 0 : -1;
+    L.selInit = FALSE; L.anim = FALSE;
     L.h = Layout();
-    Pop_SetBounds(&L.pop, L.ox, L.oy, L.w, L.h);
+    L.hcur = (float)SS(QH) + 2; L.hv = 0;
+    Pop_SetBounds(&L.pop, L.ox, L.oy, L.w, (int)L.hcur);
+    Kick();
     Paint();
     ShowWindow(L.hwnd, SW_SHOW);
     TakeFocus(L.hwnd);

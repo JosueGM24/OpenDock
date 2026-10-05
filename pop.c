@@ -117,14 +117,27 @@ static BOOL BuildStatic(Pop *p, int cw, int ch)
     p->base = (DWORD *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)W * H * 4);
     p->mask = (BYTE *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)cw * ch);
     if (!p->base || !p->mask) { FreeStatic(p); return FALSE; }
-    for (int y = 0; y < H; ++y)
+    /* lo de dentro del contenido (lejos de sus esquinas) lo tapa el propio contenido: ni sombra
+     * ni máscara que calcular ahí. Así rehacerlo en cada paso de un cambio de alto es barato. */
+    const int ir = (int)ceilf(p->radius) + 2;
+    const int ix0 = M + ir, ix1 = M + cw - ir, iy0 = T + ir, iy1 = T + ch - ir;
+    for (int y = 0; y < H; ++y) {
+        const BOOL midY = y >= iy0 && y < iy1;
         for (int x = 0; x < W; ++x) {
+            if (midY && x >= ix0 && x < ix1) {
+                p->base[y * W + x] = 0;
+                continue;
+            }
             const float a = ShadowA(p, x + 0.5f, y + 0.5f, (float)M, T - lift, (float)cw, ch + lift, p->radius);
             p->base[y * W + x] = (DWORD)(a * 255.0f + 0.5f) << 24;          /* negro premultiplicado */
         }
-    for (int y = 0; y < ch; ++y)
+    }
+    for (int y = 0; y < ch; ++y) {
+        const BOOL edgeY = y < ir || y >= ch - ir;      /* los bordes rectos cubren el píxel entero */
         for (int x = 0; x < cw; ++x)
-            p->mask[y * cw + x] = (BYTE)(Gfx_Cov(Gfx_SdRRect(x + 0.5f, y + 0.5f, 0, -lift, (float)cw, ch + lift, p->radius)) * 255.0f + 0.5f);
+            p->mask[y * cw + x] = !edgeY || (x >= ir && x < cw - ir) ? 255 :
+                (BYTE)(Gfx_Cov(Gfx_SdRRect(x + 0.5f, y + 0.5f, 0, -lift, (float)cw, ch + lift, p->radius)) * 255.0f + 0.5f);
+    }
     p->sw = cw; p->sh = ch;
     return TRUE;
 }
