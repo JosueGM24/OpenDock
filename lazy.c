@@ -54,6 +54,11 @@ LAZY(L"winmm.dll", BOOL, PlaySoundW, FALSE, (LPCWSTR s, HMODULE m, DWORD f), (s,
 /* dwmapi.dll */
 LAZY(L"dwmapi.dll", HRESULT, DwmGetWindowAttribute, E_FAIL, (HWND w, DWORD a, PVOID v, DWORD n), (w, a, v, n))
 LAZY(L"dwmapi.dll", HRESULT, DwmSetWindowAttribute, E_FAIL, (HWND w, DWORD a, LPCVOID v, DWORD n), (w, a, v, n))
+/* miniaturas en vivo de las ventanas (vista previa del dock) */
+LAZY(L"dwmapi.dll", HRESULT, DwmRegisterThumbnail, E_FAIL, (HWND d, HWND s, HANDLE *t), (d, s, t))
+LAZY(L"dwmapi.dll", HRESULT, DwmUnregisterThumbnail, E_FAIL, (HANDLE t), (t))
+LAZY(L"dwmapi.dll", HRESULT, DwmUpdateThumbnailProperties, E_FAIL, (HANDLE t, const void *p), (t, p))
+LAZY(L"dwmapi.dll", HRESULT, DwmQueryThumbnailSourceSize, E_FAIL, (HANDLE t, SIZE *s), (t, s))
 
 /* bthprops.cpl (Bluetooth) */
 LAZY(L"bthprops.cpl", HANDLE, BluetoothFindFirstRadio, NULL, (const void *p, HANDLE *r), (p, r))

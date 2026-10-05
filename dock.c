@@ -39,6 +39,10 @@
 #define TIMER_DSINK   7      /* ocultar a medias: un momento después de salir el cursor */
 #define SINK_DELAY    450
 #define TIMER_DPOLL   8      /* ocultar dock: dónde está el cursor (barato: 20 veces por segundo) */
+#define TIMER_DPREV   9      /* vista previa: el cursor lleva un momento sobre una app abierta */
+#define PREV_DELAY    400
+#define PREV_CLASS    L"OpenDock.DockPreview"
+#define PREV_MAX      8
 #define STATUS_MS     10000  /* repaso de seguridad: lo normal llega por avisos */
 #define MAX_ITEMS     48
 #define ICON_GAP      12
@@ -111,6 +115,7 @@ typedef struct {
     volatile LONG framePending; /* ya tiene un WM_DFRAME en la cola */
     DWORD    iconGen;           /* generación de la caché de iconos con la que se rehízo */
     UINT     pollEvery;         /* periodo actual de TIMER_DPOLL */
+    int      prevArm;           /* icono con la vista previa en espera (TIMER_DPREV), -1 ninguno */
     DockItem pinCache[MAX_ITEMS];   /* anclados ya resueltos (a su tamaño de icono) */
     int      npinCache;
     DWORD    pinSig;
@@ -122,6 +127,26 @@ static Dock  s_docks[MAX_DOCKS];
 static Dock *s_d = &s_docks[0];
 #define D (*s_d)
 #define PRIMARY (&s_docks[0])
+
+/* Vista previa de las ventanas de una app (una sola a la vez, del dock que la abrió). */
+static struct {
+    HWND    hwnd;
+    Dock   *dock;
+    wchar_t key[MAX_PATH];      /* ItemKey de la app: los índices cambian al reescanear */
+    wchar_t suppress[MAX_PATH]; /* tras un clic en su icono no se reabre hasta salir de él */
+    HWND    wins[PREV_MAX];
+    HANDLE  thumb[PREV_MAX];    /* miniatura DWM (NULL: minimizada o sin imagen) */
+    RECT    card[PREV_MAX], area[PREV_MAX], close[PREV_MAX];
+    int     n, hot, pressed;
+    BOOL    hotClose, tracking;
+    int     cx, bottom;         /* centro x y borde de abajo, en pantalla */
+    DWORD   outSince;           /* desde cuándo el cursor no está ni en ella ni en su icono */
+    Canvas  cv;
+    HFONT   font, glyphs;
+    int     fontPx;
+} PV;
+static void PreviewClose(void);
+static BOOL PreviewOpenHere(void) { return PV.hwnd && PV.dock == s_d; }
 static HWINEVENTHOOK s_fgHook, s_winHook, s_moveHook;   /* únicos: se reparten a todos */
 
 static BOOL AnyShellOpen(void)
@@ -1204,7 +1229,7 @@ static void Tick(void)
     else D.slide = st;
     /* ocultar dock: sin el cursor baja hasta que su mitad queda bajo la pantalla; al
      * acercarlo sube con el rebote configurado */
-    const BOOL sunk = g_cfg.dockAutoHide && !D.inside && !D.atDock && !D.menuOpen && GetTickCount() - D.leaveAt >= SINK_DELAY;
+    const BOOL sunk = g_cfg.dockAutoHide && !D.inside && !D.atDock && !D.menuOpen && !PreviewOpenHere() && GetTickCount() - D.leaveAt >= SINK_DELAY;
     const float kt = sunk ? 1.0f : 0.0f, z = sunk ? 0.95f : min(1.0f, Pop_Zeta() + 0.12f);
     if (fabsf(kt - D.sink) > 0.002f || fabsf(D.sinkV) > 0.02f) {
         for (int k = 0; k < 2; ++k) Spring2(&D.sink, &D.sinkV, kt, dt * 0.5f, sunk ? 140.0f : 260.0f, z);
@@ -1255,8 +1280,8 @@ static void FocusWindow(HWND w)
 /* Clic en una app:
  * - sin ventanas: se abre;
  * - una ventana: al frente, o se minimiza si ya lo estaba;
- * - varias: si la app no está al frente, trae la más reciente; si ya lo está, pasa a la
- *   siguiente (la que lleva más tiempo detrás), como recorrerlas con el Dock de macOS. */
+ * - varias: el clic abre su vista previa (ver más abajo) y se elige ahí; Activate solo
+ *   recorre las ventanas si se llama sin ella (p. ej. desde el teclado). */
 static void Activate(int i)
 {
     if (i < 0 || i >= D.count) return;
@@ -1278,6 +1303,319 @@ static void Activate(int i)
     }
     StartHop(it, FALSE);
     FocusWindow(front ? it->wins[n - 1] : it->wins[0]);    /* wins[] va en orden z: [0] arriba */
+}
+
+/* ───────────────────────── Vista previa de ventanas ─────────────────────────
+ * Con el cursor un momento sobre una app abierta (o con un clic si tiene varias ventanas)
+ * sale encima de su icono una tarjeta por ventana con su miniatura en vivo (DWM), su título
+ * y una ✕ para cerrarla; clic en la tarjeta = esa ventana al frente. La ventana de la vista
+ * previa es normal (no layered): DWM solo compone miniaturas en ventanas así. Mientras está
+ * abierta, un temporizador de 50 ms mira el cursor; cerrada no queda nada en marcha. */
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
+#endif
+#define PREV_TIMER  1
+
+static int LiveWins(const DockItem *it)
+{
+    int n = 0;
+    for (int k = 0; k < it->nwin; ++k) if (IsWindow(it->wins[k])) ++n;
+    return n;
+}
+
+static DockItem *ItemByKey(const wchar_t *key)
+{
+    for (int i = 0; i < D.count; ++i) if (!lstrcmpiW(ItemKey(&D.items[i]), key)) return &D.items[i];
+    return NULL;
+}
+
+static void PreviewDropThumbs(void)
+{
+    for (int i = 0; i < PREV_MAX; ++i)
+        if (PV.thumb[i]) { DwmUnregisterThumbnail(PV.thumb[i]); PV.thumb[i] = NULL; }
+}
+
+/* Coloca las tarjetas de las ventanas vivas de it y ajusta la ventana (con el dock de PV en D). */
+static void PreviewBuild(const DockItem *it)
+{
+    PreviewDropThumbs();
+    PV.n = 0;
+    for (int k = 0; k < it->nwin && PV.n < PREV_MAX; ++k)
+        if (IsWindow(it->wins[k])) PV.wins[PV.n++] = it->wins[k];
+    if (!PV.n) { PreviewClose(); return; }
+
+    if (PV.fontPx != DS(12) || !PV.font) {
+        if (PV.font) DeleteObject(PV.font);
+        if (PV.glyphs) DeleteObject(PV.glyphs);
+        PV.fontPx = DS(12);
+        PV.font = Gfx_Font(Gfx_UiFace(), DS(12), FW_SEMIBOLD, CLEARTYPE_QUALITY);
+        PV.glyphs = Gfx_Font(Gfx_IconFace(), DS(9), FW_NORMAL, CLEARTYPE_QUALITY);
+    }
+    const int O = DS(8), C = DS(8), T = DS(24), G = DS(6), margin = DS(12);
+    const int monW = D.mon.right - D.mon.left - 2 * margin;
+    int tw = DS(200);
+    if (2 * O + PV.n * (tw + 2 * C) + (PV.n - 1) * G > monW)        /* muchas: más pequeñas */
+        tw = max(DS(96), (monW - 2 * O - (PV.n - 1) * G) / PV.n - 2 * C);
+    const int th = tw * 5 / 8, cardW = tw + 2 * C, cardH = C + T + th + C;
+    const int winW = 2 * O + PV.n * cardW + (PV.n - 1) * G, winH = 2 * O + cardH;
+
+    for (int i = 0; i < PV.n; ++i) {
+        const int x = O + i * (cardW + G), y = O, cs = DS(20);
+        SetRect(&PV.card[i], x, y, x + cardW, y + cardH);
+        SetRect(&PV.area[i], x + C, y + C + T, x + C + tw, y + C + T + th);
+        SetRect(&PV.close[i], x + C + tw - cs, y + C + (T - cs) / 2, x + C + tw, y + C + (T - cs) / 2 + cs);
+        if (IsIconic(PV.wins[i]) || FAILED(DwmRegisterThumbnail(PV.hwnd, PV.wins[i], &PV.thumb[i]))) { PV.thumb[i] = NULL; continue; }
+        SIZE src = { 0, 0 };
+        DwmQueryThumbnailSourceSize(PV.thumb[i], &src);
+        if (src.cx <= 0 || src.cy <= 0) { DwmUnregisterThumbnail(PV.thumb[i]); PV.thumb[i] = NULL; continue; }
+        const float k = min((float)tw / src.cx, (float)th / src.cy);
+        const int dw = max(1, (int)(src.cx * k)), dh = max(1, (int)(src.cy * k));
+        DWM_THUMBNAIL_PROPERTIES tp = { 0 };
+        tp.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY;
+        tp.rcDestination.left = PV.area[i].left + (tw - dw) / 2;
+        tp.rcDestination.top = PV.area[i].top + (th - dh) / 2;
+        tp.rcDestination.right = tp.rcDestination.left + dw;
+        tp.rcDestination.bottom = tp.rcDestination.top + dh;
+        tp.opacity = 255;
+        tp.fVisible = TRUE;
+        tp.fSourceClientAreaOnly = FALSE;
+        DwmUpdateThumbnailProperties(PV.thumb[i], &tp);
+    }
+
+    int x = PV.cx - winW / 2;
+    x = max((int)D.mon.left + margin, min((int)D.mon.right - margin - winW, x));
+    if (PV.hot >= PV.n) PV.hot = -1;
+    Canvas_Free(&PV.cv);
+    SetWindowPos(PV.hwnd, HWND_TOPMOST, x, PV.bottom - winH, winW, winH, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    InvalidateRect(PV.hwnd, NULL, FALSE);
+}
+
+static void PreviewClose(void)
+{
+    if (!PV.hwnd) return;
+    const HWND h = PV.hwnd;
+    PV.hwnd = NULL;             /* antes de destruir: WM_DESTROY ya no vuelve a entrar aquí */
+    PreviewDropThumbs();
+    KillTimer(h, PREV_TIMER);
+    DestroyWindow(h);
+    Canvas_Free(&PV.cv);
+    PV.dock = NULL;
+    PV.n = 0;
+}
+
+/* Abre (o cambia a) la vista previa del icono i del dock actual. */
+static void PreviewOpen(int i)
+{
+    if (i < 0 || i >= D.count || !LiveWins(&D.items[i]) || D.menuOpen) return;
+    DockItem *it = &D.items[i];
+    if (PV.hwnd && PV.dock != s_d) PreviewClose();     /* la tenía el dock de otro monitor */
+    if (!PV.hwnd) {
+        PV.hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, PREV_CLASS, L"OpenDock Vista previa",
+                                  WS_POPUP, 0, 0, 1, 1, NULL, NULL, g_inst, NULL);
+        if (!PV.hwnd) return;
+        const DWORD round = 2;      /* DWMWCP_ROUND */
+        DwmSetWindowAttribute(PV.hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &round, sizeof(round));
+        DockLook L;
+        LoadDockLook(&L);
+        const DWORD edge = Gfx_Mix(L.panel, L.bar, L.light ? 0.12f : 0.16f);
+        const COLORREF border = RGB((edge >> 16) & 255, (edge >> 8) & 255, edge & 255);
+        DwmSetWindowAttribute(PV.hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
+        if (g_cfg.hideCapture) SetWindowDisplayAffinity(PV.hwnd, WDA_EXCLUDEFROMCAPTURE);
+        SetTimer(PV.hwnd, PREV_TIMER, 50, NULL);
+    }
+    PV.dock = s_d;
+    lstrcpynW(PV.key, ItemKey(it), MAX_PATH);
+    PV.hot = PV.pressed = -1;
+    PV.hotClose = FALSE;
+    PV.outSince = 0;
+    /* encima del icono, a la altura que alcanza con la lupa (no salta con los botes) */
+    const float base = (float)Base(), gap = (float)DS(ICON_GAP);
+    float x = FirstIconX();
+    for (int k = 0; k < i; ++k) x += base * D.items[k].scale + gap;
+    PV.cx = D.mon.left + (int)(x + base * it->scale * 0.5f);
+    const int winTop = D.mon.bottom - WinH() + D.sinkPx;
+    PV.bottom = winTop + (int)(PanelBottom() - DS(DOCK_PADY) - base * MAXMAG) - DS(8);
+    PreviewBuild(it);
+}
+
+/* El cursor se movió sobre el dock actual: abrir la vista previa tras un momento, o cambiarla
+ * al momento si ya hay una abierta. */
+static void PreviewHover(void)
+{
+    const DockItem *it = D.hot >= 0 && D.hot < D.count ? &D.items[D.hot] : NULL;
+    const wchar_t *key = it ? ItemKey(it) : NULL;
+    if (PV.suppress[0] && (!key || lstrcmpiW(key, PV.suppress))) PV.suppress[0] = 0;
+    if (!it || !LiveWins(it) || D.menuOpen || PV.suppress[0]) {
+        if (D.prevArm >= 0) { KillTimer(D.hwnd, TIMER_DPREV); D.prevArm = -1; }
+        return;
+    }
+    if (PV.hwnd) {
+        if (PV.dock != s_d || lstrcmpiW(PV.key, key)) PreviewOpen(D.hot);
+        return;
+    }
+    if (D.prevArm != D.hot) { D.prevArm = D.hot; SetTimer(D.hwnd, TIMER_DPREV, PREV_DELAY, NULL); }
+}
+
+static void PreviewPaint(HDC dc)
+{
+    RECT rc;
+    GetClientRect(PV.hwnd, &rc);
+    if (rc.right <= 0 || rc.bottom <= 0) return;
+    if (PV.cv.w != rc.right || PV.cv.h != rc.bottom) {
+        Canvas_Free(&PV.cv);
+        if (!Canvas_Init(&PV.cv, rc.right, rc.bottom)) return;
+    }
+    DockLook L;
+    LoadDockLook(&L);
+    Canvas *c = &PV.cv;
+    Canvas_Clear(c, L.panel);
+    const DockItem *it = ItemByKey(PV.key);
+    if (it && D.iconGen != s_iconGen) it = NULL;        /* iconos de una caché ya vaciada */
+    const int T = DS(24), is = DS(16);
+    for (int i = 0; i < PV.n; ++i) {
+        const RECT *r = &PV.card[i], *a = &PV.area[i];
+        const BOOL hot = i == PV.hot;
+        if (hot) Gfx_FillRRect(c, (float)r->left, (float)r->top, (float)(r->right - r->left), (float)(r->bottom - r->top),
+                               (float)DS(10), Gfx_Mix(L.panel, L.bar, L.light ? 0.08f : 0.10f), 1.0f);
+        /* fondo del hueco de la miniatura: se ve si la ventana no llena su proporción */
+        Gfx_FillRRect(c, (float)a->left, (float)a->top, (float)(a->right - a->left), (float)(a->bottom - a->top),
+                      (float)DS(6), Gfx_Mix(L.panel, L.bar, 0.05f), 1.0f);
+        const int ty = a->top - T;
+        if (it) BlitIcon(c, it, (float)(a->left + is / 2), (float)(ty + (T + is) / 2), (float)is);
+        wchar_t title[128];
+        if (GetWindowTextW(PV.wins[i], title, 128) <= 0) lstrcpynW(title, it ? it->name : L"", 128);
+        const int tx = a->left + (it ? is + DS(6) : 0), tr = hot ? PV.close[i].left - DS(4) : a->right;
+        Gfx_Text(c, PV.font, title, tx, ty, max(0, tr - tx), T, L.bar, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+        if (!PV.thumb[i] && it) {           /* minimizada: su icono en grande */
+            const float s = min(a->right - a->left, a->bottom - a->top) * 0.55f;
+            BlitIcon(c, it, (a->left + a->right) * 0.5f, (a->top + a->bottom) * 0.5f + s * 0.5f, s);
+        }
+        if (hot) {
+            const RECT *x = &PV.close[i];
+            const float d = (float)(x->right - x->left);
+            Gfx_FillCircle(c, x->left + d * 0.5f, x->top + d * 0.5f, d * 0.5f,
+                           PV.hotClose ? 0xE5443C : Gfx_Mix(L.panel, L.bar, 0.18f), 1.0f);
+            Gfx_Text(c, PV.glyphs, L"\xE8BB", x->left, x->top, x->right - x->left, x->bottom - x->top,
+                     PV.hotClose ? 0xFFFFFF : L.bar, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        }
+    }
+    GdiFlush();
+    BitBlt(dc, 0, 0, rc.right, rc.bottom, c->dc, 0, 0, SRCCOPY);
+}
+
+static int PreviewHit(POINT p, BOOL *onClose)
+{
+    *onClose = FALSE;
+    for (int i = 0; i < PV.n; ++i)
+        if (PtInRect(&PV.card[i], p)) { *onClose = PtInRect(&PV.close[i], p); return i; }
+    return -1;
+}
+
+/* Cada 50 ms con la vista previa abierta (con su dock en D). */
+static void PreviewCheck(void)
+{
+    const DockItem *it = D.hwnd ? ItemByKey(PV.key) : NULL;
+    if (!it || D.fullscreen || D.shellOpen || D.menuOpen || D.sink > 0.05f || (GetAsyncKeyState(VK_ESCAPE) & 0x8000)) {
+        PreviewClose();
+        return;
+    }
+    /* cambiaron sus ventanas (se abrió o cerró alguna): se rehace */
+    int n = 0;
+    BOOL same = TRUE;
+    for (int k = 0; k < it->nwin; ++k) {
+        if (!IsWindow(it->wins[k])) continue;
+        if (n >= PREV_MAX || PV.wins[n] != it->wins[k]) same = FALSE;
+        ++n;
+    }
+    if (!same || min(n, PREV_MAX) != PV.n) { PreviewBuild(it); if (!PV.hwnd) return; }
+
+    POINT pt;
+    GetCursorPos(&pt);
+    RECT wr;
+    GetWindowRect(PV.hwnd, &wr);
+    const BOOL inside = PtInRect(&wr, pt);
+    const BOOL onIcon = D.inside && D.hot >= 0 && D.hot < D.count && &D.items[D.hot] == it;
+    if (!inside && ((GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) | GetAsyncKeyState(VK_MBUTTON)) & 0x8000)
+        && WindowFromPoint(pt) != D.hwnd) { PreviewClose(); return; }      /* clic en otra parte */
+    if (inside || onIcon) PV.outSince = 0;
+    else if (!PV.outSince) PV.outSince = GetTickCount() | 1;
+    else if (GetTickCount() - PV.outSince >= 300) PreviewClose();
+}
+
+static LRESULT PreviewProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    switch (m) {
+    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+    case WM_ERASEBKGND:    return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(h, &ps);
+        PreviewPaint(dc);
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_TIMER:
+        if (w == PREV_TIMER) PreviewCheck();
+        return 0;
+    case WM_MOUSEMOVE: {
+        if (!PV.tracking) {
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 };
+            PV.tracking = TrackMouseEvent(&tme);
+        }
+        POINT p = { (short)LOWORD(l), (short)HIWORD(l) };
+        BOOL onClose;
+        const int hot = PreviewHit(p, &onClose);
+        if (hot != PV.hot || onClose != PV.hotClose) { PV.hot = hot; PV.hotClose = onClose; InvalidateRect(h, NULL, FALSE); }
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        PV.tracking = FALSE;
+        if (PV.hot >= 0) { PV.hot = -1; PV.hotClose = FALSE; InvalidateRect(h, NULL, FALSE); }
+        return 0;
+    case WM_LBUTTONDOWN:
+    case WM_MBUTTONDOWN: {
+        POINT p = { (short)LOWORD(l), (short)HIWORD(l) };
+        BOOL onClose;
+        PV.pressed = PreviewHit(p, &onClose);
+        return 0;
+    }
+    case WM_LBUTTONUP:
+    case WM_MBUTTONUP: {
+        POINT p = { (short)LOWORD(l), (short)HIWORD(l) };
+        BOOL onClose;
+        const int i = PreviewHit(p, &onClose);
+        if (i < 0 || i != PV.pressed) return 0;
+        PV.pressed = -1;
+        const HWND win = PV.wins[i];
+        if (onClose || m == WM_MBUTTONUP) {
+            PostMessageW(win, WM_CLOSE, 0, 0);      /* la tarjeta se va cuando la ventana se cierre */
+        } else {
+            DockItem *it = ItemByKey(PV.key);
+            if (it) StartHop(it, FALSE);
+            PreviewClose();
+            FocusWindow(win);
+        }
+        return 0;
+    }
+    case WM_DESTROY:
+        if (PV.hwnd == h) { PV.hwnd = NULL; PreviewDropThumbs(); Canvas_Free(&PV.cv); PV.dock = NULL; PV.n = 0; }
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+/* Mientras se atiende un mensaje de la vista previa, D es el dock que la abrió. */
+static LRESULT CALLBACK PreviewProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (!PV.dock || PV.hwnd != h) return m == WM_MOUSEACTIVATE ? MA_NOACTIVATE : DefWindowProcW(h, m, w, l);
+    Dock *o = s_d;
+    s_d = PV.dock;
+    const LRESULT r = PreviewProcFor(h, m, w, l);
+    s_d = o;
+    return r;
 }
 
 /* ───────────────────────── Clic derecho ─────────────────────────
@@ -1551,6 +1889,7 @@ static void AppMenu(int i, POINT at)
     ADD(IDM_PREFS, L"Ajustes del dock\x2026", 0xE713, 0);
     #undef ADD
 
+    PreviewClose();
     D.menuOpen = TRUE;                           /* con el menú abierto el dock no se esconde */
     const int cmd = Menu_Track(m, n, at);
     D.menuOpen = FALSE;
@@ -1839,6 +2178,7 @@ static void DockApplyFullscreen(void)
     const BOOL fs = D.fsSys || D.fsFg;
     if (!D.hwnd || fs == D.fullscreen) return;
     D.fullscreen = fs;
+    if (fs && PreviewOpenHere()) PreviewClose();
     ShowWindow(D.hwnd, fs ? SW_HIDE : SW_SHOWNOACTIVATE);
     if (!fs) { Rescan(); Kick(); }
 }
@@ -1903,12 +2243,15 @@ static LRESULT DockProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
         const int mx = (short)LOWORD(l);
         D.mouseX = (float)(mx - D.frame.w / 2);
         D.hot = HitIndex(mx);
+        PreviewHover();
         Kick();
         return 0;
     }
     case WM_MOUSELEAVE:
         D.inside = FALSE;
         D.hot = -1;
+        if (D.prevArm >= 0) { KillTimer(h, TIMER_DPREV); D.prevArm = -1; }
+        PV.suppress[0] = 0;
         D.leaveAt = GetTickCount();
         if (g_cfg.dockAutoHide) SetTimer(h, TIMER_DSINK, SINK_DELAY, NULL);
         Kick();             /* deja que las escalas vuelvan a 1 y luego se detiene */
@@ -1918,7 +2261,19 @@ static LRESULT DockProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     case WM_LBUTTONUP: {
         const int hit = HitIndex((short)LOWORD(l));
-        if (hit >= 0 && hit == D.pressed) Activate(hit);
+        if (hit >= 0 && hit == D.pressed) {
+            const DockItem *it = &D.items[hit];
+            const BOOL open = PreviewOpenHere() && !lstrcmpiW(PV.key, ItemKey(it));
+            if (D.prevArm >= 0) { KillTimer(h, TIMER_DPREV); D.prevArm = -1; }
+            if (LiveWins(it) >= 2 && !open) {           /* varias ventanas: se elige en la vista previa */
+                PV.suppress[0] = 0;
+                PreviewOpen(hit);
+            } else {
+                lstrcpynW(PV.suppress, ItemKey(it), MAX_PATH);  /* sin reabrirse bajo el cursor */
+                PreviewClose();
+                if (LiveWins(it) < 2) Activate(hit);
+            }
+        }
         D.pressed = -1;
         return 0;
     }
@@ -1950,6 +2305,10 @@ static LRESULT DockProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
             if (!D.fullscreen && !D.wantFrames && CaptureBackdrop()) Render();
         } else if (w == TIMER_DPOLL) {
             PollCursor();
+        } else if (w == TIMER_DPREV) {
+            KillTimer(h, TIMER_DPREV);
+            if (D.inside && D.hot >= 0 && D.hot == D.prevArm && !PV.suppress[0]) PreviewOpen(D.hot);
+            D.prevArm = -1;
         } else if (w == TIMER_DSINK) {
             KillTimer(h, TIMER_DSINK);
             Kick();
@@ -1985,6 +2344,8 @@ static LRESULT DockProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
         KillTimer(h, TIMER_DPEEK);
         KillTimer(h, TIMER_DSINK);
         KillTimer(h, TIMER_DPOLL);
+        KillTimer(h, TIMER_DPREV);
+        if (PreviewOpenHere()) PreviewClose();
         if (D.appbar) {
             APPBARDATA abd = { sizeof(abd) };
             abd.hWnd = h;
@@ -2033,6 +2394,14 @@ void Dock_Register(void)
     wc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
     wc.lpszClassName = DOCK_CLASS;
     RegisterClassExW(&wc);
+
+    WNDCLASSEXW pc = { sizeof(pc) };
+    pc.style         = CS_DROPSHADOW;
+    pc.lpfnWndProc   = PreviewProc;
+    pc.hInstance     = g_inst;
+    pc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
+    pc.lpszClassName = PREV_CLASS;
+    RegisterClassExW(&pc);
 }
 
 /* Crea el dock d en el monitor mon (el principal, si d es s_docks[0]). */
@@ -2043,7 +2412,7 @@ static void CreateDock(Dock *d, const RECT *mon)
     ZeroMemory(d, sizeof(*d));
     D.mon = *mon;
     DockMeasure();
-    D.hot = D.pressed = -1;
+    D.hot = D.pressed = D.prevArm = -1;
     QueryPerformanceFrequency(&D.freq);
     QueryPerformanceCounter(&D.last);
     const HWND h = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -2183,4 +2552,8 @@ void Dock_Raise(void)
 void Dock_Destroy(void)
 {
     DestroyDocks();
+    PreviewClose();
+    if (PV.font) { DeleteObject(PV.font); PV.font = NULL; }
+    if (PV.glyphs) { DeleteObject(PV.glyphs); PV.glyphs = NULL; }
+    PV.fontPx = 0;
 }
