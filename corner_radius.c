@@ -995,6 +995,7 @@ static void RegisterClasses(HINSTANCE hInst)
     Bar_Register();
     Dock_Register();
     Launcher_Register();
+    Menu_Register();
 }
 
 static void MessageLoop(void)

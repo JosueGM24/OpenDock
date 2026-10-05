@@ -18,7 +18,7 @@ if not exist sqlite3.c (
 )
 rc /nologo /fo app.res app.rc || exit /b 1
 cl /nologo /O2 /MT /W4 /sdl /GS /guard:cf /DUNICODE /D_UNICODE %SQL_INC% ^
-   corner_radius.c gfx.c panel.c notch.c install.c winnotif.c menubar.c dock.c pop.c tray.c launcher.c %SQL_SRC% app.res ^
+   corner_radius.c gfx.c panel.c notch.c install.c winnotif.c menubar.c dock.c pop.c tray.c launcher.c menu.c %SQL_SRC% app.res ^
    /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup /MANIFEST:NO ^
    /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA /CETCOMPAT /guard:cf /DEPENDENTLOADFLAG:0x800 ^
    shell32.lib advapi32.lib gdi32.lib user32.lib ole32.lib uuid.lib dwmapi.lib msimg32.lib winmm.lib wlanapi.lib iphlpapi.lib ^

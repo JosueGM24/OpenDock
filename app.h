@@ -294,6 +294,12 @@ void Dock_TrayPeek(BOOL on);
 void Dock_Destroy(void);
 BOOL Dock_WindowAumid(HWND w, wchar_t *out, int cch);   /* AppUserModelID de una ventana (Store, PWA…) */
 
+/* ── menu.c: menú contextual propio (material y muelle de OpenDock) ── */
+enum { MI_SEPARATOR = 1, MI_HEADER = 2, MI_DISABLED = 4, MI_CHECKED = 8, MI_DANGER = 16 };
+typedef struct { int id; LPCWSTR text; WCHAR glyph; UINT flags; } MenuItem;   /* glyph: Segoe Fluent Icons */
+void Menu_Register(void);
+int  Menu_Track(const MenuItem *items, int n, POINT at);    /* encima de `at`; id elegido o 0 */
+
 /* ── launcher.c: buscador de apps y archivos con la tecla Windows ── */
 void Launcher_Register(void);
 void Launcher_Apply(void);      /* arranca o para el gancho de la tecla y los índices según g_cfg.launcher */

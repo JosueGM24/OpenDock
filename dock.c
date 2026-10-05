@@ -1247,6 +1247,7 @@ static void Activate(int i)
 #define IDM_PIN     203
 #define IDM_ADMIN   204
 #define IDM_FOLDER  205
+#define IDM_ENDTASK 206
 #define MAX_RECENT  8
 
 static BOOL LnkAumid(const wchar_t *lnk, wchar_t *out, int cch)
@@ -1340,13 +1341,6 @@ static int RecentFiles(const DockItem *it, wchar_t paths[][MAX_PATH], wchar_t na
     return n;
 }
 
-static void MenuText(const wchar_t *t, wchar_t *esc, int cap)
-{
-    int o = 0;                                   /* "&" es atajo en los menús: duplicarlo */
-    for (const wchar_t *q = t; *q && o < cap - 3; ++q) { if (*q == L'&') esc[o++] = L'&'; esc[o++] = *q; }
-    esc[o] = 0;
-}
-
 static void TogglePin(const DockItem *it)
 {
     LoadPinLists();
@@ -1380,66 +1374,111 @@ static void RunAsAdmin(const DockItem *it)
     ShellExecuteExW(&sei);
 }
 
+/* ¿Está "Finalizar tarea" de la barra de tareas? (Configuración → Para programadores) */
+static BOOL EndTaskEnabled(void)
+{
+    DWORD v = 0, sz = sizeof(v);
+    RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced\\TaskbarDeveloperSettings",
+                 L"TaskbarEndTask", RRF_RT_REG_DWORD, NULL, &v, &sz);
+    return v != 0;
+}
+
+/* El proceso que de verdad pinta la ventana: en las apps de la Tienda la ventana es de
+ * ApplicationFrameHost y la app vive en su CoreWindow hija. */
+static DWORD WindowPid(HWND w)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    wchar_t path[MAX_PATH];
+    if (WindowExe(w, path) && !lstrcmpiW(BaseName(path), L"ApplicationFrameHost.exe")) {
+        for (HWND c = FindWindowExW(w, NULL, NULL, NULL); c; c = FindWindowExW(w, c, NULL, NULL)) {
+            DWORD cp = 0;
+            GetWindowThreadProcessId(c, &cp);
+            if (cp && cp != pid) return cp;
+        }
+    }
+    return pid;
+}
+
+/* Finalizar tarea, como la barra de tareas: termina los procesos de sus ventanas. Al
+ * Explorador no (es también el escritorio y la barra): a sus ventanas se les pide cerrar. */
+static void DockEndTask(const DockItem *it)
+{
+    DWORD done[8];
+    int nd = 0;
+    for (int k = 0; k < it->nwin; ++k) {
+        const HWND w = it->wins[k];
+        if (!IsWindow(w)) continue;
+        wchar_t path[MAX_PATH];
+        if (WindowExe(w, path) && !lstrcmpiW(BaseName(path), L"explorer.exe")) { PostMessageW(w, WM_CLOSE, 0, 0); continue; }
+        const DWORD pid = WindowPid(w);
+        BOOL seen = !pid || pid == GetCurrentProcessId();
+        for (int j = 0; j < nd && !seen; ++j) seen = done[j] == pid;
+        if (seen) continue;
+        if (nd < 8) done[nd++] = pid;
+        HANDLE p = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+        if (p) { TerminateProcess(p, 1); CloseHandle(p); }
+    }
+}
+
 static void AppMenu(int i, POINT at)
 {
     DockItem *it = &D.items[i];
-    HMENU m = CreatePopupMenu();
-    if (!m) return;
     HWND fg = GetForegroundWindow();
     if (fg) fg = GetAncestor(fg, GA_ROOTOWNER);
-    wchar_t esc[160];
+    MenuItem m[48];
+    int n = 0;
+    #define ADD(id_, text_, glyph_, flags_) do { if (n < 48) { m[n].id = (id_); m[n].text = (text_); m[n].glyph = (glyph_); m[n].flags = (flags_); ++n; } } while (0)
 
     static wchar_t rpath[MAX_RECENT][MAX_PATH], rname[MAX_RECENT][64];
     const int nrec = RecentFiles(it, rpath, rname);
     if (nrec) {
-        AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"Recientes");
-        for (int r = 0; r < nrec; ++r) { MenuText(rname[r], esc, 160); AppendMenuW(m, MF_STRING, IDM_RECENT0 + r, esc); }
-        AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+        ADD(0, L"Recientes", 0, MI_HEADER);
+        for (int r = 0; r < nrec; ++r) ADD(IDM_RECENT0 + r, rname[r], 0xE8A5, 0);
+        ADD(0, NULL, 0, MI_SEPARATOR);
     }
 
+    static wchar_t wt[8][96];
     int shown = 0;
-    for (int k = 0; k < it->nwin; ++k) {
+    for (int k = 0; k < it->nwin && k < 8; ++k) {
         if (!IsWindow(it->wins[k])) continue;
-        wchar_t t[64];
-        if (GetWindowTextW(it->wins[k], t, 64) <= 0) lstrcpynW(t, it->name, 64);
-        MenuText(t, esc, 160);
-        AppendMenuW(m, MF_STRING | (it->wins[k] == fg ? MF_CHECKED : 0), IDM_WIN0 + k, esc);
+        if (GetWindowTextW(it->wins[k], wt[k], 96) <= 0) lstrcpynW(wt[k], it->name, 96);
+        ADD(IDM_WIN0 + k, wt[k], 0xE737, it->wins[k] == fg ? MI_CHECKED : 0);
         ++shown;
     }
-    if (shown) AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    if (shown) ADD(0, NULL, 0, MI_SEPARATOR);
 
-    MenuText(it->name, esc, 160);
-    AppendMenuW(m, MF_STRING, IDM_NEW, shown ? L"Nueva ventana" : esc);
-    AppendMenuW(m, MF_STRING, IDM_PIN, it->pinned ? L"Quitar del dock" : L"Anclar al dock");
+    ADD(IDM_NEW, shown ? L"Nueva ventana" : it->name, shown ? 0xE710 : 0xE768, 0);
+    ADD(IDM_PIN, it->pinned ? L"Quitar del dock" : L"Anclar al dock", it->pinned ? 0xE77A : 0xE718, 0);
     const BOOL classic = !it->aumid[0] && (it->exe[0] || it->launch[0]);
     if (classic) {
-        AppendMenuW(m, MF_STRING, IDM_ADMIN, L"Ejecutar como administrador");
-        if (it->exe[0]) AppendMenuW(m, MF_STRING, IDM_FOLDER, L"Abrir ubicación del archivo");
+        ADD(IDM_ADMIN, L"Ejecutar como administrador", 0xE7EF, 0);
+        if (it->exe[0]) ADD(IDM_FOLDER, L"Abrir ubicaci\x00F3n del archivo", 0xE838, 0);
     }
     if (shown) {
-        AppendMenuW(m, MF_SEPARATOR, 0, NULL);
-        AppendMenuW(m, MF_STRING, IDM_CLOSE, shown > 1 ? L"Cerrar todas las ventanas" : L"Cerrar ventana");
+        ADD(0, NULL, 0, MI_SEPARATOR);
+        ADD(IDM_CLOSE, shown > 1 ? L"Cerrar todas las ventanas" : L"Cerrar ventana", 0xE711, 0);
+        if (EndTaskEnabled()) ADD(IDM_ENDTASK, L"Finalizar tarea", 0xE7BA, MI_DANGER);
     }
-    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(m, MF_STRING, IDM_PREFS, L"Ajustes del dock\x2026");
+    ADD(0, NULL, 0, MI_SEPARATOR);
+    ADD(IDM_PREFS, L"Ajustes del dock\x2026", 0xE713, 0);
+    #undef ADD
 
-    SetForegroundWindow(D.hwnd);                 /* para que el menú se cierre al hacer clic fuera */
     D.menuOpen = TRUE;                           /* con el menú abierto el dock no se esconde */
-    const int cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_BOTTOMALIGN | TPM_CENTERALIGN | TPM_RIGHTBUTTON,
-                                        at.x, at.y, 0, D.hwnd, NULL);
+    const int cmd = Menu_Track(m, n, at);
     D.menuOpen = FALSE;
     D.leaveAt = GetTickCount();
     if (g_cfg.dockAutoHide) SetTimer(D.hwnd, TIMER_DSINK, SINK_DELAY, NULL);
-    DestroyMenu(m);
-    PostMessageW(D.hwnd, WM_NULL, 0, 0);
+    if (i >= D.count || &D.items[i] != it) return;     /* el dock se rehízo mientras tanto */
     if (cmd >= IDM_WIN0 && cmd < IDM_WIN0 + it->nwin) { StartHop(it, FALSE); FocusWindow(it->wins[cmd - IDM_WIN0]); }
     else if (cmd >= IDM_RECENT0 && cmd < IDM_RECENT0 + nrec) App_ShellOpen(rpath[cmd - IDM_RECENT0]);
-    else if (cmd == IDM_NEW)    { StartHop(it, TRUE); Launch(it); }
-    else if (cmd == IDM_PIN)    { TogglePin(it); Rescan(); Kick(); }
-    else if (cmd == IDM_ADMIN)  RunAsAdmin(it);
-    else if (cmd == IDM_FOLDER) App_ShellSelect(it->exe);
-    else if (cmd == IDM_CLOSE)  { for (int k = 0; k < it->nwin; ++k) if (IsWindow(it->wins[k])) PostMessageW(it->wins[k], WM_CLOSE, 0, 0); }
-    else if (cmd == IDM_PREFS)  Panel_ShowTab(2);
+    else if (cmd == IDM_NEW)     { StartHop(it, TRUE); Launch(it); }
+    else if (cmd == IDM_PIN)     { TogglePin(it); Rescan(); Kick(); }
+    else if (cmd == IDM_ADMIN)   RunAsAdmin(it);
+    else if (cmd == IDM_FOLDER)  App_ShellSelect(it->exe);
+    else if (cmd == IDM_CLOSE)   { for (int k = 0; k < it->nwin; ++k) if (IsWindow(it->wins[k])) PostMessageW(it->wins[k], WM_CLOSE, 0, 0); }
+    else if (cmd == IDM_ENDTASK) DockEndTask(it);
+    else if (cmd == IDM_PREFS)   Panel_ShowTab(2);
 }
 
 /* ───────────────────────── Barra de tareas de Windows ─────────────────────────
