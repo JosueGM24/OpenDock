@@ -20,6 +20,10 @@
 #include <mmdeviceapi.h>
 #include <endpointvolume.h>
 #include <wlanapi.h>
+#include <winsock2.h>
+#include <ws2ipdef.h>
+#include <iphlpapi.h>
+#include <netioapi.h>
 #include <wbemcli.h>
 #include <bluetoothapis.h>
 #include <math.h>
@@ -81,7 +85,7 @@ static struct {
     /* gestos de estado: silencio (am), nivel del altavoz (vl), ondas (rip), Wi-Fi (wl),
      * carga (bc) y nivel de la batería (bf), cada uno con su muelle */
     float   am, amv, vl, vlv, rip, ripv, wl, wlv, bc, bcv, bf, bfv;
-    BOOL    synced, sMute, sWifi, sCharge;
+    BOOL    synced, sMute, sWifi, sCharge, sEth;
     float   sVol;
     int     sBatt;
     HPOWERNOTIFY battNotify;
@@ -95,6 +99,8 @@ static struct {
     int     battery;            /* 0..100, -1 sin batería */
     BOOL    charging;
     int     wifi;               /* -1 sin conexión inalámbrica, 0..100 calidad */
+    BOOL    ethernet;           /* cable conectado (con puerta de enlace) */
+    HANDLE  ipNotify;
     wchar_t ssid[64];
     float   volume;
     BOOL    muted;
@@ -230,8 +236,10 @@ static void WINAPI WlanNotify(PWLAN_NOTIFICATION_DATA d, PVOID ctx)
         PostMessageW(B.hwnd, WM_BAR_STATUS, 2, 0);
 }
 
+static void ReadEthernet(void);
 static void ReadWifi(void)
 {
+    ReadEthernet();      /* la red se relee entera: cable y Wi-Fi */
     B.wifi = -1;
     B.ssid[0] = 0;
     DWORD ver = 0;
@@ -258,6 +266,41 @@ static void ReadWifi(void)
         }
     }
     WlanFreeMemory(list);
+}
+
+/* Avisos de red por cable (cambios de interfaz IP): otro hilo, sólo deja un mensaje. */
+static VOID WINAPI IpNotify(PVOID ctx, PMIB_IPINTERFACE_ROW row, MIB_NOTIFICATION_TYPE t)
+{
+    (void)ctx; (void)row; (void)t;
+    if (B.hwnd) PostMessageW(B.hwnd, WM_BAR_STATUS, 2, 0);
+}
+
+/* ¿Hay un cable de red conectado? Un adaptador Ethernet activo y con puerta de enlace (los
+ * virtuales de Hyper-V o VirtualBox no la tienen); se descartan VPN, TAP y la red Bluetooth, que sí pueden tenerla. */
+static BOOL VirtualAdapter(const wchar_t *d)
+{
+    static const wchar_t *kSkip[] = { L"Virtual", L"TAP-", L"VPN", L"Hyper-V", L"VMware", L"Npcap", L"Loopback", L"Bluetooth" };
+    for (int i = 0; i < (int)(sizeof(kSkip) / sizeof(kSkip[0])); ++i) if (d && wcsstr(d, kSkip[i])) return TRUE;
+    return FALSE;
+}
+
+static void ReadEthernet(void)
+{
+    if (!B.ipNotify && B.hwnd) NotifyIpInterfaceChange(AF_UNSPEC, IpNotify, NULL, FALSE, &B.ipNotify);
+    B.ethernet = FALSE;
+    ULONG size = 16 * 1024;
+    for (int tries = 0; tries < 3; ++tries) {
+        IP_ADAPTER_ADDRESSES *aa = (IP_ADAPTER_ADDRESSES *)HeapAlloc(GetProcessHeap(), 0, size);
+        if (!aa) return;
+        const ULONG r = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_GATEWAYS | GAA_FLAG_SKIP_ANYCAST |
+                                             GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, NULL, aa, &size);
+        if (r == ERROR_SUCCESS)
+            for (const IP_ADAPTER_ADDRESSES *a = aa; a && !B.ethernet; a = a->Next)
+                B.ethernet = a->IfType == IF_TYPE_ETHERNET_CSMACD && a->OperStatus == IfOperStatusUp &&
+                             a->FirstGatewayAddress && !VirtualAdapter(a->Description);
+        HeapFree(GetProcessHeap(), 0, aa);
+        if (r != ERROR_BUFFER_OVERFLOW) return;
+    }
 }
 
 /* Avisos de Core Audio: el volumen o el silencio cambiaron (teclas del teclado, otra app). */
@@ -560,6 +603,23 @@ static void DrawWifi(Canvas *c, float cx, float cy, float size, float lv, DWORD 
     ICON_END
 }
 
+/* Ethernet: una pantalla con su pie (como el de Windows), del mismo trazo que el Wi-Fi.
+ * lv 0..1: tenue sin conexión, encendido con cable. */
+static void DrawEthernet(Canvas *c, float cx, float cy, float size, float lv, DWORD fg)
+{
+    const float l = 0.28f + 0.72f * max(0.0f, min(1.0f, lv));
+    ICON_LOOP(cx, cy, size)
+        /* pantalla: caja redondeada (centro 12,10.25; mitades 7.6 x 5) en contorno */
+        const float qx = fabsf(q.x - 12.0f) - (7.6f - 2.0f), qy = fabsf(q.y - 10.25f) - (5.0f - 2.0f);
+        const float box = hypotf(max(qx, 0.0f), max(qy, 0.0f)) + min(max(qx, qy), 0.0f) - 2.0f;
+        float d = fabsf(box) - 1.15f;
+        d = min(d, SdSeg(q, 12.0f, 15.6f, 12.0f, 18.4f) - 1.15f);     /* pie */
+        d = min(d, SdSeg(q, 8.4f, 19.0f, 15.6f, 19.0f) - 1.15f);      /* base */
+        const float a = COV(d) * l;
+        if (a > 0) Gfx_Blend(c, px, py, fg, a);
+    ICON_END
+}
+
 /* Batería (B1): contorno fino, relleno dentro y el número calado (color del fondo sobre el
  * relleno, del texto sobre lo vacío). Cargando: rayo en lugar del número, relleno verde. */
 static const V2 kBolt[] = { { 12, 7.6f }, { 8.6f, 12.6f }, { 11.6f, 12.6f }, { 10.6f, 16.4f }, { 14.4f, 11.2f }, { 11.4f, 11.2f }, { 12.2f, 7.6f } };
@@ -684,6 +744,7 @@ static const Ink kInkGear  = { 1.78f, 1.67f, 22.22f, 22.33f, 1.00f };
 static const Ink kInkWifi  = { 5.21f, 6.81f, 17.35f, 19.80f, 0.98f };
 static const Ink kInkBatt  = { 0.65f, 5.65f, 23.60f, 18.35f, 0.86f };
 static const Ink kInkSound = { 1.20f, 4.34f, 19.90f, 19.66f, 1.00f };
+static const Ink kInkEth   = { 3.25f, 4.10f, 20.75f, 20.15f, 0.98f };
 
 /* Coloca el icono con su tinta terminando en `right`: devuelve el ancho de tinta y el
  * centro y tamaño de caja (24 unidades) con los que hay que dibujarlo. */
@@ -769,6 +830,7 @@ static void BarSync(void)
         B.am = mute ? 1.0f : 0.0f; B.vl = VolLit(); B.wl = WifiLit();
         B.bc = B.charging ? 1.0f : 0.0f; B.bf = (float)max(0, B.battery);
         B.sMute = mute; B.sVol = B.volume; B.sWifi = wifi; B.sCharge = B.charging; B.sBatt = B.battery;
+        B.sEth = B.ethernet;
         return;
     }
     BOOL kick = FALSE;
@@ -780,6 +842,7 @@ static void BarSync(void)
         kick = TRUE;
     }
     if (wifi != B.sWifi) { Bump(BH_WIFI, wifi ? 2.2f : -1.6f); kick = TRUE; }
+    if (B.ethernet != B.sEth) { Bump(BH_WIFI, B.ethernet ? 2.2f : -1.6f); kick = TRUE; B.sEth = B.ethernet; }
     if (B.charging != B.sCharge) { Bump(BH_BATT, B.charging ? 2.6f : -1.4f); kick = TRUE; }
     else if (!B.charging && B.battery >= 0 && B.sBatt > 20 && B.battery <= 20) { Bump(BH_BATT, -2.0f); kick = TRUE; }
     B.sMute = mute; B.sVol = B.volume; B.sWifi = wifi; B.sCharge = B.charging; B.sBatt = B.battery;
@@ -896,8 +959,13 @@ static void PaintBar(HDC target)
         r -= (int)(iw + gap);
     }
 
-    iw = PlaceIcon(&kInkWifi, (float)r, (float)cy, ih, &icx, &icy, &isz);
-    DrawWifi(c, icx, icy, isz * BarScale(BH_WIFI), B.wl, L->fg);
+    if (B.ethernet) {           /* con cable manda el cable, como en Windows */
+        iw = PlaceIcon(&kInkEth, (float)r, (float)cy, ih, &icx, &icy, &isz);
+        DrawEthernet(c, icx, icy, isz * BarScale(BH_WIFI), 1.0f, L->fg);
+    } else {
+        iw = PlaceIcon(&kInkWifi, (float)r, (float)cy, ih, &icx, &icy, &isz);
+        DrawWifi(c, icx, icy, isz * BarScale(BH_WIFI), B.wl, L->fg);
+    }
     SetRect(&B.hit[BH_WIFI], r - (int)iw - BS(4), 0, r + BS(6), H);
     r -= (int)(iw + gap);
 

@@ -63,6 +63,10 @@ LAZY(L"bthprops.cpl", BOOL, BluetoothFindNextDevice, FALSE, (HANDLE f, void *d),
 LAZY(L"bthprops.cpl", BOOL, BluetoothFindDeviceClose, FALSE, (HANDLE f), (f))
 LAZY(L"bthprops.cpl", BOOL, BluetoothIsConnectable, FALSE, (HANDLE r), (r))
 
+/* iphlpapi.dll (red por cable) */
+LAZY(L"iphlpapi.dll", ULONG, GetAdaptersAddresses, ERROR_NOT_SUPPORTED, (ULONG f, ULONG fl, PVOID r, PVOID a, PULONG n), (f, fl, r, a, n))
+LAZY(L"iphlpapi.dll", DWORD, NotifyIpInterfaceChange, ERROR_NOT_SUPPORTED, (USHORT f, PVOID cb, PVOID ctx, BOOLEAN init, HANDLE *h), (f, cb, ctx, init, h))
+
 /* wlanapi.dll (Wi-Fi) */
 LAZY(L"wlanapi.dll", DWORD, WlanOpenHandle, NA, (DWORD v, PVOID r, PDWORD n, PHANDLE h), (v, r, n, h))
 LAZY(L"wlanapi.dll", DWORD, WlanCloseHandle, NA, (HANDLE h, PVOID r), (h, r))
