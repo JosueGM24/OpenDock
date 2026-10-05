@@ -1176,7 +1176,10 @@ static void Tick(void)
 
 static void Kick(void)
 {
-    QueryPerformanceCounter(&D.last);
+    /* el reloj sólo se pone a cero si la animación estaba parada: con ella en marcha, cada
+     * movimiento del ratón (hasta 1000 por segundo) lo reiniciaba y los muelles avanzaban
+     * una fracción del tiempo real: la lupa iba a cámara lenta */
+    if (!s_dpOn || WaitForSingleObject(s_dpOn, 0) != WAIT_OBJECT_0) QueryPerformanceCounter(&D.last);
     D.dirty = TRUE;
     PacerOn(TRUE);
 }
