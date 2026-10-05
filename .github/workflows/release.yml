@@ -14,6 +14,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-2022
+    env:
+      SIGNED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}   # 'true' en cuanto exista el secreto
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +38,46 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: python tools/check_pe.py OpenDock.exe --strict
+
+      # Sin firmar: es lo que se envía a SignPath (y lo que se publica si aún no hay firma).
+      - uses: actions/upload-artifact@v4
+        id: unsigned
+        with:
+          name: OpenDock-unsigned
+          path: OpenDock.exe
+
+      # Firma Authenticode gratuita de SignPath Foundation para proyectos de código abierto.
+      # Se activa sola al crear el secreto SIGNPATH_API_TOKEN y la variable
+      # SIGNPATH_ORGANIZATION_ID (Settings → Secrets and variables → Actions).
+      # El .exe se compila aquí, en un runner de GitHub: SignPath solo firma lo que sale del CI.
+      - name: Firmar con SignPath
+        if: env.SIGNED == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: OpenDock
+          signing-policy-slug: ${{ startsWith(github.ref, 'refs/tags/v') && 'release-signing' || 'test-signing' }}
+          artifact-configuration-slug: initial
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Comprobar la firma
+        if: env.SIGNED == 'true'
+        shell: pwsh
+        run: |
+          Copy-Item signed/OpenDock.exe OpenDock.exe -Force
+          $sig = Get-AuthenticodeSignature OpenDock.exe
+          "Firma: $($sig.Status) · $($sig.SignerCertificate.Subject)" >> $env:GITHUB_STEP_SUMMARY
+          if ($sig.Status -ne 'Valid') { throw "La firma no es válida: $($sig.StatusMessage)" }
+          python tools/check_pe.py OpenDock.exe --strict
+
+      # Una versión con etiqueta sin firmar se publica igual, pero queda avisado en el resumen.
+      - name: Aviso si no está firmado
+        if: env.SIGNED != 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: '"::warning::OpenDock.exe se publica SIN FIRMAR: los antivirus y SmartScreen pueden marcarlo." | Write-Output'
 
       - name: SHA-256
         shell: pwsh

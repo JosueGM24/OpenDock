@@ -133,12 +133,25 @@ desinstalar. Se oculta solo a pantalla completa.
 - Configuración validada al leerla; `--cleanup` nunca borra rutas recibidas por CLI.
 - La copia instalada se escribe byte a byte, sin el `Zone.Identifier` de la descarga.
 
-### Quitar el aviso de SmartScreen
-Solo se consigue **firmando** el exe con un certificado de confianza pública
-(ver `sign.ps1`; lo más barato es Azure Artifact Signing, ~10 USD/mes). Además conviene:
-1. Enviar el exe a Microsoft como falso positivo: https://www.microsoft.com/wdsi/filesubmission
-2. Publicar el SHA-256 junto a cada descarga (`sign.ps1` genera `OpenDock.exe.sha256`).
-3. No empaquetar con UPX ni similares (dispara heurísticas de antivirus).
+### Política de firma de código
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/).
+
+- Solo se firman las versiones que compila GitHub Actions (`.github/workflows/release.yml`)
+  a partir de una etiqueta `v*` de este repositorio; nada compilado en un equipo personal.
+- Autores y revisores: [colaboradores del repositorio](https://github.com/JosueGM24/OpenDock/graphs/contributors).
+- Aprobación de cada firma: [JosueGM24](https://github.com/JosueGM24).
+- Privacidad: este programa no transfiere ninguna información a otros sistemas de la red
+  salvo que el usuario lo pida expresamente.
+
+Una versión firmada no hace saltar SmartScreen ni las heurísticas de los antivirus. Además:
+1. Distribuir solo el .exe de GitHub Releases (MSVC, firmado). El de `build.sh` (mingw,
+   estático y sin símbolos) es para probar en local: los antivirus lo marcan con facilidad
+   como `Trojan:Win32/Wacatac!ml`.
+2. Publicar el SHA-256 junto a cada descarga (el CI genera `OpenDock.exe.sha256`).
+3. Si un antivirus marca una versión, enviarla como falso positivo:
+   https://www.microsoft.com/wdsi/filesubmission
+4. No empaquetar con UPX ni similares (dispara heurísticas de antivirus).
 
 ## Detalles técnicos
 - Win32 puro en C, estático (~1,7 MB: incluye SQLite para leer las notificaciones).

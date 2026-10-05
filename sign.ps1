@@ -1,6 +1,9 @@
 <#
   Firma OpenDock.exe con Authenticode y publica su SHA-256.
 
+  Las versiones publicadas las firma SignPath Foundation desde el CI (release.yml);
+  este script es para firmar a mano con un certificado propio.
+
   Solo una firma con certificado de confianza pública quita el aviso de SmartScreen
   ("Windows protegió su PC") y reduce los falsos positivos de antivirus:
     - Azure Artifact Signing (antes Trusted Signing): ~10 USD/mes, la vía más barata.
