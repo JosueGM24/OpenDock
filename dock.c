@@ -12,6 +12,10 @@
  * - Se lanza todo vía explorer.exe (ninguna extensión de shell entra en el proceso).
  * - Opcional: desactiva la barra de tareas de Windows (autohide + oculta) y la devuelve
  *   tal cual al salir.
+ * - Un dock por monitor, todos con las mismas apps (como en macOS). Cada uno lleva su
+ *   geometría, su lupa y sus animaciones; el del monitor principal (s_docks[0]) es además
+ *   el que gobierna la barra de tareas de Windows. Los avisos de Windows (ganchos) son
+ *   únicos y se reparten a todos los docks.
  */
 #define COBJMACROS
 #include "app.h"
@@ -44,7 +48,8 @@
 #define MAXMAG        1.5f
 #define SPREAD        1.55f
 #define BACK_SCALE    4      /* el fondo se captura a 1/4 de resolución */
-#define MAX_ICONS     128
+#define MAX_ICONS     192    /* caché por tamaño: monitores con escalas distintas piden dos */
+#define MAX_DOCKS     6      /* un dock por monitor */
 
 static const int   kIconSizes[4] = { 30, 38, 46, 56 };
 static const float kOpacity[4]   = { 0.30f, 0.55f, 0.75f, 0.92f };
@@ -68,7 +73,7 @@ typedef struct {
     float   barW;               /* ancho animado de la barrita de "abierta" */
 } DockItem;
 
-static struct {
+typedef struct {
     HWND     hwnd;
     UINT     dpi;
     RECT     mon;
@@ -90,7 +95,6 @@ static struct {
     DWORD    backTick, backHash;
     LARGE_INTEGER last, freq;
     DWORD    lastScan;
-    HWINEVENTHOOK fgHook, winHook, moveHook;
     BOOL     dirty;             /* hay que redibujar aunque nada se anime */
     BOOL     shellOpen;         /* Inicio / Buscar de Windows abierto */
     BOOL     peek;              /* la bandeja de Windows a la vista un momento */
@@ -103,7 +107,28 @@ static struct {
     BOOL     atDock;            /* cursor en la zona del dock (incluido el hueco hasta el borde) */
     int      taskWatch;         /* ticks restantes de TIMER_DTASK */
     BOOL     fsSys, fsFg;       /* pantalla completa: según Windows · según la ventana de delante */
-} D;
+    volatile LONG wantFrames;   /* este dock se anima: el marcapasos le manda fotogramas */
+    volatile LONG framePending; /* ya tiene un WM_DFRAME en la cola */
+    DWORD    iconGen;           /* generación de la caché de iconos con la que se rehízo */
+    UINT     pollEvery;         /* periodo actual de TIMER_DPOLL */
+    DockItem pinCache[MAX_ITEMS];   /* anclados ya resueltos (a su tamaño de icono) */
+    int      npinCache;
+    DWORD    pinSig;
+} Dock;
+
+/* s_docks[0] es siempre el del monitor principal. Fuera de DockProc y de los recorridos
+ * por todos los docks, D es el principal. */
+static Dock  s_docks[MAX_DOCKS];
+static Dock *s_d = &s_docks[0];
+#define D (*s_d)
+#define PRIMARY (&s_docks[0])
+static HWINEVENTHOOK s_fgHook, s_winHook, s_moveHook;   /* únicos: se reparten a todos */
+
+static BOOL AnyShellOpen(void)
+{
+    for (int k = 0; k < MAX_DOCKS; ++k) if (s_docks[k].hwnd && s_docks[k].shellOpen) return TRUE;
+    return FALSE;
+}
 
 static int DS(int v) { return MulDiv(v, (int)D.dpi, 96); }
 static int Base(void) { return DS(kIconSizes[max(0, min(3, g_cfg.dockIcon))]); }
@@ -114,9 +139,9 @@ static int WinH(void) { return (int)(Base() * 2.3f) + DS(36); }
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
 #endif
-static HANDLE        s_dpOn;
-static volatile LONG s_dframe;
+static HANDLE s_dpOn;     /* evento manual: algún dock se está animando */
 
+/* Hilo aparte: no mira D (que cambia en el hilo de la interfaz), sino cada dock. */
 static DWORD WINAPI DockPacer(LPVOID u)
 {
     (void)u;
@@ -129,10 +154,15 @@ static DWORD WINAPI DockPacer(LPVOID u)
         due.QuadPart = -10000000LL / 120;
         SetWaitableTimer(t, &due, 0, NULL, NULL, FALSE);
         WaitForSingleObject(t, 50);
-        if (D.hwnd && !InterlockedExchange(&s_dframe, 1)) PostMessageW(D.hwnd, WM_DFRAME, 0, 0);
+        for (int k = 0; k < MAX_DOCKS; ++k) {
+            Dock *d = &s_docks[k];
+            const HWND h = *(HWND volatile *)&d->hwnd;
+            if (h && d->wantFrames && !InterlockedExchange(&d->framePending, 1)) PostMessageW(h, WM_DFRAME, 0, 0);
+        }
     }
 }
 
+/* Fotogramas para el dock actual; el marcapasos sigue mientras alguno los quiera. */
 static void PacerOn(BOOL on)
 {
     if (!s_dpOn) {
@@ -141,7 +171,10 @@ static void PacerOn(BOOL on)
         if (th) CloseHandle(th);
     }
     if (!s_dpOn) return;
-    if (on) SetEvent(s_dpOn); else ResetEvent(s_dpOn);
+    InterlockedExchange(&D.wantFrames, on);
+    BOOL any = FALSE;
+    for (int k = 0; k < MAX_DOCKS && !any; ++k) any = s_docks[k].hwnd && s_docks[k].wantFrames;
+    if (any) SetEvent(s_dpOn); else ResetEvent(s_dpOn);
 }
 
 /* ───────────────────────── Iconos (con caché) ───────────────────────── */
@@ -492,14 +525,12 @@ static void AddPinned(void)
     CoTaskMemFree(appdata);
     wsprintfW(pat, L"%s\\*.lnk", dir);
 
-    static DockItem cache[MAX_ITEMS];
-    static int ncache;
-    static DWORD sig;
+    /* caché por dock: cada monitor puede pedir otro tamaño de icono */
     LoadPinLists();
-    const DWORD now = PinSignature(dir) ^ (s_pinVer * 2654435761u);
-    if (now == sig) {
-        const int n = min(ncache, MAX_ITEMS - D.count);
-        CopyMemory(&D.items[D.count], cache, sizeof(DockItem) * n);
+    const DWORD now = PinSignature(dir) ^ (s_pinVer * 2654435761u) ^ ((DWORD)Base() << 20);
+    if (now == D.pinSig) {
+        const int n = min(D.npinCache, MAX_ITEMS - D.count);
+        CopyMemory(&D.items[D.count], D.pinCache, sizeof(DockItem) * n);
         D.count += n;
         return;
     }
@@ -536,9 +567,9 @@ static void AddPinned(void)
         if (aumid) AddPackaged(aumid);
         else AddExePin(key);
     }
-    ncache = D.count - first;
-    CopyMemory(cache, &D.items[first], sizeof(DockItem) * ncache);
-    sig = now;
+    D.npinCache = D.count - first;
+    CopyMemory(D.pinCache, &D.items[first], sizeof(DockItem) * D.npinCache);
+    D.pinSig = now;
 }
 
 /* El AppUserModelID de una ventana (las de apps empaquetadas y PWA lo llevan). */
@@ -753,6 +784,19 @@ static void Rescan(void)
     }
     UpdateActive();
     D.lastScan = GetTickCount();
+    D.iconGen = s_iconGen;
+}
+
+/* Todos los docks a la vez (p. ej. al anclar o quitar una app). */
+static void Kick(void);
+static void RescanAll(void)
+{
+    Dock *o = s_d;
+    for (int k = 0; k < MAX_DOCKS; ++k) {
+        s_d = &s_docks[k];
+        if (D.hwnd && !D.fullscreen) { Rescan(); Kick(); }
+    }
+    s_d = o;
 }
 
 /* ───────────────────────── Aspecto ───────────────────────── */
@@ -1003,6 +1047,8 @@ static void GlassRRect(Canvas *f, float x, float y, float w, float h, float r, D
 
 static void Render(void)
 {
+    /* otro dock vació la caché de iconos: los de este apuntan a memoria liberada */
+    if (D.count && D.iconGen != s_iconGen) Rescan();
     if (D.frame.w != D.mon.right - D.mon.left || D.frame.h != WinH()) {
         Canvas_Free(&D.frame);
         if (!Canvas_Init(&D.frame, D.mon.right - D.mon.left, WinH())) return;
@@ -1179,7 +1225,7 @@ static void Kick(void)
     /* el reloj sólo se pone a cero si la animación estaba parada: con ella en marcha, cada
      * movimiento del ratón (hasta 1000 por segundo) lo reiniciaba y los muelles avanzaban
      * una fracción del tiempo real: la lupa iba a cámara lenta */
-    if (!s_dpOn || WaitForSingleObject(s_dpOn, 0) != WAIT_OBJECT_0) QueryPerformanceCounter(&D.last);
+    if (!D.wantFrames) QueryPerformanceCounter(&D.last);
     D.dirty = TRUE;
     PacerOn(TRUE);
 }
@@ -1468,12 +1514,13 @@ static void AppMenu(int i, POINT at)
     const int cmd = Menu_Track(m, n, at);
     D.menuOpen = FALSE;
     D.leaveAt = GetTickCount();
+    if (!D.hwnd) return;                         /* su monitor se quitó con el menú abierto */
     if (g_cfg.dockAutoHide) SetTimer(D.hwnd, TIMER_DSINK, SINK_DELAY, NULL);
     if (i >= D.count || &D.items[i] != it) return;     /* el dock se rehízo mientras tanto */
     if (cmd >= IDM_WIN0 && cmd < IDM_WIN0 + it->nwin) { StartHop(it, FALSE); FocusWindow(it->wins[cmd - IDM_WIN0]); }
     else if (cmd >= IDM_RECENT0 && cmd < IDM_RECENT0 + nrec) App_ShellOpen(rpath[cmd - IDM_RECENT0]);
     else if (cmd == IDM_NEW)     { StartHop(it, TRUE); Launch(it); }
-    else if (cmd == IDM_PIN)     { TogglePin(it); Rescan(); Kick(); }
+    else if (cmd == IDM_PIN)     { TogglePin(it); RescanAll(); }
     else if (cmd == IDM_ADMIN)   RunAsAdmin(it);
     else if (cmd == IDM_FOLDER)  App_ShellSelect(it->exe);
     else if (cmd == IDM_CLOSE)   { for (int k = 0; k < it->nwin; ++k) if (IsWindow(it->wins[k])) PostMessageW(it->wins[k], WM_CLOSE, 0, 0); }
@@ -1549,28 +1596,29 @@ void Dock_RestoreTaskbar(void) { SetTaskbarOff(FALSE); }
  * usarla se deja ver la barra un momento; al irse el foco de ella, el dock la vuelve a ocultar. */
 void Dock_TrayPeek(BOOL on)
 {
-    if (!D.hwnd || !g_cfg.dockHideTaskbar) return;
-    D.peek = on;
-    D.peekAt = GetTickCount();
+    Dock *d = PRIMARY;           /* la barra de tareas la gobierna el dock principal */
+    if (!d->hwnd || !g_cfg.dockHideTaskbar) return;
+    d->peek = on;
+    d->peekAt = GetTickCount();
     if (on) {
         ShowTaskbars(TRUE);
-        SetTimer(D.hwnd, TIMER_DPEEK, 700, NULL);
+        SetTimer(d->hwnd, TIMER_DPEEK, 700, NULL);
     } else {                     /* el panel ya está arriba: la barra de tareas sobra */
-        KillTimer(D.hwnd, TIMER_DPEEK);
-        if (!D.shellOpen) SetTaskbarOff(TRUE);
+        KillTimer(d->hwnd, TIMER_DPEEK);
+        if (!AnyShellOpen()) SetTaskbarOff(TRUE);
     }
 }
 
 /* ───────────────────────── Ventana ───────────────────────── */
+/* Monitor del dock actual: el principal para s_docks[0]; los demás conservan el suyo. */
 static void DockMeasure(void)
 {
-    HMONITOR m = MonitorFromPoint((POINT){ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
+    HMONITOR m = s_d == PRIMARY ? MonitorFromPoint((POINT){ 0, 0 }, MONITOR_DEFAULTTOPRIMARY)
+                                : MonitorFromRect(&D.mon, MONITOR_DEFAULTTONEAREST);
     MONITORINFO mi = { sizeof(mi) };
     GetMonitorInfoW(m, &mi);
     D.mon = mi.rcMonitor;
-    const UINT dpi = MonitorDpi(m);
-    if (dpi != D.dpi) ClearIconCache();
-    D.dpi = dpi;
+    D.dpi = MonitorDpi(m);      /* la caché de iconos va por tamaño: no hace falta vaciarla */
 }
 
 /* Reserva media altura del dock: las ventanas maximizadas llegan hasta la mitad del panel
@@ -1596,39 +1644,48 @@ static void ApplyCapture(void)
 {
     /* con desenfoque el dock debe quedar fuera de captura: si no, se vería a sí mismo */
     const BOOL exclude = g_cfg.hideCapture || g_cfg.dockBlur;
-    if (D.hwnd) SetWindowDisplayAffinity(D.hwnd, exclude ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
-    if (D.hwnd) {
-        if (g_cfg.dockBlur) {
-            SetTimer(D.hwnd, TIMER_DBLUR, 3000, NULL);
-            if (!D.moveHook)
-                D.moveHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, NULL, WinHook, 0, 0,
-                                             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-        } else {
-            KillTimer(D.hwnd, TIMER_DBLUR);
-            if (D.moveHook) { UnhookWinEvent(D.moveHook); D.moveHook = NULL; }
-        }
+    if (!D.hwnd) return;
+    SetWindowDisplayAffinity(D.hwnd, exclude ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
+    if (g_cfg.dockBlur) {
+        SetTimer(D.hwnd, TIMER_DBLUR, 3000, NULL);
+        if (!s_moveHook)
+            s_moveHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, NULL, WinHook, 0, 0,
+                                         WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    } else {
+        KillTimer(D.hwnd, TIMER_DBLUR);
+        if (s_moveHook) { UnhookWinEvent(s_moveHook); s_moveHook = NULL; }
     }
 }
 
 static void CALLBACK FgHook(HWINEVENTHOOK hk, DWORD ev, HWND w, LONG obj, LONG child, DWORD th, DWORD t)
 {
     (void)hk; (void)ev; (void)obj; (void)child; (void)th; (void)t;
-    if (!D.hwnd || D.fullscreen) return;
-    /* ¿se abrió Inicio o Buscar? Windows lo dibuja pegado a su barra y no se puede mover */
+    if (!PRIMARY->hwnd) return;
+    /* ¿se abrió Inicio o Buscar? Windows lo dibuja pegado a su barra y no se puede mover;
+     * solo se aparta el dock del monitor donde sale */
     wchar_t path[MAX_PATH];
     const BOOL shell = w && WindowExe(w, path) &&
                        (!lstrcmpiW(BaseName(path), L"SearchHost.exe") || !lstrcmpiW(BaseName(path), L"StartMenuExperienceHost.exe"));
-    if (D.shellOpen && !shell && g_cfg.dockHideTaskbar) {
+    RECT smon = { 0 };
+    MONITORINFO mi = { sizeof(mi) };
+    if (shell && GetMonitorInfoW(MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST), &mi)) smon = mi.rcMonitor;
+    if (AnyShellOpen() && !shell && g_cfg.dockHideTaskbar && !PRIMARY->fullscreen) {
         /* la barra asomó con Inicio y Explorer la vuelve a mostrar un instante después
          * de cerrarlo: se vigila unos segundos para ocultarla en cuanto aparezca */
         SetTaskbarOff(TRUE);
-        D.taskWatch = 16;
-        SetTimer(D.hwnd, TIMER_DTASK, 120, NULL);
+        PRIMARY->taskWatch = 16;
+        SetTimer(PRIMARY->hwnd, TIMER_DTASK, 120, NULL);
     }
-    D.shellOpen = shell;
-    if (shell) { D.inside = FALSE; D.hot = -1; }
-    else Rescan();      /* barato: los iconos vienen de la caché */
-    Kick();
+    Dock *o = s_d;
+    for (int k = 0; k < MAX_DOCKS; ++k) {
+        s_d = &s_docks[k];
+        if (!D.hwnd || D.fullscreen) continue;
+        D.shellOpen = shell && (EqualRect(&smon, &D.mon) || IsRectEmpty(&smon));
+        if (D.shellOpen) { D.inside = FALSE; D.hot = -1; }
+        else Rescan();      /* barato: los iconos vienen de la caché */
+        Kick();
+    }
+    s_d = o;
 }
 
 /* Avisos de Windows sobre ventanas. Solo se mira lo que importa al dock, y se agrupa:
@@ -1643,25 +1700,53 @@ static BOOL KnownWindow(HWND w)
 static void CALLBACK WinHook(HWINEVENTHOOK hk, DWORD ev, HWND w, LONG obj, LONG child, DWORD th, DWORD t)
 {
     (void)hk; (void)th; (void)t;
-    if (!D.hwnd || obj != OBJID_WINDOW || child != CHILDID_SELF || !w) return;
-    if (ev == EVENT_OBJECT_LOCATIONCHANGE) {               /* algo se movió: quizá detrás del dock */
-        if (!HiddenAway() && GetAncestor(w, GA_ROOT) == w && IsWindowVisible(w)) SetTimer(D.hwnd, TIMER_DBLURQ, 160, NULL);
-        return;
-    }
+    if (!PRIMARY->hwnd || obj != OBJID_WINDOW || child != CHILDID_SELF || !w) return;
     if (ev == EVENT_OBJECT_SHOW) {
         wchar_t cls[32];
         if (GetClassNameW(w, cls, 32) && (!lstrcmpW(cls, L"Shell_TrayWnd") || !lstrcmpW(cls, L"Shell_SecondaryTrayWnd"))) {
             /* Explorer volvió a mostrar su barra: fuera, salvo con Inicio o la bandeja abiertos */
-            if (g_cfg.dockHideTaskbar && !D.shellOpen && !D.peek) SetTimer(D.hwnd, TIMER_DTASK, 60, NULL), D.taskWatch = 3;
+            if (g_cfg.dockHideTaskbar && !AnyShellOpen() && !PRIMARY->peek)
+                SetTimer(PRIMARY->hwnd, TIMER_DTASK, 60, NULL), PRIMARY->taskWatch = 3;
             return;
         }
-        if (IsAppWindow(w)) SetTimer(D.hwnd, TIMER_DRESCAN, 150, NULL);
-        if (g_cfg.dockBlur) SetTimer(D.hwnd, TIMER_DBLURQ, 200, NULL);
-        return;
     }
-    /* se ocultó o se cerró: solo importa si era de una app del dock */
-    if (KnownWindow(w)) SetTimer(D.hwnd, TIMER_DRESCAN, 150, NULL);
-    if (g_cfg.dockBlur && ev == EVENT_OBJECT_HIDE) SetTimer(D.hwnd, TIMER_DBLURQ, 200, NULL);
+    const BOOL moved = ev == EVENT_OBJECT_LOCATIONCHANGE;
+    if (moved && !(GetAncestor(w, GA_ROOT) == w && IsWindowVisible(w))) return;
+    const BOOL app = ev == EVENT_OBJECT_SHOW && IsAppWindow(w);
+    Dock *o = s_d;
+    for (int k = 0; k < MAX_DOCKS; ++k) {
+        s_d = &s_docks[k];
+        if (!D.hwnd) continue;
+        if (moved) {                                       /* algo se movió: quizá detrás del dock */
+            if (!HiddenAway()) SetTimer(D.hwnd, TIMER_DBLURQ, 160, NULL);
+        } else if (ev == EVENT_OBJECT_SHOW) {
+            if (app) SetTimer(D.hwnd, TIMER_DRESCAN, 150, NULL);
+            if (g_cfg.dockBlur) SetTimer(D.hwnd, TIMER_DBLURQ, 200, NULL);
+        } else {
+            /* se ocultó o se cerró: solo importa si era de una app del dock */
+            if (KnownWindow(w)) SetTimer(D.hwnd, TIMER_DRESCAN, 150, NULL);
+            if (g_cfg.dockBlur && ev == EVENT_OBJECT_HIDE) SetTimer(D.hwnd, TIMER_DBLURQ, 200, NULL);
+        }
+    }
+    s_d = o;
+}
+
+static void StartHooks(void)
+{
+    if (!s_fgHook)
+        s_fgHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, NULL, FgHook, 0, 0,
+                                   WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    /* ventanas que se abren, se cierran o se ocultan: los docks se enteran al momento */
+    if (!s_winHook)
+        s_winHook = SetWinEventHook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, NULL, WinHook, 0, 0,
+                                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+}
+
+static void StopHooks(void)
+{
+    if (s_winHook) { UnhookWinEvent(s_winHook); s_winHook = NULL; }
+    if (s_moveHook) { UnhookWinEvent(s_moveHook); s_moveHook = NULL; }
+    if (s_fgHook) { UnhookWinEvent(s_fgHook); s_fgHook = NULL; }
 }
 
 /* Ocultar dock: la zona que lo mantiene arriba es el panel (con sus iconos aumentados) y
@@ -1683,10 +1768,10 @@ static void PollCursor(void)
 {
     POINT pt;
     if (!GetCursorPos(&pt) || D.fullscreen || D.shellOpen) return;
-    {   /* lejos del borde de abajo no llega en 150 ms: cada 150 ms basta */
-        static UINT every = 50;
-        const UINT want = !D.atDock && D.mon.bottom - pt.y > 260 ? 150 : 50;
-        if (want != every) { every = want; SetTimer(D.hwnd, TIMER_DPOLL, every, NULL); }
+    {   /* lejos del borde de abajo (o en otro monitor) no llega en 150 ms: cada 150 ms basta */
+        const BOOL nearEdge = pt.x >= D.mon.left && pt.x < D.mon.right && D.mon.bottom - pt.y <= 260;
+        const UINT want = !D.atDock && !nearEdge ? 150 : 50;
+        if (want != D.pollEvery) { D.pollEvery = want; SetTimer(D.hwnd, TIMER_DPOLL, want, NULL); }
     }
     const BOOL at = InDockZone(pt);
     if (at == D.atDock) return;
@@ -1704,7 +1789,7 @@ static void PollCursor(void)
 static void ApplyAutoHide(void)
 {
     if (!D.hwnd) return;
-    if (g_cfg.dockAutoHide) SetTimer(D.hwnd, TIMER_DPOLL, 50, NULL);
+    if (g_cfg.dockAutoHide) { D.pollEvery = 50; SetTimer(D.hwnd, TIMER_DPOLL, 50, NULL); }
     else { KillTimer(D.hwnd, TIMER_DPOLL); D.atDock = FALSE; }
 }
 
@@ -1717,13 +1802,28 @@ static void DockApplyFullscreen(void)
     if (!fs) { Rescan(); Kick(); }
 }
 
+/* La pantalla completa se mira por monitor: un juego en uno no esconde el dock del otro. */
 void Dock_FullscreenFg(const RECT *mon)
 {
-    D.fsFg = mon && EqualRect(mon, &D.mon);
-    DockApplyFullscreen();
+    Dock *o = s_d;
+    for (int k = 0; k < MAX_DOCKS; ++k) {
+        s_d = &s_docks[k];
+        if (!D.hwnd) continue;
+        D.fsFg = mon && EqualRect(mon, &D.mon);
+        DockApplyFullscreen();
+    }
+    s_d = o;
 }
 
-static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
+/* ¿La ventana de delante está en el monitor de este dock? */
+static BOOL ForegroundHere(void)
+{
+    HWND fg = GetForegroundWindow();
+    MONITORINFO mi = { sizeof(mi) };
+    return fg && GetMonitorInfoW(MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST), &mi) && EqualRect(&mi.rcMonitor, &D.mon);
+}
+
+static LRESULT DockProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
     case WM_NCHITTEST: {
@@ -1740,7 +1840,7 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
     case WM_DOCK_APPBAR:
         if (w == ABN_POSCHANGED) AppBarPos();
-        else if (w == ABN_FULLSCREENAPP) { D.fsSys = (BOOL)l; DockApplyFullscreen(); }
+        else if (w == ABN_FULLSCREENAPP) { D.fsSys = (BOOL)l && ForegroundHere(); DockApplyFullscreen(); }   /* solo en su monitor */
         return 0;
     case WM_WINDOWPOSCHANGED: {
         APPBARDATA abd = { sizeof(abd) };
@@ -1749,7 +1849,7 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
         break;
     }
     case WM_DFRAME:
-        InterlockedExchange(&s_dframe, 0);
+        InterlockedExchange(&D.framePending, 0);
         if (D.hwnd) Tick();
         return 0;
     case WM_MOUSEMOVE: {
@@ -1792,25 +1892,27 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
     case WM_TIMER:
         if (w == TIMER_DSTATUS) {
+            /* Windows avisa de pantalla completa para todo el sistema: cuenta en el
+             * monitor de la ventana de delante */
             QUERY_USER_NOTIFICATION_STATE qs;
             BOOL fs = SUCCEEDED(SHQueryUserNotificationState(&qs)) &&
                       (qs == QUNS_BUSY || qs == QUNS_RUNNING_D3D_FULL_SCREEN || qs == QUNS_PRESENTATION_MODE);
-            D.fsSys = fs;
+            D.fsSys = fs && ForegroundHere();
             DockApplyFullscreen();
             if (!D.fullscreen && !D.inside) { Rescan(); Kick(); }   /* repaso de seguridad */
-            if (g_cfg.dockHideTaskbar && !D.shellOpen && !D.peek) SetTaskbarOff(TRUE);
+            if (s_d == PRIMARY && g_cfg.dockHideTaskbar && !AnyShellOpen() && !D.peek) SetTaskbarOff(TRUE);
         } else if (w == TIMER_DRESCAN) {
             KillTimer(h, TIMER_DRESCAN);
             if (!D.fullscreen) { Rescan(); Kick(); }
         } else if (w == TIMER_DBLURQ) {
             KillTimer(h, TIMER_DBLURQ);
-            if (!D.fullscreen && WaitForSingleObject(s_dpOn, 0) != WAIT_OBJECT_0 && CaptureBackdrop()) Render();
+            if (!D.fullscreen && !D.wantFrames && CaptureBackdrop()) Render();
         } else if (w == TIMER_DPOLL) {
             PollCursor();
         } else if (w == TIMER_DSINK) {
             KillTimer(h, TIMER_DSINK);
             Kick();
-        } else if (w == TIMER_DPEEK) {
+        } else if (w == TIMER_DPEEK) {          /* solo en el principal */
             if (D.peek && GetTickCount() - D.peekAt > 1500) {
                 /* fin de la visita a la bandeja: el foco ya no está en la barra ni en su panel */
                 HWND fg = GetForegroundWindow();
@@ -1822,17 +1924,18 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
             }
             if (!D.peek) {
                 KillTimer(h, TIMER_DPEEK);
-                if (g_cfg.dockHideTaskbar && !D.shellOpen) SetTaskbarOff(TRUE);
+                if (g_cfg.dockHideTaskbar && !AnyShellOpen()) SetTaskbarOff(TRUE);
             }
-        } else if (w == TIMER_DTASK) {
-            if (!D.shellOpen && !D.peek && g_cfg.dockHideTaskbar) SetTaskbarOff(TRUE);
-            if (--D.taskWatch <= 0 || D.shellOpen) KillTimer(h, TIMER_DTASK);
+        } else if (w == TIMER_DTASK) {          /* solo en el principal */
+            const BOOL shell = AnyShellOpen();
+            if (!shell && !D.peek && g_cfg.dockHideTaskbar) SetTaskbarOff(TRUE);
+            if (--D.taskWatch <= 0 || shell) KillTimer(h, TIMER_DTASK);
         } else if (w == TIMER_DBLUR) {
             /* el fondo cambió (ventana movida, vídeo…): recomponer el vidrio */
-            if (!D.fullscreen && WaitForSingleObject(s_dpOn, 0) != WAIT_OBJECT_0 && CaptureBackdrop()) Render();
+            if (!D.fullscreen && !D.wantFrames && CaptureBackdrop()) Render();
         }
         return 0;
-    case WM_DESTROY:
+    case WM_DESTROY: {
         KillTimer(h, TIMER_DSTATUS);
         KillTimer(h, TIMER_DBLUR);
         KillTimer(h, TIMER_DTASK);
@@ -1841,26 +1944,43 @@ static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
         KillTimer(h, TIMER_DPEEK);
         KillTimer(h, TIMER_DSINK);
         KillTimer(h, TIMER_DPOLL);
-        if (D.winHook) { UnhookWinEvent(D.winHook); D.winHook = NULL; }
-        if (D.moveHook) { UnhookWinEvent(D.moveHook); D.moveHook = NULL; }
-        if (D.fgHook) { UnhookWinEvent(D.fgHook); D.fgHook = NULL; }
         if (D.appbar) {
             APPBARDATA abd = { sizeof(abd) };
             abd.hWnd = h;
             SHAppBarMessage(ABM_REMOVE, &abd);      /* las ventanas recuperan el espacio */
             D.appbar = FALSE;
         }
-        ClearIconCache();
         D.count = 0;
+        D.npinCache = 0;
+        D.pinSig = 0;
         Canvas_Free(&D.frame);
         Canvas_Free(&D.back);
         Canvas_Free(&D.raw);
         Canvas_Free(&D.gstrip);
         ZeroMemory(&D.dirtyPrev, sizeof(D.dirtyPrev));
         D.hwnd = NULL;
+        PacerOn(FALSE);
+        /* los ganchos y la caché de iconos son de todos: se quitan con el último dock */
+        BOOL any = FALSE;
+        for (int k = 0; k < MAX_DOCKS && !any; ++k) any = s_docks[k].hwnd != NULL;
+        if (!any) { StopHooks(); ClearIconCache(); }
         return 0;
     }
+    }
     return DefWindowProcW(h, m, w, l);
+}
+
+/* Cada ventana lleva su dock; mientras se atiende un mensaje, D es ese dock. */
+static LRESULT CALLBACK DockProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_NCCREATE) SetWindowLongPtrW(h, GWLP_USERDATA, (LONG_PTR)((CREATESTRUCTW *)l)->lpCreateParams);
+    Dock *d = (Dock *)GetWindowLongPtrW(h, GWLP_USERDATA);
+    if (!d) return DefWindowProcW(h, m, w, l);
+    Dock *o = s_d;
+    s_d = d;
+    const LRESULT r = DockProcFor(h, m, w, l);
+    s_d = o;
+    return r;
 }
 
 /* ───────────────────────── API ───────────────────────── */
@@ -1874,23 +1994,23 @@ void Dock_Register(void)
     RegisterClassExW(&wc);
 }
 
-void Dock_Apply(void)
+/* Crea el dock d en el monitor mon (el principal, si d es s_docks[0]). */
+static void CreateDock(Dock *d, const RECT *mon)
 {
-    if (!g_cfg.dock) {
-        if (D.hwnd) DestroyWindow(D.hwnd);
-        Dock_RestoreTaskbar();
-        return;
-    }
-    if (!D.hwnd) {
-        DockMeasure();
-        D.hot = D.pressed = -1;
-        QueryPerformanceFrequency(&D.freq);
-        QueryPerformanceCounter(&D.last);
-        D.hwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                                 DOCK_CLASS, L"OpenDock Dock", WS_POPUP,
-                                 D.mon.left, D.mon.bottom - WinH(), D.mon.right - D.mon.left, WinH(),
-                                 NULL, NULL, g_inst, NULL);
-        if (!D.hwnd) return;
+    Dock *o = s_d;
+    s_d = d;
+    ZeroMemory(d, sizeof(*d));
+    D.mon = *mon;
+    DockMeasure();
+    D.hot = D.pressed = -1;
+    QueryPerformanceFrequency(&D.freq);
+    QueryPerformanceCounter(&D.last);
+    const HWND h = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                                   DOCK_CLASS, L"OpenDock Dock", WS_POPUP,
+                                   D.mon.left, D.mon.bottom - WinH(), D.mon.right - D.mon.left, WinH(),
+                                   NULL, NULL, g_inst, d);
+    if (h) {
+        D.hwnd = h;
         APPBARDATA abd = { sizeof(abd) };
         abd.hWnd = D.hwnd;
         abd.uCallbackMessage = WM_DOCK_APPBAR;
@@ -1902,37 +2022,14 @@ void Dock_Apply(void)
         Render();
         ShowWindow(D.hwnd, SW_SHOWNOACTIVATE);
         SetTimer(D.hwnd, TIMER_DSTATUS, STATUS_MS, NULL);
-        D.fgHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, NULL, FgHook, 0, 0,
-                                   WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-        /* ventanas que se abren, se cierran o se ocultan: el dock se entera al momento */
-        D.winHook = SetWinEventHook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, NULL, WinHook, 0, 0,
-                                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-        ApplyCapture();
         ApplyAutoHide();
-    } else {
-        Rescan();
-        Render();
     }
-    SetTaskbarOff(g_cfg.dockHideTaskbar);
+    s_d = o;
 }
 
-void Dock_ConfigChanged(void)
+/* Vuelve a colocar el dock actual en su monitor (resolución, escala, tamaño de icono). */
+static void PlaceDock(void)
 {
-    if (!D.hwnd) return;
-    DockMeasure();
-    ApplyCapture();
-    AppBarPos();
-    SetWindowPos(D.hwnd, HWND_TOPMOST, D.mon.left, D.mon.bottom - WinH(), D.mon.right - D.mon.left, WinH(), SWP_NOACTIVATE);
-    Canvas_Free(&D.back);
-    Rescan();           /* con otro tamaño de icono la caché pide la nueva resolución */
-    Render();
-    ApplyAutoHide();
-    Kick();             /* ocultar dock activado o quitado: que baje o suba */
-}
-
-void Dock_Reposition(void)
-{
-    if (!D.hwnd) return;
     DockMeasure();
     AppBarPos();
     SetWindowPos(D.hwnd, HWND_TOPMOST, D.mon.left, D.mon.bottom - WinH(), D.mon.right - D.mon.left, WinH(), SWP_NOACTIVATE);
@@ -1941,13 +2038,108 @@ void Dock_Reposition(void)
     Render();
 }
 
+typedef struct { RECT r[MAX_DOCKS]; int n; } MonList;
+
+static BOOL CALLBACK MonProc(HMONITOR m, HDC dc, LPRECT rc, LPARAM lp)
+{
+    (void)dc; (void)rc;
+    MonList *ml = (MonList *)lp;
+    MONITORINFO mi = { sizeof(mi) };
+    if (ml->n < MAX_DOCKS && GetMonitorInfoW(m, &mi) && !(mi.dwFlags & MONITORINFOF_PRIMARY)) ml->r[ml->n++] = mi.rcMonitor;
+    return TRUE;
+}
+
+/* Un dock en cada monitor que no es el principal: se quitan los de monitores que ya no
+ * están, se recolocan los que siguen y se crean los que faltan. */
+static void SyncSecondaries(void)
+{
+    MonList ml = { 0 };
+    EnumDisplayMonitors(NULL, NULL, MonProc, (LPARAM)&ml);
+    BOOL have[MAX_DOCKS] = { 0 };
+    Dock *o = s_d;
+    for (int k = 1; k < MAX_DOCKS; ++k) {
+        s_d = &s_docks[k];
+        if (!D.hwnd) continue;
+        int j = 0;
+        while (j < ml.n && (have[j] || !EqualRect(&ml.r[j], &D.mon))) ++j;
+        if (j < ml.n) { have[j] = TRUE; PlaceDock(); }
+        else DestroyWindow(D.hwnd);
+    }
+    s_d = o;
+    for (int j = 0; j < ml.n; ++j) {
+        if (have[j]) continue;
+        for (int k = 1; k < MAX_DOCKS; ++k)
+            if (!s_docks[k].hwnd) { CreateDock(&s_docks[k], &ml.r[j]); break; }
+    }
+}
+
+/* Primero los secundarios: el principal se lleva al final los ganchos y la caché. */
+static void DestroyDocks(void)
+{
+    for (int k = MAX_DOCKS - 1; k >= 0; --k)
+        if (s_docks[k].hwnd) DestroyWindow(s_docks[k].hwnd);
+}
+
+void Dock_Apply(void)
+{
+    if (!g_cfg.dock) {
+        DestroyDocks();
+        Dock_RestoreTaskbar();
+        return;
+    }
+    if (!PRIMARY->hwnd) {
+        const RECT none = { 0 };
+        DestroyDocks();             /* por si quedó alguno suelto */
+        CreateDock(PRIMARY, &none);
+        if (!PRIMARY->hwnd) return;
+        StartHooks();
+    } else {
+        Dock *o = s_d;
+        for (int k = 0; k < MAX_DOCKS; ++k) {
+            s_d = &s_docks[k];
+            if (D.hwnd) { Rescan(); Render(); }
+        }
+        s_d = o;
+    }
+    SyncSecondaries();
+    SetTaskbarOff(g_cfg.dockHideTaskbar);
+}
+
+void Dock_ConfigChanged(void)
+{
+    Dock *o = s_d;
+    for (int k = 0; k < MAX_DOCKS; ++k) {
+        s_d = &s_docks[k];
+        if (!D.hwnd) continue;
+        ApplyCapture();
+        PlaceDock();        /* con otro tamaño de icono la caché pide la nueva resolución */
+        ApplyAutoHide();
+        Kick();             /* ocultar dock activado o quitado: que baje o suba */
+    }
+    s_d = o;
+}
+
+/* Cambios de resolución, escala o monitores (conectar o quitar uno). */
+void Dock_Reposition(void)
+{
+    if (!PRIMARY->hwnd) return;
+    Dock *o = s_d;
+    s_d = PRIMARY;
+    PlaceDock();
+    s_d = o;
+    SyncSecondaries();
+}
+
 void Dock_Raise(void)
 {
-    if (D.hwnd && !D.fullscreen && App_Covered(D.hwnd))
-        SetWindowPos(D.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    for (int k = 0; k < MAX_DOCKS; ++k) {
+        const Dock *d = &s_docks[k];
+        if (d->hwnd && !d->fullscreen && App_Covered(d->hwnd))
+            SetWindowPos(d->hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    }
 }
 
 void Dock_Destroy(void)
 {
-    if (D.hwnd) DestroyWindow(D.hwnd);
+    DestroyDocks();
 }
