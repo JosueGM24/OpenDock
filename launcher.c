@@ -24,6 +24,7 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <shellapi.h>
+#include <sddl.h>
 #include <limits.h>
 #include <math.h>
 
@@ -51,6 +52,7 @@
 #define LABELH  28
 #define TILEH   100
 #define FROWH   48
+#define FOOTH   54
 
 /* ───────────────────────── Comparación sin mayúsculas ni acentos ───────────────────────── */
 static WCHAR *volatile s_fold;      /* por carácter: minúscula y sin tilde */
@@ -543,7 +545,7 @@ static DWORD *BitmapBits(HBITMAP bmp, int *ow, int *oh)
     return buf;
 }
 
-static DWORD *ItemIcon(const WCHAR *parsing, int px, int *w, int *h)
+static DWORD *ItemIcon(const WCHAR *parsing, int px, int *w, int *h, BOOL iconOnly)
 {
     IShellItem *si = NULL;
     if (FAILED(SHCreateItemFromParsingName(parsing, NULL, &IID_IShellItem, (void **)&si))) return NULL;
@@ -551,7 +553,7 @@ static DWORD *ItemIcon(const WCHAR *parsing, int px, int *w, int *h)
     HBITMAP bmp = NULL;
     if (SUCCEEDED(IShellItem_QueryInterface(si, &IID_IShellItemImageFactory, (void **)&f))) {
         SIZE sz = { px, px };
-        IShellItemImageFactory_GetImage(f, sz, SIIGBF_ICONONLY | SIIGBF_RESIZETOFIT, &bmp);
+        IShellItemImageFactory_GetImage(f, sz, (iconOnly ? SIIGBF_ICONONLY : 0) | SIIGBF_RESIZETOFIT, &bmp);
         IShellItemImageFactory_Release(f);
     }
     IShellItem_Release(si);
@@ -601,11 +603,26 @@ static DWORD *LoadIconBits(const WCHAR *key, int px, int *w, int *h)
     if (!wcsncmp(key, L"app:", 4)) {
         WCHAR p[300];
         wsprintfW(p, L"shell:AppsFolder\\%.270s", key + 4);
-        return ItemIcon(p, px, w, h);
+        return ItemIcon(p, px, w, h, TRUE);
+    }
+    if (!wcsncmp(key, L"pic:", 4)) {          /* foto de la cuenta: miniatura recortada en círculo */
+        DWORD *b = ItemIcon(key + 4, px, w, h, FALSE);
+        if (b) {
+            const float cx = *w * 0.5f, cy = *h * 0.5f, r = min(*w, *h) * 0.5f;
+            for (int y = 0; y < *h; ++y)
+                for (int x = 0; x < *w; ++x) {
+                    const float d = sqrtf((x + 0.5f - cx) * (x + 0.5f - cx) + (y + 0.5f - cy) * (y + 0.5f - cy)) - r;
+                    const float cov = d < -0.5f ? 1.0f : d > 0.5f ? 0.0f : 0.5f - d;
+                    if (cov >= 1.0f) continue;
+                    const DWORD v = b[y * *w + x], k = (DWORD)(cov * 256.0f);
+                    b[y * *w + x] = ((v >> 24) * k >> 8) << 24 | (((v >> 16) & 255) * k >> 8) << 16 | (((v >> 8) & 255) * k >> 8) << 8 | ((v & 255) * k >> 8);
+                }
+        }
+        return b;
     }
     if (!wcsncmp(key, L"dir:", 4)) return TypeIcon(L"carpeta", TRUE, px, w, h);
     if (!wcsncmp(key, L"ext:", 4)) return TypeIcon(key[4] ? key + 4 : L"archivo", FALSE, px, w, h);
-    return ItemIcon(key, px, w, h);
+    return ItemIcon(key, px, w, h, TRUE);
 }
 
 static DWORD WINAPI IconThread(LPVOID u)
@@ -687,6 +704,7 @@ static void IconKeyForFile(const WCHAR *path, BOOL dir, WCHAR *out)
 
 /* ───────────────────────── Ventana ───────────────────────── */
 enum { RK_APP, RK_FILE, RK_DIR, RK_WEB };
+enum { FB_USER, FB_SETTINGS, FB_LOCK, FB_SIGNOUT, FB_SLEEP, FB_RESTART, FB_POWER, FB_COUNT };
 
 typedef struct {
     int   kind;
@@ -722,7 +740,12 @@ static struct {
     DWORD    bgBase;                /* color medio del fondo: hacia él se funde lo que entra */
     /* animación: alto del panel */
     float    hcur, hv;
-    BOOL     anim;
+    BOOL     anim, tracking;
+    /* barra de sesión: huecos, señalado/pulsado y su escala */
+    RECT     fb[FB_COUNT];
+    int      fhot, fpress;
+    float    fs[FB_COUNT], fsv[FB_COUNT];
+    IconC    fglyph[FB_COUNT];
     LARGE_INTEGER last;
 } L;
 
@@ -739,8 +762,8 @@ static void MakeFonts(void)
     FreeFonts();
     LPCWSTR ui = Gfx_UiFace();
     L.fQuery = Gfx_Font(ui, SS(20), FW_NORMAL, CLEARTYPE_QUALITY);
-    L.fTitle = Gfx_Font(ui, SS(15), FW_NORMAL, CLEARTYPE_QUALITY);
-    L.fSub   = Gfx_Font(ui, SS(13), FW_NORMAL, CLEARTYPE_QUALITY);
+    L.fTitle = Gfx_Font(ui, SS(15), FW_SEMIBOLD, CLEARTYPE_QUALITY);
+    L.fSub   = Gfx_Font(ui, SS(13), FW_MEDIUM, CLEARTYPE_QUALITY);
     L.fLabel = Gfx_Font(ui, SS(12), FW_SEMIBOLD, CLEARTYPE_QUALITY);
     L.fIcon  = Gfx_Font(Gfx_IconFace(), SS(18), FW_NORMAL, CLEARTYPE_QUALITY);
     L.fGlyph = Gfx_Font(Gfx_IconFace(), SS(20), FW_NORMAL, CLEARTYPE_QUALITY);
@@ -934,7 +957,10 @@ static int Layout(void)
     } else {
         for (int i = 0; i < L.nres; ++i) { SetRect(&L.res[i].rc, pad, y, L.w - pad, y + SS(ROWH)); y += SS(ROWH); }
     }
-    return min(L.maxH, y + SS(8));
+    const int h = min(L.maxH, y + SS(8) + SS(FOOTH)), ft = h - SS(FOOTH), bw = SS(40);
+    SetRect(&L.fb[FB_USER], pad, ft + SS(6), pad + SS(240), h - SS(6));
+    for (int i = FB_COUNT - 1, x = L.w - pad; i >= FB_SETTINGS; --i, x -= bw) SetRect(&L.fb[i], x - bw, ft + SS(7), x, h - SS(7));
+    return h;
 }
 
 /* Icono (premultiplicado) centrado en (cx, cy), escalado y con opacidad: bilineal. */
@@ -985,6 +1011,166 @@ static const IconC *RowIcon(Res *r, int px)
     const IconC *ic = GetIcon(r->icon, px);
     if (ic && !r->iconUp) { r->iconUp = TRUE; r->is = 0.45f; r->isv = 0; }
     return ic;
+}
+
+/* ───────────────────────── Barra de sesión (abajo) ─────────────────────────
+ * Como la del Inicio de Windows: la cuenta a la izquierda y, a la derecha, Configuración,
+ * Bloquear, Cerrar sesión, Suspender, Reiniciar y Apagar. Lo señalado crece. */
+#ifndef EWX_HYBRID_SHUTDOWN
+#define EWX_HYBRID_SHUTDOWN 0x00400000
+#endif
+#ifndef SHTDN_REASON_FLAG_PLANNED
+#define SHTDN_REASON_FLAG_PLANNED 0x80000000
+#endif
+static const WCHAR kFootGlyph[FB_COUNT] = { 0, 0xE713, 0xE72E, 0xF3B1, 0xE708, 0xE777, 0xE7E8 };
+static const WCHAR *const kFootName[FB_COUNT] = {
+    L"Cuenta", L"Configuraci\x00F3n", L"Bloquear", L"Cerrar sesi\x00F3n", L"Suspender", L"Reiniciar", L"Apagar"
+};
+static WCHAR s_userName[128], s_userPic[MAX_PATH];
+
+/* Nombre para mostrar y foto de la cuenta (la que Windows guarda para el Inicio). */
+static void UserInfo(void)
+{
+    if (s_userName[0]) return;
+    HMODULE m = LoadLibraryExW(L"secur32.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (m) {
+        typedef BOOLEAN (WINAPI *GetNameEx)(int, LPWSTR, PULONG);
+        GetNameEx f = (GetNameEx)(void *)GetProcAddress(m, "GetUserNameExW");
+        ULONG n = 128;
+        if (!f || !f(3 /* NameDisplay */, s_userName, &n)) s_userName[0] = 0;
+        FreeLibrary(m);
+    }
+    if (!s_userName[0]) { DWORD n = 128; if (!GetUserNameW(s_userName, &n)) lstrcpyW(s_userName, L"Usuario"); }
+    HANDLE tok = NULL;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) {
+        BYTE buf[256];
+        DWORD sz = 0;
+        LPWSTR sid = NULL;
+        if (GetTokenInformation(tok, TokenUser, buf, sizeof(buf), &sz) && ConvertSidToStringSidW(((TOKEN_USER *)buf)->User.Sid, &sid)) {
+            WCHAR key[256];
+            wsprintfW(key, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AccountPicture\\Users\\%.180s", sid);
+            static const WCHAR *const kVals[] = { L"Image192", L"Image240", L"Image96" };
+            for (int i = 0; i < 3 && !s_userPic[0]; ++i) {
+                DWORD n = sizeof(s_userPic);
+                if (RegGetValueW(HKEY_LOCAL_MACHINE, key, kVals[i], RRF_RT_REG_SZ, NULL, s_userPic, &n) != ERROR_SUCCESS ||
+                    GetFileAttributesW(s_userPic) == INVALID_FILE_ATTRIBUTES) s_userPic[0] = 0;
+            }
+            LocalFree(sid);
+        }
+        CloseHandle(tok);
+    }
+}
+
+static void FreeGlyphs(void)
+{
+    for (int i = 0; i < FB_COUNT; ++i) {
+        if (L.fglyph[i].bits) HeapFree(GetProcessHeap(), 0, L.fglyph[i].bits);
+        ZeroMemory(&L.fglyph[i], sizeof(L.fglyph[i]));
+    }
+}
+
+/* Los iconos de la barra se dibujan una vez (a 1,25×, para crecer nítidos) y se escalan. */
+#define GLYPH_K 1.25f
+static void MakeGlyphs(void)
+{
+    FreeGlyphs();
+    const int px = (int)(SS(17) * GLYPH_K + 0.5f), box = px + SS(6);
+    HFONT f = Gfx_Font(Gfx_IconFace(), px, FW_NORMAL, ANTIALIASED_QUALITY);
+    Canvas c;
+    if (!f || !Canvas_Init(&c, box, box)) { if (f) DeleteObject(f); return; }
+    const DWORD fg = L.fg;
+    for (int i = 1; i < FB_COUNT; ++i) {
+        const WCHAR g[2] = { kFootGlyph[i], 0 };
+        Canvas_Clear(&c, 0);
+        Gfx_Text(&c, f, g, 0, 0, box, box, 0xFFFFFF, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        GdiFlush();
+        DWORD *bits = (DWORD *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)box * box * 4);
+        if (!bits) continue;
+        for (int k = 0; k < box * box; ++k) {
+            const DWORD a = (c.px[k] >> 8) & 255;          /* blanco sobre negro: la cobertura */
+            bits[k] = a << 24 | (((fg >> 16) & 255) * a / 255) << 16 | (((fg >> 8) & 255) * a / 255) << 8 | ((fg & 255) * a / 255);
+        }
+        L.fglyph[i].bits = bits; L.fglyph[i].w = L.fglyph[i].h = box;
+    }
+    Canvas_Free(&c);
+    DeleteObject(f);
+}
+
+static void EnablePrivilege(LPCWSTR name)
+{
+    HANDLE tok;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tok)) return;
+    TOKEN_PRIVILEGES tp;
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    if (LookupPrivilegeValueW(NULL, name, &tp.Privileges[0].Luid)) AdjustTokenPrivileges(tok, FALSE, &tp, 0, NULL, NULL);
+    CloseHandle(tok);
+}
+
+static void Close(void);
+static void FootAction(int i)
+{
+    AllowSetForegroundWindow(ASFW_ANY);
+    Close();
+    const DWORD why = SHTDN_REASON_FLAG_PLANNED;      /* "otro (planeado)", como el menú de Windows */
+    switch (i) {
+    case FB_USER:     App_ShellOpen(L"ms-settings:yourinfo"); break;
+    case FB_SETTINGS: App_ShellOpen(L"ms-settings:"); break;
+    case FB_LOCK:     LockWorkStation(); break;
+    case FB_SIGNOUT:  ExitWindowsEx(EWX_LOGOFF, why); break;
+    case FB_SLEEP: {
+        HMODULE m = LoadLibraryExW(L"powrprof.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (m) {
+            typedef BOOLEAN (WINAPI *Suspend)(BOOLEAN, BOOLEAN, BOOLEAN);
+            Suspend f = (Suspend)(void *)GetProcAddress(m, "SetSuspendState");
+            if (f) f(FALSE, FALSE, FALSE);
+            FreeLibrary(m);
+        }
+        break;
+    }
+    case FB_RESTART:  EnablePrivilege(SE_SHUTDOWN_NAME); ExitWindowsEx(EWX_REBOOT, why); break;
+    case FB_POWER:    EnablePrivilege(SE_SHUTDOWN_NAME); ExitWindowsEx(EWX_SHUTDOWN | EWX_POWEROFF | EWX_HYBRID_SHUTDOWN, why); break;
+    }
+}
+
+static int HitFoot(int x, int y)
+{
+    POINT p = { x, y };
+    for (int i = 0; i < FB_COUNT; ++i) if (PtInRect(&L.fb[i], p)) return i;
+    return -1;
+}
+
+/* Dibuja la barra pegada al borde de abajo del alto actual (H). */
+static void PaintFooter(Canvas *c, int H)
+{
+    const int pad = SS(LPAD), qh = SS(QH), ft = H - SS(FOOTH), dy = H - L.h;
+    if (ft <= qh + 2) return;
+    Gfx_FillRRect(c, (float)pad, (float)ft, (float)(L.w - 2 * pad), 1.0f, 0, L.line, 1.0f);
+    RECT u = L.fb[FB_USER];
+    OffsetRect(&u, 0, dy);
+    const int av = SS(30), ax = u.left + SS(6);
+    const float acy = (u.top + u.bottom) * 0.5f;
+    WCHAR key[MAX_PATH + 8];
+    wsprintfW(key, L"pic:%.260s", s_userPic);
+    const IconC *pic = s_userPic[0] ? GetIcon(key, av) : NULL;
+    if (pic) BlitIcon(c, pic, ax + av * 0.5f, acy, L.fs[FB_USER], 1.0f);
+    else {
+        const WCHAR ini[2] = { s_userName[0] ? (WCHAR)(ULONG_PTR)CharUpperW((LPWSTR)(ULONG_PTR)s_userName[0]) : L'?', 0 };
+        Gfx_FillCircle(c, ax + av * 0.5f, acy, av * 0.5f * L.fs[FB_USER], L.accent, 1.0f);
+        Gfx_Text(c, L.fLabel, ini, ax, u.top, av, u.bottom - u.top, 0xFFFFFF, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    const int nx = ax + av + SS(10);
+    Gfx_Text(c, L.fTitle, s_userName, nx, u.top, u.right - nx, u.bottom - u.top, L.fg, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    for (int i = FB_SETTINGS; i < FB_COUNT; ++i) {
+        RECT b = L.fb[i];
+        OffsetRect(&b, 0, dy);
+        BlitIcon(c, &L.fglyph[i], (b.left + b.right) * 0.5f, (b.top + b.bottom) * 0.5f, L.fs[i] / GLYPH_K, L.fhot == i ? 1.0f : 0.78f);
+    }
+    if (L.fhot >= FB_SETTINGS) {        /* el nombre de la acción, a su izquierda */
+        RECT b = L.fb[FB_SETTINGS];
+        OffsetRect(&b, 0, dy);
+        Gfx_Text(c, L.fSub, kFootName[L.fhot], b.left - SS(170), b.top, SS(160), b.bottom - b.top, L.fg2, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
 }
 
 static void Kick(void);
@@ -1063,6 +1249,7 @@ static void Paint(void)
         static const WCHAR *const kKind[] = { L"App", L"Archivo", L"Carpeta", L"Web" };
         if (L.qlen) Gfx_Text(c, L.fSub, kKind[r->kind], rc.right - SS(80), rc.top, SS(70), rh, Gfx_Mix(L.bgBase, L.fg3, a), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
+    PaintFooter(c, H);
     Pop_Present(&L.pop, c);
     /* un icono que acaba de llegar empieza su "pop": que haya fotogramas */
     for (int i = 0; i < L.nres; ++i) if (L.res[i].iconUp && L.res[i].is < 0.999f && !L.anim) { Kick(); break; }
@@ -1116,6 +1303,11 @@ static BOOL Advance(void)
         const float hg = i == L.sel ? (r->tile ? 1.16f : 1.22f) : 1.0f;     /* el señalado crece, con rebote */
         for (int k = 0; k < 2; ++k) Spring(&r->hs, &r->hsv, hg, dt * 0.5f, 420.0f, z);
         if (!Settled(&r->hs, &r->hsv, hg, 0.0008f, 0.01f)) moving = TRUE;
+    }
+    for (int i = 0; i < FB_COUNT; ++i) {
+        const float tg = L.fpress == i ? 0.88f : L.fhot == i ? (i == FB_USER ? 1.08f : 1.2f) : 1.0f;
+        for (int k = 0; k < 2; ++k) Spring(&L.fs[i], &L.fsv[i], tg, dt * 0.5f, 420.0f, z);
+        if (!Settled(&L.fs[i], &L.fsv[i], tg, 0.0008f, 0.01f)) moving = TRUE;
     }
     return moving;
 }
@@ -1344,11 +1536,29 @@ static LRESULT CALLBACK LnProc(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     }
     case WM_MOUSEMOVE: {
+        if (!L.tracking) {
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 };
+            L.tracking = TrackMouseEvent(&tme);
+        }
+        const int fh = HitFoot((short)LOWORD(l), (short)HIWORD(l));
+        if (fh != L.fhot) { L.fhot = fh; Kick(); }
         const int hit = HitRes((short)LOWORD(l), (short)HIWORD(l));
         if (hit >= 0 && hit != L.sel) { L.sel = hit; Kick(); }
         return 0;
     }
+    case WM_MOUSELEAVE:
+        L.tracking = FALSE;
+        L.fhot = L.fpress = -1;
+        Kick();
+        return 0;
+    case WM_LBUTTONDOWN:
+        L.fpress = HitFoot((short)LOWORD(l), (short)HIWORD(l));
+        if (L.fpress >= 0) Kick();
+        return 0;
     case WM_LBUTTONUP: {
+        const int fh = HitFoot((short)LOWORD(l), (short)HIWORD(l)), was = L.fpress;
+        L.fpress = -1;
+        if (fh >= 0 || was >= 0) { Kick(); if (fh >= 0 && fh == was) FootAction(fh); return 0; }
         const int hit = HitRes((short)LOWORD(l), (short)HIWORD(l));
         if (hit >= 0) Run(hit, GetKeyState(VK_CONTROL) < 0);
         return 0;
@@ -1361,6 +1571,7 @@ static LRESULT CALLBACK LnProc(HWND h, UINT m, WPARAM w, LPARAM l)
         Pop_FreeGlass(&L.glass);
         Canvas_Free(&L.cv);
         Canvas_Free(&L.bg);
+        FreeGlyphs();
         FreeFonts();
         L.hwnd = NULL;
         L.closedAt = GetTickCount();
@@ -1402,10 +1613,16 @@ static void Open(void)
     if (L.light) { L.fg = 0x1C1C1E; L.fg2 = 0x55555A; L.fg3 = 0x7C7C82; L.line = 0xD1D1D6; }
     else         { L.fg = 0xFFFFFF; L.fg2 = 0xB8B8BD; L.fg3 = 0x8E8E93; L.line = 0x2C2C2E; }
     L.accent = g_cfg.accent ? kAccentPresets[g_cfg.accent] : th.accentOnBlack;
+    UserInfo();
+    MakeGlyphs();
+    L.fhot = L.fpress = -1;
+    L.tracking = FALSE;
+    for (int i = 0; i < FB_COUNT; ++i) { L.fs[i] = 1.0f; L.fsv[i] = 0; }
 
     L.w = min(SS(LW), (int)(mi.rcWork.right - mi.rcWork.left) - SS(32));
     L.maxH = SS(QH) + SS(6) + MAX_RES * SS(ROWH) + SS(8);
     L.maxH = max(L.maxH, SS(QH) + SS(6) + 2 * SS(LABELH) + SS(TILEH) + SS(4) + RECENT_N * SS(FROWH) + SS(8));
+    L.maxH += SS(FOOTH);
     L.ox = (mi.rcWork.left + mi.rcWork.right - L.w) / 2;
     L.oy = mi.rcWork.top + (int)((mi.rcWork.bottom - mi.rcWork.top) * 0.18f);
 
