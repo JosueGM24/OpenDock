@@ -481,6 +481,12 @@ static void CopyKey(NoteKey *k, const unsigned char *tag, const unsigned char *g
     k->tag[KEY_CAP - 1] = k->group[KEY_CAP - 1] = 0;
 }
 
+/* El mismo aviso (misma app y mismo texto), aunque Windows le dé otro id. */
+static BOOL SameNote(const WinNote *a, const WinNote *b)
+{
+    return !lstrcmpW(a->title, b->title) && !lstrcmpW(a->body, b->body) && !lstrcmpiW(a->aumid, b->aumid);
+}
+
 static void PushHistory(const WinNote *w, const NoteKey *k)
 {
     if (s_nhist == WN_MAX) {            /* lleno: fuera el más antiguo (el último) */
@@ -507,7 +513,10 @@ static void Merge(void)
     int a = 0, b = 0, n = 0;
     while (n < WN_MAX && (a < s_ncur || b < s_nhist)) {
         const BOOL takeCur = b >= s_nhist || (a < s_ncur && s_cur[a].arrival >= s_hist[b].arrival);
-        s_notes[n++] = takeCur ? s_cur[a++] : s_hist[b++];
+        const WinNote *w = takeCur ? &s_cur[a++] : &s_hist[b++];
+        BOOL dup = FALSE;               /* repetido (p. ej. publicado dos veces): sólo el más nuevo */
+        for (int k = 0; k < n && !dup; ++k) dup = SameNote(&s_notes[k], w);
+        if (!dup) s_notes[n++] = *w;
     }
     s_count = n;
 }
@@ -573,7 +582,12 @@ void Wn_Refresh(BOOL notify)
                 replaced = !kept;
                 break;
             }
-            if (fresh[j].id > old->id && SameChat(&fresh[j], &freshKey[j], old, &s_curKey[i])) replaced = TRUE;
+            /* otro del mismo chat; si trae el mismo texto es el mismo aviso publicado otra vez
+             * (Gmail y otras webs lo hacen al sincronizar): nada que guardar */
+            if (fresh[j].id > old->id && SameChat(&fresh[j], &freshKey[j], old, &s_curKey[i])) {
+                if (SameNote(&fresh[j], old)) { kept = TRUE; break; }
+                replaced = TRUE;
+            }
         }
         if (replaced && !kept) PushHistory(old, &s_curKey[i]);
     }
@@ -584,6 +598,9 @@ void Wn_Refresh(BOOL notify)
         if (!alive || IsDismissed(s_hist[i].id)) DropHistory(i);
     }
 
+    static WinNote oldNotes[WN_MAX];
+    const int oldN = s_count;
+    CopyMemory(oldNotes, s_notes, oldN * sizeof(WinNote));
     CopyMemory(s_cur, fresh, n * sizeof(WinNote));
     CopyMemory(s_curKey, freshKey, n * sizeof(NoteKey));
     s_ncur = n;
@@ -592,7 +609,13 @@ void Wn_Refresh(BOOL notify)
 
     if (notify && newestId)
         for (int i = 0; i < s_count; ++i)
-            if (s_notes[i].id == newestId) { Notch_ShowWin(&s_notes[i]); break; }
+            if (s_notes[i].id == newestId) {
+                /* el mismo aviso otra vez (ya estaba, con otro id): sin volver a saltar */
+                BOOL seen = FALSE;
+                for (int k = 0; k < oldN && !seen; ++k) seen = SameNote(&oldNotes[k], &s_notes[i]);
+                if (!seen) Notch_ShowWin(&s_notes[i]);
+                break;
+            }
     Notch_NotesChanged();
 }
 
@@ -747,7 +770,7 @@ const WinNote *Wn_Get(int i)
     return i >= 0 && i < s_count ? &s_notes[i] : &s_empty;
 }
 
-void Wn_Dismiss(LONGLONG id)
+static void DismissId(LONGLONG id)
 {
     /* los del historial (ids propios) se quitan abajo y no sobreviven al reinicio */
     if (id < 0x4000000000000000LL && !IsDismissed(id)) {
@@ -757,6 +780,18 @@ void Wn_Dismiss(LONGLONG id)
     }
     for (int i = 0; i < s_nhist; ++i)
         if (s_hist[i].id == id) { DropHistory(i); break; }
+}
+
+void Wn_Dismiss(LONGLONG id)
+{
+    WinNote gone;
+    BOOL have = FALSE;
+    for (int i = 0; i < s_count && !have; ++i) if (s_notes[i].id == id) { gone = s_notes[i]; have = TRUE; }
+    DismissId(id);
+    if (have) {     /* y sus copias (ocultas por repetidas), para que no salgan en su lugar */
+        for (int i = 0; i < s_ncur; ++i) if (s_cur[i].id != id && SameNote(&s_cur[i], &gone)) DismissId(s_cur[i].id);
+        for (int i = s_nhist - 1; i >= 0; --i) if (SameNote(&s_hist[i], &gone)) DropHistory(i);
+    }
     for (int i = 0; i < s_count; ++i)
         if (s_notes[i].id == id) {
             MoveMemory(&s_notes[i], &s_notes[i + 1], (s_count - i - 1) * sizeof(WinNote));
