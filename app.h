@@ -293,6 +293,8 @@ void Dock_ConfigChanged(void);
 void Dock_TrayPeek(BOOL on);
 void Dock_Destroy(void);
 BOOL Dock_WindowAumid(HWND w, wchar_t *out, int cch);   /* AppUserModelID de una ventana (Store, PWA…) */
+BOOL Dock_IsPinned(LPCWSTR target);     /* target: AppUserModelID ("aumid:" opcional), .exe o .lnk */
+void Dock_TogglePin(LPCWSTR target);    /* anclar o quitar del dock (lo usa el buscador) */
 
 /* ── menu.c: menú contextual propio (material y muelle de OpenDock) ── */
 enum { MI_SEPARATOR = 1, MI_HEADER = 2, MI_DISABLED = 4, MI_CHECKED = 8, MI_DANGER = 16 };

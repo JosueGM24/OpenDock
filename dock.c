@@ -1408,6 +1408,47 @@ static void TogglePin(const DockItem *it)
     ++s_pinVer;
 }
 
+/* Anclar desde fuera del dock (el buscador): target es un AppUserModelID (con o sin
+ * "aumid:"), un .exe o un .lnk. Busca la app en el dock principal (anclada o abierta);
+ * si no está, tmp la describe para añadirla. */
+static BOOL TargetItem(LPCWSTR target, DockItem *tmp, DockItem **found)
+{
+    *found = NULL;
+    NewItem(tmp);
+    const int n = lstrlenW(target);
+    if (!wcsncmp(target, L"aumid:", 6)) lstrcpynW(tmp->aumid, target + 6, 128);
+    else if (LooksAumid(target)) lstrcpynW(tmp->aumid, target, 128);
+    else if (n > 4 && !lstrcmpiW(target + n - 4, L".lnk")) {
+        if (!LnkAumid(target, tmp->aumid, 128)) ResolveLnk(target, tmp->exe);
+        lstrcpynW(tmp->launch, target, MAX_PATH);
+    } else {
+        lstrcpynW(tmp->exe, target, MAX_PATH);
+        lstrcpynW(tmp->launch, target, MAX_PATH);
+    }
+    if (!tmp->aumid[0] && !tmp->exe[0]) return FALSE;
+    const Dock *p = &s_docks[0];
+    for (int i = 0; i < p->count && !*found; ++i) {
+        const DockItem *it = &p->items[i];
+        if (tmp->aumid[0] ? !lstrcmpiW(it->aumid, tmp->aumid) : (it->exe[0] && !lstrcmpiW(it->exe, tmp->exe)))
+            *found = (DockItem *)it;
+    }
+    return TRUE;
+}
+
+BOOL Dock_IsPinned(LPCWSTR target)
+{
+    DockItem tmp, *it;
+    return TargetItem(target, &tmp, &it) && it && it->pinned;
+}
+
+void Dock_TogglePin(LPCWSTR target)
+{
+    DockItem tmp, *it;
+    if (!TargetItem(target, &tmp, &it)) return;
+    TogglePin(it ? it : &tmp);
+    RescanAll();
+}
+
 static void RunAsAdmin(const DockItem *it)
 {
     const wchar_t *target = it->exe[0] ? it->exe : it->launch;
