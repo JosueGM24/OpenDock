@@ -291,8 +291,8 @@ static void AddLnk(const wchar_t *dir, const wchar_t *file)
     if (GetIcon(it->launch, it)) D.count++;
 }
 
-/* Una app empaquetada anclada: se abre y se dibuja por shell:AppsFolder\<AUMID>. */
-static BOOL AddPackaged(const wchar_t *aumid)
+/* Una app empaquetada: se abre y se dibuja por shell:AppsFolder\<AUMID>. */
+static BOOL AddPackagedAs(const wchar_t *aumid, BOOL pinned)
 {
     if (D.count >= MAX_ITEMS) return FALSE;
     wchar_t path[MAX_PATH];
@@ -301,7 +301,7 @@ static BOOL AddPackaged(const wchar_t *aumid)
     if (FAILED(SHCreateItemFromParsingName(path, NULL, &IID_IShellItem, (void **)&si))) return FALSE;
     DockItem *it = &D.items[D.count];
     NewItem(it);
-    it->pinned = TRUE;
+    it->pinned = pinned;
     lstrcpynW(it->launch, path, MAX_PATH);
     lstrcpynW(it->aumid, aumid, 128);
     PWSTR dn = NULL;
@@ -312,6 +312,8 @@ static BOOL AddPackaged(const wchar_t *aumid)
     if (GetIcon(path, it)) { D.count++; return TRUE; }
     return FALSE;
 }
+
+static BOOL AddPackaged(const wchar_t *aumid) { return AddPackagedAs(aumid, TRUE); }
 
 /* ¿Parece un AppUserModelID de paquete? Familia (nombre_hash de 13) + "!" + aplicación. */
 static BOOL LooksAumid(const wchar_t *s)
@@ -568,15 +570,17 @@ static DockItem *FindByAumid(HWND w)
     return NULL;
 }
 
+/* Las mismas reglas que la barra de tareas: WS_EX_APPWINDOW la pone siempre; si no, ni las
+ * de herramientas ni las que tienen dueño (diálogos, paletas). */
 static BOOL IsAppWindow(HWND w)
 {
-    if (!IsWindowVisible(w) || GetWindow(w, GW_OWNER)) return FALSE;
+    if (!IsWindowVisible(w)) return FALSE;
     const LONG ex = (LONG)GetWindowLongPtrW(w, GWL_EXSTYLE);
-    if (ex & WS_EX_TOOLWINDOW) return FALSE;
+    if (!(ex & WS_EX_APPWINDOW) && ((ex & WS_EX_TOOLWINDOW) || GetWindow(w, GW_OWNER))) return FALSE;
     int cloak = 0;
     DwmGetWindowAttribute(w, 14 /*DWMWA_CLOAKED*/, &cloak, sizeof(cloak));
     if (cloak) return FALSE;
-    return GetWindowTextLengthW(w) > 0;
+    return (ex & WS_EX_APPWINDOW) || GetWindowTextLengthW(w) > 0;
 }
 
 static BOOL WindowExe(HWND w, wchar_t *path)
@@ -646,6 +650,22 @@ static BOOL CALLBACK EnumProc(HWND w, LPARAM lp)
     }
 
     DockItem *it = FindByAumid(w);           /* app empaquetada o PWA: antes que por el .exe */
+    /* Apps de la Tienda (UWP): la ventana es de ApplicationFrameHost.exe, que las aloja a
+     * todas; cada una va por su AppUserModelID, no por ese .exe. */
+    if (!it && !lstrcmpiW(BaseName(path), L"ApplicationFrameHost.exe")) {
+        wchar_t id[128];
+        if (!WindowAumid(w, id, 128)) return TRUE;
+        for (int i = 0; i < D.count && !it; ++i) if (!lstrcmpiW(D.items[i].aumid, id)) it = &D.items[i];
+        if (!it) {
+            const int before = D.count;
+            if (!AddPackagedAs(id, FALSE)) return TRUE;
+            if (D.count > before) it = &D.items[before];
+            else                                 /* ya anclada como acceso directo: esa */
+                for (int i = 0; i < D.count && !it; ++i)
+                    if (D.items[i].pinned && !lstrcmpiW(D.items[i].name, D.items[D.count].name)) it = &D.items[i];
+        }
+        if (!it) return TRUE;
+    }
     if (!it) it = FindByExe(path);
     if (!it && D.count < MAX_ITEMS) {       /* app abierta no anclada: añadir al final */
         it = &D.items[D.count];
