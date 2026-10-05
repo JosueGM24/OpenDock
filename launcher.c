@@ -10,6 +10,8 @@
  *  - Tecla: gancho de teclado de bajo nivel en un hilo propio (así, si el hilo principal
  *    se entretiene, Windows no lo quita). Con Win sola se traga su "soltar" y se reinyecta
  *    detrás de una tecla sin asignar (0xE8): Windows ve una combinación y no abre Inicio.
+ *    (No vale un Win+F alta como atajo propio: Windows reserva algunas para teclas de
+ *    Office, Copilot… y abriría esas apps.)
  *    Con cualquier otra tecla (Win+E, Win+R…) todo sigue igual; Ctrl+Esc sigue abriendo
  *    el Inicio de Windows. Con una ventana elevada delante no se intercepta nada.
  *  - Archivos: un hilo de baja prioridad recorre %USERPROFILE% (sin AppData, carpetas
@@ -728,7 +730,7 @@ static struct {
     RECT     mon;
     BOOL     light;
     DWORD    fg, fg2, fg3, line, accent;
-    HFONT    fQuery, fTitle, fSub, fLabel, fIcon, fGlyph;
+    HFONT    fQuery, fTitle, fSub, fTile, fLabel, fIcon, fGlyph;
     WCHAR    q[256];
     int      qlen, caret;
     BOOL     selAll, caretOn;
@@ -753,8 +755,8 @@ static int SS(int v) { return MulDiv(v, (int)L.dpi, 96); }
 
 static void FreeFonts(void)
 {
-    HFONT *f[] = { &L.fQuery, &L.fTitle, &L.fSub, &L.fLabel, &L.fIcon, &L.fGlyph };
-    for (int i = 0; i < 6; ++i) if (*f[i]) { DeleteObject(*f[i]); *f[i] = NULL; }
+    HFONT *f[] = { &L.fQuery, &L.fTitle, &L.fSub, &L.fTile, &L.fLabel, &L.fIcon, &L.fGlyph };
+    for (int i = 0; i < 7; ++i) if (*f[i]) { DeleteObject(*f[i]); *f[i] = NULL; }
 }
 
 static void MakeFonts(void)
@@ -763,7 +765,8 @@ static void MakeFonts(void)
     LPCWSTR ui = Gfx_UiFace();
     L.fQuery = Gfx_Font(ui, SS(20), FW_NORMAL, CLEARTYPE_QUALITY);
     L.fTitle = Gfx_Font(ui, SS(15), FW_SEMIBOLD, CLEARTYPE_QUALITY);
-    L.fSub   = Gfx_Font(ui, SS(13), FW_MEDIUM, CLEARTYPE_QUALITY);
+    L.fSub   = Gfx_Font(ui, SS(13), FW_SEMIBOLD, CLEARTYPE_QUALITY);
+    L.fTile  = Gfx_Font(ui, SS(12), FW_SEMIBOLD, CLEARTYPE_QUALITY);     /* nombres de la fila de apps: caben enteros */
     L.fLabel = Gfx_Font(ui, SS(12), FW_SEMIBOLD, CLEARTYPE_QUALITY);
     L.fIcon  = Gfx_Font(Gfx_IconFace(), SS(18), FW_NORMAL, CLEARTYPE_QUALITY);
     L.fGlyph = Gfx_Font(Gfx_IconFace(), SS(20), FW_NORMAL, CLEARTYPE_QUALITY);
@@ -1235,7 +1238,7 @@ static void Paint(void)
             const int is = SS(44);
             const float pop = (0.55f + 0.45f * r->ap) * (r->iconUp ? r->is : 1.0f) * r->hs;
             BlitIcon(c, RowIcon(r, is), rc.left + rw * 0.5f, rc.top + SS(10) + is * 0.5f, pop, a);
-            Gfx_Text(c, L.fSub, r->title, rc.left + SS(4), rc.top + SS(10) + is + SS(4), rw - SS(8), SS(38), Gfx_Mix(L.bgBase, L.fg, a),
+            Gfx_Text(c, L.fTile, r->title, rc.left + SS(1), rc.top + SS(10) + is + SS(4), rw - SS(2), SS(38), Gfx_Mix(L.bgBase, L.fg, a),
                      DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
             continue;
         }
@@ -1580,10 +1583,16 @@ static LRESULT CALLBACK LnProc(HWND h, UINT m, WPARAM w, LPARAM l)
     return DefWindowProcW(h, m, w, l);
 }
 
-/* Windows sólo deja pasar al frente a quien recibió la última entrada; si lo niega, se
- * pide prestada la cola de entrada de la ventana de delante un momento. */
+/* Windows sólo deja pasar al frente a quien recibió la última entrada, y la tecla la
+ * recibió la app de delante. Un evento de ratón vacío (sin moverlo ni pulsar) hace que la
+ * última entrada sea nuestra, como hace PowerToys; si aun así lo niega, se pide prestada
+ * la cola de entrada de la ventana de delante un momento. */
 static void TakeFocus(HWND h)
 {
+    INPUT nudge;
+    ZeroMemory(&nudge, sizeof(nudge));
+    nudge.type = INPUT_MOUSE;
+    SendInput(1, &nudge, sizeof(nudge));
     SetForegroundWindow(h);
     if (GetForegroundWindow() == h) return;
     HWND fg = GetForegroundWindow();

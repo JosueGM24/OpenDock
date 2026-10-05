@@ -170,8 +170,8 @@ static void MakeFonts(void)
     for (int i = 0; i < 7; ++i) if (*all[i]) DeleteObject(*all[i]);
     /* gris (no ClearType): el texto se compone sobre alpha por píxel */
     LPCWSTR ui = Gfx_UiFace(), ic = Gfx_IconFace();
-    N.fTitle  = Gfx_Font(ui, NS(14), FW_SEMIBOLD, ANTIALIASED_QUALITY);
-    N.fBody   = Gfx_Font(ui, NS(13), FW_NORMAL,   ANTIALIASED_QUALITY);
+    N.fTitle  = Gfx_Font(ui, NS(14), FW_BOLD,     ANTIALIASED_QUALITY);
+    N.fBody   = Gfx_Font(ui, NS(13), FW_SEMIBOLD, ANTIALIASED_QUALITY);   /* fino se leía mal */
     N.fSmall  = Gfx_Font(ui, NS(12), FW_NORMAL,   ANTIALIASED_QUALITY);
     N.fHeader = Gfx_Font(ui, NS(17), FW_SEMIBOLD, ANTIALIASED_QUALITY);
     N.fIcon   = Gfx_Font(ic, NS(16), FW_NORMAL,   ANTIALIASED_QUALITY);
