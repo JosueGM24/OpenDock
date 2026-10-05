@@ -13,7 +13,7 @@
 #include <windows.h>
 
 #define APP_NAME        L"OpenDock"
-#define APP_VERSION     L"2.0.0"
+#define APP_VERSION     L"2.1.0"
 #define APP_PUBLISHER   L"OpenDock"
 #define REG_KEY         L"Software\\OpenDock"
 

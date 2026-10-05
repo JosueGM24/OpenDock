@@ -3,8 +3,8 @@
 IDI_APP ICON "app.ico"
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 2,0,0,0
-PRODUCTVERSION 2,0,0,0
+FILEVERSION 2,1,0,0
+PRODUCTVERSION 2,1,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0
 FILEOS VOS_NT_WINDOWS32
@@ -17,8 +17,8 @@ BEGIN
       VALUE "CompanyName", "OpenDock"
       VALUE "FileDescription", "OpenDock - notch, barra superior y dock para Windows"
       VALUE "ProductName", "OpenDock"
-      VALUE "FileVersion", "2.0.0.0"
-      VALUE "ProductVersion", "2.0.0"
+      VALUE "FileVersion", "2.1.0.0"
+      VALUE "ProductVersion", "2.1.0"
       VALUE "InternalName", "OpenDock"
       VALUE "OriginalFilename", "OpenDock.exe"
       VALUE "LegalCopyright", "Copyright (C) 2026 OpenDock"
