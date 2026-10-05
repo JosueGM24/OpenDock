@@ -1,7 +1,7 @@
 /*
  * menubar.c — barra superior estilo macOS y centro de control.
  *
- * Barra: una franja fina en el borde superior del monitor principal, registrada como
+ * Barra: una franja fina en el borde superior de cada monitor, registrada como
  * AppBar (SHAppBarMessage): Windows le reserva el espacio y las ventanas maximizadas
  * quedan debajo, así nunca tapa sus botones. Izquierda: icono y nombre de la app activa. Derecha:
  * volumen, Wi-Fi, batería, fecha/hora y el botón del centro de control. Se oculta sola
@@ -67,7 +67,12 @@ typedef struct {
     BOOL  light;
 } BarLook;
 
-static struct {
+/* Una barra por monitor. La de s_bars[0] es siempre la del monitor principal y la única que
+ * lleva los servicios del sistema (avisos de Wi-Fi, volumen, red y batería, bandeja, brillo);
+ * las demás solo dibujan ese mismo estado. B es la barra "actual": la principal, salvo
+ * mientras se atiende un mensaje de otra (BarProc) o su centro de control o bandeja. */
+#define MAX_BARS 8
+typedef struct {
     HWND    hwnd;
     UINT    dpi;
     RECT    mon;
@@ -76,10 +81,10 @@ static struct {
     HFONT   fBold, fText, fIcon;
     BarLook look;
     BOOL    registered, fullscreen;
+    BOOL    fsAbn, fsFg;        /* pantalla completa: según Windows · según la ventana de delante */
     RECT    hit[BH_COUNT];
     int     pressed;
     int     bhot;               /* icono bajo el cursor */
-    int     trayStep;
     float   bs[BH_COUNT], bsv[BH_COUNT];    /* su escala animada (vectorial: crece nítido) */
     LARGE_INTEGER blast;
     /* gestos de estado: silencio (am), nivel del altavoz (vl), ondas (rip), Wi-Fi (wl),
@@ -88,14 +93,24 @@ static struct {
     BOOL    synced, sMute, sWifi, sCharge, sEth;
     float   sVol;
     int     sBatt;
-    HPOWERNOTIFY battNotify;
-    wchar_t app[64];
-    HBITMAP appIcon;            /* icono de la app activa (NULL: el logo) */
+    HBITMAP appIcon;            /* icono de la app activa (NULL: el logo), a la escala de este monitor */
     int     appIconPx;
     wchar_t appKey[MAX_PATH];   /* de qué es ese icono: AppUserModelID o ruta del ejecutable */
     int     lastMinute;
+    Canvas  back;               /* vidrio: lo que hay detrás de esta barra */
+    DWORD   backHash;
+} Bar;
 
-    /* estado del sistema */
+static Bar  s_bars[MAX_BARS];
+static Bar *s_b = &s_bars[0];
+#define B  (*s_b)
+#define BP (s_bars[0])          /* la principal, sea cual sea la actual */
+
+/* estado del sistema, común a todas las barras (lo mantiene la principal) */
+static struct {
+    int     trayStep;
+    HPOWERNOTIFY battNotify;
+    wchar_t app[64];
     int     battery;            /* 0..100, -1 sin batería */
     BOOL    charging;
     int     wifi;               /* -1 sin conexión inalámbrica, 0..100 calidad */
@@ -106,7 +121,12 @@ static struct {
     BOOL    muted;
     IAudioEndpointVolume *ep;
     HANDLE  wlan;
-} B;
+} S;
+
+/* Recorre las barras abiertas con cada una como actual. */
+#define FOR_BARS(...) do { Bar *keep_ = s_b; \
+    for (int bi_ = 0; bi_ < MAX_BARS; ++bi_) if (s_bars[bi_].hwnd) { s_b = &s_bars[bi_]; __VA_ARGS__; } \
+    s_b = keep_; } while (0)
 
 static int BS(int v) { return MulDiv(v, (int)B.dpi, 96); }
 
@@ -134,8 +154,6 @@ static void LoadBarLook(void)
  * o ventanas), capturado a 1/4, desenfocado y teñido, igual que el notch y el dock. La
  * barra queda fuera de captura para no verse a sí misma. */
 #define BACK_SCALE 4
-static Canvas s_back;
-static DWORD  s_backHash;
 
 static BOOL BarGlass(void) { return g_cfg.material == MAT_GLASS && !B.look.light; }
 
@@ -146,25 +164,25 @@ static BOOL CaptureBarBack(void)
      * debajo, igual que el del notch pegado cuenta con lo que hay detrás de la barra */
     const int below = max(BS(24), MulDiv(g_cfg.radius, (int)B.dpi, 96));      /* + las esquinas de arriba */
     const int sw = max(1, (B.mon.right - B.mon.left) / BACK_SCALE), sh = max(1, (B.h + below + BACK_SCALE - 1) / BACK_SCALE);
-    if (s_back.w != sw || s_back.h != sh) {
-        Canvas_Free(&s_back);
-        if (!Canvas_Init(&s_back, sw, sh)) return FALSE;
+    if (B.back.w != sw || B.back.h != sh) {
+        Canvas_Free(&B.back);
+        if (!Canvas_Init(&B.back, sw, sh)) return FALSE;
     }
     HDC screen = GetDC(NULL);
-    SetStretchBltMode(s_back.dc, HALFTONE);
-    SetBrushOrgEx(s_back.dc, 0, 0, NULL);
-    StretchBlt(s_back.dc, 0, 0, sw, sh, screen, B.mon.left, B.mon.top, sw * BACK_SCALE, sh * BACK_SCALE, SRCCOPY);
+    SetStretchBltMode(B.back.dc, HALFTONE);
+    SetBrushOrgEx(B.back.dc, 0, 0, NULL);
+    StretchBlt(B.back.dc, 0, 0, sw, sh, screen, B.mon.left, B.mon.top, sw * BACK_SCALE, sh * BACK_SCALE, SRCCOPY);
     ReleaseDC(NULL, screen);
     GdiFlush();
     DWORD hash = 2166136261u;
-    for (int i = 0; i < sw * sh; ++i) hash = (hash ^ (s_back.px[i] & 0xFFFFFF)) * 16777619u;
-    const BOOL changed = hash != s_backHash;
-    s_backHash = hash;
-    for (int i = 0; i < 2; ++i) Gfx_BoxBlur(s_back.px, sw, sh, max(1, BS(16) / BACK_SCALE));
+    for (int i = 0; i < sw * sh; ++i) hash = (hash ^ (B.back.px[i] & 0xFFFFFF)) * 16777619u;
+    const BOOL changed = hash != B.backHash;
+    B.backHash = hash;
+    for (int i = 0; i < 2; ++i) Gfx_BoxBlur(B.back.px, sw, sh, max(1, BS(16) / BACK_SCALE));
     for (int i = 0; i < sw * sh; ++i) {           /* vibrancia */
-        const DWORD v = s_back.px[i];
+        const DWORD v = B.back.px[i];
         const int R = (v >> 16) & 255, G = (v >> 8) & 255, Bl = v & 255, Y = (R * 77 + G * 151 + Bl * 28) >> 8;
-        s_back.px[i] = (DWORD)max(0, min(255, Y + (R - Y) * 3 / 2)) << 16 |
+        B.back.px[i] = (DWORD)max(0, min(255, Y + (R - Y) * 3 / 2)) << 16 |
                        (DWORD)max(0, min(255, Y + (G - Y) * 3 / 2)) << 8 |
                        (DWORD)max(0, min(255, Y + (Bl - Y) * 3 / 2));
     }
@@ -175,12 +193,12 @@ static BOOL CaptureBarBack(void)
 static DWORD GlassAt(int x, int y, DWORD tint)
 {
     const float fy = (y + 0.5f) / BACK_SCALE - 0.5f, fx = (x + 0.5f) / BACK_SCALE - 0.5f;
-    const int y0 = max(0, min(s_back.h - 1, (int)floorf(fy))), y1 = min(s_back.h - 1, y0 + 1);
-    const int x0 = max(0, min(s_back.w - 1, (int)floorf(fx))), x1 = min(s_back.w - 1, x0 + 1);
+    const int y0 = max(0, min(B.back.h - 1, (int)floorf(fy))), y1 = min(B.back.h - 1, y0 + 1);
+    const int x0 = max(0, min(B.back.w - 1, (int)floorf(fx))), x1 = min(B.back.w - 1, x0 + 1);
     const float ty = max(0.0f, min(1.0f, fy - y0)), tx = max(0.0f, min(1.0f, fx - x0));
-    const DWORD *p = s_back.px;
-    const DWORD b = Gfx_Mix(Gfx_Mix(p[y0 * s_back.w + x0], p[y0 * s_back.w + x1], tx),
-                            Gfx_Mix(p[y1 * s_back.w + x0], p[y1 * s_back.w + x1], tx), ty);
+    const DWORD *p = B.back.px;
+    const DWORD b = Gfx_Mix(Gfx_Mix(p[y0 * B.back.w + x0], p[y0 * B.back.w + x1], tx),
+                            Gfx_Mix(p[y1 * B.back.w + x0], p[y1 * B.back.w + x1], tx), ty);
     return Gfx_Mix(b, tint, 0.52f) & 0xFFFFFF;
 }
 
@@ -198,8 +216,11 @@ static void PaintGlass(Canvas *c, DWORD tint)
 BOOL Bar_Surface(const RECT *mon, int sx, int sy, DWORD *rgb, BOOL *glass)
 {
     if (!Bar_HeightOn(mon)) return FALSE;
-    *glass = BarGlass() && (s_back.px || CaptureBarBack());
+    Bar *keep = s_b;
+    for (int i = 0; i < MAX_BARS; ++i) if (s_bars[i].hwnd && EqualRect(mon, &s_bars[i].mon)) s_b = &s_bars[i];
+    *glass = BarGlass() && (B.back.px || CaptureBarBack());
     *rgb = *glass ? GlassAt(sx - B.mon.left, sy - B.mon.top, B.look.bg) : B.look.bg;
+    s_b = keep;
     return TRUE;
 }
 
@@ -213,11 +234,11 @@ static void BarApplyCapture(void)
 static void ReadBattery(void)
 {
     SYSTEM_POWER_STATUS ps;
-    B.battery = -1;
-    B.charging = FALSE;
+    S.battery = -1;
+    S.charging = FALSE;
     if (!GetSystemPowerStatus(&ps) || (ps.BatteryFlag & 128) || ps.BatteryLifePercent > 100) return;
-    B.battery = ps.BatteryLifePercent;
-    B.charging = ps.ACLineStatus == 1;
+    S.battery = ps.BatteryLifePercent;
+    S.charging = ps.ACLineStatus == 1;
 }
 
 /* Avisos del Wi-Fi (conectado, desconectado, cambio de señal): llegan en otro hilo y solo
@@ -225,7 +246,8 @@ static void ReadBattery(void)
 static void WINAPI WlanNotify(PWLAN_NOTIFICATION_DATA d, PVOID ctx)
 {
     (void)ctx;
-    if (!d || !B.hwnd) return;
+    const HWND bar = BP.hwnd;
+    if (!d || !bar) return;
     const DWORD k = d->NotificationCode;
     if ((d->NotificationSource == WLAN_NOTIFICATION_SOURCE_ACM &&
          (k == wlan_notification_acm_connection_complete || k == wlan_notification_acm_disconnected ||
@@ -233,34 +255,34 @@ static void WINAPI WlanNotify(PWLAN_NOTIFICATION_DATA d, PVOID ctx)
         (d->NotificationSource == WLAN_NOTIFICATION_SOURCE_MSM &&
          (k == wlan_notification_msm_signal_quality_change || k == wlan_notification_msm_connected ||
           k == wlan_notification_msm_disconnected)))
-        PostMessageW(B.hwnd, WM_BAR_STATUS, 2, 0);
+        PostMessageW(bar, WM_BAR_STATUS, 2, 0);
 }
 
 static void ReadEthernet(void);
 static void ReadWifi(void)
 {
     ReadEthernet();      /* la red se relee entera: cable y Wi-Fi */
-    B.wifi = -1;
-    B.ssid[0] = 0;
+    S.wifi = -1;
+    S.ssid[0] = 0;
     DWORD ver = 0;
-    if (!B.wlan) {
-        if (WlanOpenHandle(2, NULL, &ver, &B.wlan) != ERROR_SUCCESS) { B.wlan = NULL; return; }
-        WlanRegisterNotification(B.wlan, WLAN_NOTIFICATION_SOURCE_ACM | WLAN_NOTIFICATION_SOURCE_MSM, TRUE,
+    if (!S.wlan) {
+        if (WlanOpenHandle(2, NULL, &ver, &S.wlan) != ERROR_SUCCESS) { S.wlan = NULL; return; }
+        WlanRegisterNotification(S.wlan, WLAN_NOTIFICATION_SOURCE_ACM | WLAN_NOTIFICATION_SOURCE_MSM, TRUE,
                                  WlanNotify, NULL, NULL, NULL);
     }
     PWLAN_INTERFACE_INFO_LIST list = NULL;
-    if (WlanEnumInterfaces(B.wlan, NULL, &list) != ERROR_SUCCESS || !list) return;
+    if (WlanEnumInterfaces(S.wlan, NULL, &list) != ERROR_SUCCESS || !list) return;
     for (DWORD i = 0; i < list->dwNumberOfItems; ++i) {
         if (list->InterfaceInfo[i].isState != wlan_interface_state_connected) continue;
         PWLAN_CONNECTION_ATTRIBUTES ca = NULL;
         DWORD sz = 0;
         WLAN_OPCODE_VALUE_TYPE vt;
-        if (WlanQueryInterface(B.wlan, &list->InterfaceInfo[i].InterfaceGuid, wlan_intf_opcode_current_connection,
+        if (WlanQueryInterface(S.wlan, &list->InterfaceInfo[i].InterfaceGuid, wlan_intf_opcode_current_connection,
                                NULL, &sz, (PVOID *)&ca, &vt) == ERROR_SUCCESS && ca) {
-            B.wifi = (int)ca->wlanAssociationAttributes.wlanSignalQuality;
+            S.wifi = (int)ca->wlanAssociationAttributes.wlanSignalQuality;
             const DOT11_SSID *s = &ca->wlanAssociationAttributes.dot11Ssid;
-            const int n = MultiByteToWideChar(CP_UTF8, 0, (const char *)s->ucSSID, (int)min(s->uSSIDLength, 32), B.ssid, 63);
-            B.ssid[max(0, n)] = 0;
+            const int n = MultiByteToWideChar(CP_UTF8, 0, (const char *)s->ucSSID, (int)min(s->uSSIDLength, 32), S.ssid, 63);
+            S.ssid[max(0, n)] = 0;
             WlanFreeMemory(ca);
             break;
         }
@@ -272,7 +294,8 @@ static void ReadWifi(void)
 static VOID WINAPI IpNotify(PVOID ctx, PMIB_IPINTERFACE_ROW row, MIB_NOTIFICATION_TYPE t)
 {
     (void)ctx; (void)row; (void)t;
-    if (B.hwnd) PostMessageW(B.hwnd, WM_BAR_STATUS, 2, 0);
+    const HWND bar = BP.hwnd;
+    if (bar) PostMessageW(bar, WM_BAR_STATUS, 2, 0);
 }
 
 /* ¿Hay un cable de red conectado? Un adaptador Ethernet activo y con puerta de enlace (los
@@ -286,8 +309,8 @@ static BOOL VirtualAdapter(const wchar_t *d)
 
 static void ReadEthernet(void)
 {
-    if (!B.ipNotify && B.hwnd) NotifyIpInterfaceChange(AF_UNSPEC, IpNotify, NULL, FALSE, &B.ipNotify);
-    B.ethernet = FALSE;
+    if (!S.ipNotify && BP.hwnd) NotifyIpInterfaceChange(AF_UNSPEC, IpNotify, NULL, FALSE, &S.ipNotify);
+    S.ethernet = FALSE;
     ULONG size = 16 * 1024;
     for (int tries = 0; tries < 3; ++tries) {
         IP_ADAPTER_ADDRESSES *aa = (IP_ADAPTER_ADDRESSES *)HeapAlloc(GetProcessHeap(), 0, size);
@@ -295,8 +318,8 @@ static void ReadEthernet(void)
         const ULONG r = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_GATEWAYS | GAA_FLAG_SKIP_ANYCAST |
                                              GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, NULL, aa, &size);
         if (r == ERROR_SUCCESS)
-            for (const IP_ADAPTER_ADDRESSES *a = aa; a && !B.ethernet; a = a->Next)
-                B.ethernet = a->IfType == IF_TYPE_ETHERNET_CSMACD && a->OperStatus == IfOperStatusUp &&
+            for (const IP_ADAPTER_ADDRESSES *a = aa; a && !S.ethernet; a = a->Next)
+                S.ethernet = a->IfType == IF_TYPE_ETHERNET_CSMACD && a->OperStatus == IfOperStatusUp &&
                              a->FirstGatewayAddress && !VirtualAdapter(a->Description);
         HeapFree(GetProcessHeap(), 0, aa);
         if (r != ERROR_BUFFER_OVERFLOW) return;
@@ -314,7 +337,8 @@ static ULONG STDMETHODCALLTYPE VcRef(IAudioEndpointVolumeCallback *self) { (void
 static HRESULT STDMETHODCALLTYPE VcNotify(IAudioEndpointVolumeCallback *self, PAUDIO_VOLUME_NOTIFICATION_DATA d)
 {
     (void)self; (void)d;
-    if (B.hwnd) PostMessageW(B.hwnd, WM_BAR_STATUS, 1, 0);
+    const HWND bar = BP.hwnd;
+    if (bar) PostMessageW(bar, WM_BAR_STATUS, 1, 0);
     return S_OK;
 }
 static IAudioEndpointVolumeCallbackVtbl s_vcVtbl = { VcQuery, VcRef, VcRef, VcNotify };
@@ -322,58 +346,58 @@ static IAudioEndpointVolumeCallback s_volCb = { &s_vcVtbl };
 
 static void CloseVolume(void)
 {
-    if (!B.ep) return;
-    IAudioEndpointVolume_UnregisterControlChangeNotify(B.ep, &s_volCb);
-    IAudioEndpointVolume_Release(B.ep);
-    B.ep = NULL;
+    if (!S.ep) return;
+    IAudioEndpointVolume_UnregisterControlChangeNotify(S.ep, &s_volCb);
+    IAudioEndpointVolume_Release(S.ep);
+    S.ep = NULL;
 }
 
 static BOOL OpenVolume(void)
 {
-    if (B.ep) return TRUE;
+    if (S.ep) return TRUE;
     IMMDeviceEnumerator *en = NULL;
     IMMDevice *dev = NULL;
     if (FAILED(CoCreateInstance(&kCLSID_MMDeviceEnumerator, NULL, CLSCTX_INPROC_SERVER, &kIID_IMMDeviceEnumerator, (void **)&en)))
         return FALSE;
     if (SUCCEEDED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(en, eRender, eConsole, &dev))) {
-        IMMDevice_Activate(dev, &kIID_IAudioEndpointVolume, CLSCTX_INPROC_SERVER, NULL, (void **)&B.ep);
+        IMMDevice_Activate(dev, &kIID_IAudioEndpointVolume, CLSCTX_INPROC_SERVER, NULL, (void **)&S.ep);
         IMMDevice_Release(dev);
     }
     IMMDeviceEnumerator_Release(en);
-    if (B.ep) IAudioEndpointVolume_RegisterControlChangeNotify(B.ep, &s_volCb);
-    return B.ep != NULL;
+    if (S.ep) IAudioEndpointVolume_RegisterControlChangeNotify(S.ep, &s_volCb);
+    return S.ep != NULL;
 }
 
 static void ReadVolume(void)
 {
-    if (!OpenVolume()) { B.volume = -1; return; }
+    if (!OpenVolume()) { S.volume = -1; return; }
     float v = 0;
     BOOL m = FALSE;
-    if (FAILED(IAudioEndpointVolume_GetMasterVolumeLevelScalar(B.ep, &v))) {
+    if (FAILED(IAudioEndpointVolume_GetMasterVolumeLevelScalar(S.ep, &v))) {
         CloseVolume();                          /* el dispositivo cambió: reabrir la próxima vez */
-        B.volume = -1;
+        S.volume = -1;
         return;
     }
-    IAudioEndpointVolume_GetMute(B.ep, &m);
-    B.volume = v;
-    B.muted = m;
+    IAudioEndpointVolume_GetMute(S.ep, &m);
+    S.volume = v;
+    S.muted = m;
 }
 
 static void SetVolume(float v)
 {
     if (!OpenVolume()) return;
     v = max(0.0f, min(1.0f, v));
-    IAudioEndpointVolume_SetMasterVolumeLevelScalar(B.ep, v, NULL);
-    if (B.muted && v > 0) IAudioEndpointVolume_SetMute(B.ep, FALSE, NULL);
-    B.volume = v;
-    if (v > 0) B.muted = FALSE;
+    IAudioEndpointVolume_SetMasterVolumeLevelScalar(S.ep, v, NULL);
+    if (S.muted && v > 0) IAudioEndpointVolume_SetMute(S.ep, FALSE, NULL);
+    S.volume = v;
+    if (v > 0) S.muted = FALSE;
 }
 
 static void ToggleMute(void)
 {
     if (!OpenVolume()) return;
-    B.muted = !B.muted;
-    IAudioEndpointVolume_SetMute(B.ep, B.muted, NULL);
+    S.muted = !S.muted;
+    IAudioEndpointVolume_SetMute(S.ep, S.muted, NULL);
 }
 
 /* Nombre "humano" de la app en primer plano (descripción del ejecutable). */
@@ -768,10 +792,10 @@ static void DrawChevron(Canvas *c, float cx, float cy, float size, DWORD fg)
 }
 static const Ink kInkTray = { 5.15f, 7.65f, 18.85f, 15.85f, 0.62f };
 
-static int WifiArcs(void)  { return B.wifi >= 60 ? 2 : B.wifi >= 30 ? 1 : 0; }
-static float WifiLit(void) { return B.wifi < 0 ? 0.0f : 1.0f + WifiArcs(); }
-static BOOL  VolMuted(void) { return B.volume >= 0 && (B.muted || B.volume <= 0.001f); }
-static float VolLit(void)  { return VolMuted() ? 0.0f : B.volume < 0.5f ? 1.0f : 2.0f; }
+static int WifiArcs(void)  { return S.wifi >= 60 ? 2 : S.wifi >= 30 ? 1 : 0; }
+static float WifiLit(void) { return S.wifi < 0 ? 0.0f : 1.0f + WifiArcs(); }
+static BOOL  VolMuted(void) { return S.volume >= 0 && (S.muted || S.volume <= 0.001f); }
+static float VolLit(void)  { return VolMuted() ? 0.0f : S.volume < 0.5f ? 1.0f : 2.0f; }
 
 /* El logo de OpenDock a una tinta: el contorno del cuadrado y el notch colgando de arriba. */
 static void DrawLogo(Canvas *c, float x, float y, float g, DWORD rgb)
@@ -824,44 +848,50 @@ static void Bump(int id, float v)
 static void BarSync(void)
 {
     if (!B.hwnd) return;
-    const BOOL mute = VolMuted(), wifi = B.wifi >= 0;
+    const BOOL mute = VolMuted(), wifi = S.wifi >= 0;
     if (!B.synced) {                     /* al arrancar: el estado tal cual, sin animar */
         B.synced = TRUE;
         B.am = mute ? 1.0f : 0.0f; B.vl = VolLit(); B.wl = WifiLit();
-        B.bc = B.charging ? 1.0f : 0.0f; B.bf = (float)max(0, B.battery);
-        B.sMute = mute; B.sVol = B.volume; B.sWifi = wifi; B.sCharge = B.charging; B.sBatt = B.battery;
-        B.sEth = B.ethernet;
+        B.bc = S.charging ? 1.0f : 0.0f; B.bf = (float)max(0, S.battery);
+        B.sMute = mute; B.sVol = S.volume; B.sWifi = wifi; B.sCharge = S.charging; B.sBatt = S.battery;
+        B.sEth = S.ethernet;
         return;
     }
     BOOL kick = FALSE;
     if (mute != B.sMute) { Bump(BH_VOL, 2.6f); kick = TRUE; }
-    else if (!mute && B.volume >= 0 && fabsf(B.volume - B.sVol) > 0.004f) {
-        const BOOL up = B.volume > B.sVol;
+    else if (!mute && S.volume >= 0 && fabsf(S.volume - B.sVol) > 0.004f) {
+        const BOOL up = S.volume > B.sVol;
         Bump(BH_VOL, up ? 1.6f : -1.1f);
         B.ripv = up ? max(B.ripv, 20.0f) : min(B.ripv, -15.0f);
         kick = TRUE;
     }
     if (wifi != B.sWifi) { Bump(BH_WIFI, wifi ? 2.2f : -1.6f); kick = TRUE; }
-    if (B.ethernet != B.sEth) { Bump(BH_WIFI, B.ethernet ? 2.2f : -1.6f); kick = TRUE; B.sEth = B.ethernet; }
-    if (B.charging != B.sCharge) { Bump(BH_BATT, B.charging ? 2.6f : -1.4f); kick = TRUE; }
-    else if (!B.charging && B.battery >= 0 && B.sBatt > 20 && B.battery <= 20) { Bump(BH_BATT, -2.0f); kick = TRUE; }
-    B.sMute = mute; B.sVol = B.volume; B.sWifi = wifi; B.sCharge = B.charging; B.sBatt = B.battery;
+    if (S.ethernet != B.sEth) { Bump(BH_WIFI, S.ethernet ? 2.2f : -1.6f); kick = TRUE; B.sEth = S.ethernet; }
+    if (S.charging != B.sCharge) { Bump(BH_BATT, S.charging ? 2.6f : -1.4f); kick = TRUE; }
+    else if (!S.charging && S.battery >= 0 && B.sBatt > 20 && S.battery <= 20) { Bump(BH_BATT, -2.0f); kick = TRUE; }
+    B.sMute = mute; B.sVol = S.volume; B.sWifi = wifi; B.sCharge = S.charging; B.sBatt = S.battery;
     if (kick || fabsf(B.vl - VolLit()) > 0.001f || fabsf(B.wl - WifiLit()) > 0.001f ||
-        fabsf(B.bf - (float)max(0, B.battery)) > 0.01f) BarKick();
+        fabsf(B.bf - (float)max(0, S.battery)) > 0.01f) BarKick();
 }
 
 /* Al cambiar el volumen (rueda, centro de control) el altavoz da un "pop" y sus ondas se
  * mueven; en el tope (0 o 100 %) también, para que se note el gesto. */
 void Bar_PulseVolume(BOOL up)
 {
-    if (!B.hwnd) return;
-    const float before = B.sVol;
-    const BOOL wasMute = B.sMute;
-    BarSync();
-    if (fabsf(B.volume - before) <= 0.004f && wasMute == B.sMute) {
-        Bump(BH_VOL, up ? 1.6f : -1.1f);
-        BarKick();
-    }
+    FOR_BARS(
+        const float before = B.sVol;
+        const BOOL wasMute = B.sMute;
+        BarSync();
+        if (fabsf(S.volume - before) <= 0.004f && wasMute == B.sMute) {
+            Bump(BH_VOL, up ? 1.6f : -1.1f);
+            BarKick();
+        });
+}
+
+/* El estado del sistema cambió: cada barra hace su gesto y se repinta. */
+static void BarsSync(void)
+{
+    FOR_BARS(BarSync(); InvalidateRect(B.hwnd, NULL, FALSE));
 }
 
 static BOOL Spring(float *x, float *v, float tg, float k, float z, float dt, float eps)
@@ -901,8 +931,8 @@ static void BarAnimate(void)
     moving |= Spring(&B.vl, &B.vlv, VolLit(), 200.0f, max(z, 0.8f), dt, 0.002f);
     moving |= Spring(&B.rip, &B.ripv, 0.0f, 330.0f, 0.3f, dt, 0.004f);
     moving |= Spring(&B.wl, &B.wlv, WifiLit(), 70.0f, max(z, 0.85f), dt, 0.002f);
-    moving |= Spring(&B.bc, &B.bcv, B.charging ? 1.0f : 0.0f, 360.0f, z, dt, 0.002f);
-    moving |= Spring(&B.bf, &B.bfv, (float)max(0, B.battery), 40.0f, 1.0f, dt, 0.05f);
+    moving |= Spring(&B.bc, &B.bcv, S.charging ? 1.0f : 0.0f, 360.0f, z, dt, 0.002f);
+    moving |= Spring(&B.bf, &B.bfv, (float)max(0, S.battery), 40.0f, 1.0f, dt, 0.05f);
     InvalidateRect(B.hwnd, NULL, FALSE);
     if (!moving) KillTimer(B.hwnd, TIMER_BANIM);
 }
@@ -918,7 +948,7 @@ static void PaintBar(HDC target)
     Canvas *c = &B.cv;
     const BarLook *L = &B.look;
     const int H = rc.bottom, cy = H / 2;
-    if (BarGlass() && (s_back.px || CaptureBarBack())) PaintGlass(c, L->bg);
+    if (BarGlass() && (B.back.px || CaptureBarBack())) PaintGlass(c, L->bg);
     else Canvas_Clear(c, L->bg);
     ZeroMemory(B.hit, sizeof(B.hit));
 
@@ -931,9 +961,9 @@ static void PaintBar(HDC target)
     }
     SetRect(&B.hit[BH_LOGO], 0, 0, x + is + BS(6), H);
     x += is + BS(8);
-    if (B.app[0]) {
-        const int w = min(Gfx_TextWidth(B.fBold, B.app), BS(320));
-        Gfx_Text(c, B.fBold, B.app, x, 0, w + 2, H, L->fg, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+    if (S.app[0]) {
+        const int w = min(Gfx_TextWidth(B.fBold, S.app), BS(320));
+        Gfx_Text(c, B.fBold, S.app, x, 0, w + 2, H, L->fg, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
     }
 
     /* derecha (de derecha a izquierda): centro de control, hora, batería, Wi-Fi, volumen */
@@ -952,14 +982,14 @@ static void PaintBar(HDC target)
     SetRect(&B.hit[BH_CLOCK], r - tw - BS(6), 0, r + BS(6), H);
     r -= tw + BS(18);
 
-    if (B.battery >= 0) {       /* el porcentaje va dentro de la batería */
+    if (S.battery >= 0) {       /* el porcentaje va dentro de la batería */
         iw = PlaceIcon(&kInkBatt, (float)r, (float)cy, ih, &icx, &icy, &isz);
-        DrawBattery(c, icx, icy, isz * BarScale(BH_BATT), B.bf, B.battery, B.bc, g_cfg.battPct, L->fg, L->bg);
+        DrawBattery(c, icx, icy, isz * BarScale(BH_BATT), B.bf, S.battery, B.bc, g_cfg.battPct, L->fg, L->bg);
         SetRect(&B.hit[BH_BATT], r - (int)iw - BS(4), 0, r + BS(6), H);
         r -= (int)(iw + gap);
     }
 
-    if (B.ethernet) {           /* con cable manda el cable, como en Windows */
+    if (S.ethernet) {           /* con cable manda el cable, como en Windows */
         iw = PlaceIcon(&kInkEth, (float)r, (float)cy, ih, &icx, &icy, &isz);
         DrawEthernet(c, icx, icy, isz * BarScale(BH_WIFI), 1.0f, L->fg);
     } else {
@@ -969,7 +999,7 @@ static void PaintBar(HDC target)
     SetRect(&B.hit[BH_WIFI], r - (int)iw - BS(4), 0, r + BS(6), H);
     r -= (int)(iw + gap);
 
-    if (B.volume >= 0) {
+    if (S.volume >= 0) {
         iw = PlaceIcon(&kInkSound, (float)r, (float)cy, ih, &icx, &icy, &isz);
         DrawSound(c, icx, icy, isz * BarScale(BH_VOL), B.vl, B.am, B.rip, L->fg);
         SetRect(&B.hit[BH_VOL], r - (int)iw - BS(4), 0, r + BS(6), H);
@@ -1020,6 +1050,7 @@ static struct {
     float  hcur, hv;            /* alto animado del contenido */
     Canvas ccv;                 /* la sección de controles */
     LARGE_INTEGER last;
+    Bar   *bar;                 /* barra bajo la que se abrió */
 } C;
 
 /* ── brillo por WMI, en un hilo propio (cada llamada tarda decenas de ms) ── */
@@ -1129,6 +1160,8 @@ static void Brightness_Request(int value)     /* value < 0: solo releer */
 
 static int CS(int v) { return BS(v); }
 
+static Bar *Anchor(Bar *b) { return b && b->hwnd ? b : &BP; }
+
 static void OpenUri(LPCWSTR uri)
 {
     if (App_ShellOpen(uri)) {
@@ -1220,8 +1253,8 @@ static void DrawSliderRow(Canvas *c, RECT r, int k)
 {
     const BarLook *L = &B.look;
     const float v = max(0.0f, min(1.0f, C.fill[k]));
-    const float real = k ? (B.muted ? 0.0f : max(0.0f, B.volume)) : C.brightness / 100.0f;
-    LPCWSTR glyph = k ? (B.muted ? L"\xE74F" : L"\xE767") : L"\xE706";
+    const float real = k ? (S.muted ? 0.0f : max(0.0f, S.volume)) : C.brightness / 100.0f;
+    LPCWSTR glyph = k ? (S.muted ? L"\xE74F" : L"\xE767") : L"\xE706";
     wchar_t val[16];
     wsprintfW(val, L"%d %%", (int)(max(0.0f, min(1.0f, real)) * 100.0f + 0.5f));
     Gfx_Text(c, C.fTitle, k ? L"Sonido" : L"Pantalla", r.left, r.top, r.right - r.left, CS(18), L->fg, DT_SINGLELINE | DT_VCENTER);
@@ -1264,8 +1297,8 @@ static void DrawConnRow(Canvas *c, RECT rr, int k)
     const float cy = (rr.top + rr.bottom) * 0.5f, cx = rr.left + CS(8) + b0 * 0.5f;
     const int tx = (int)(cx + b0 * 0.5f) + CS(10), tw = rr.right - tx - CS(6);
     if (!k) {
-        Bubble(c, cx, cy, bd, B.wifi >= 0, 1, NULL);
-        TwoLines(c, tx, rr.top, tw, rr.bottom - rr.top, L"Wi\x2011" L"Fi", B.wifi >= 0 ? B.ssid : L"Sin conexión");
+        Bubble(c, cx, cy, bd, S.wifi >= 0, 1, NULL);
+        TwoLines(c, tx, rr.top, tw, rr.bottom - rr.top, L"Wi\x2011" L"Fi", S.wifi >= 0 ? S.ssid : L"Sin conexión");
     } else {
         Bubble(c, cx, cy, bd, C.bt == 1, 0, L"\xE702");
         TwoLines(c, tx, rr.top, tw, rr.bottom - rr.top, L"Bluetooth",
@@ -1296,13 +1329,13 @@ static void DrawBattCard(Canvas *c, RECT r, int k)
     const BarLook *L = &B.look;
     const float bw = (float)CS(40), cy = (r.top + r.bottom) * 0.5f;
     Card(c, r);
-    DrawBattery(c, r.left + CS(14) + bw * 0.5f, cy, bw, (float)max(0, B.battery), max(0, B.battery), B.charging ? 1.0f : 0.0f,
+    DrawBattery(c, r.left + CS(14) + bw * 0.5f, cy, bw, (float)max(0, S.battery), max(0, S.battery), S.charging ? 1.0f : 0.0f,
                 FALSE, L->fg, CardColor());
     Gfx_Text(c, C.fTitle, L"Batería", r.left + CS(14) + (int)bw + CS(12), r.top, CS(180), r.bottom - r.top, L->fg,
              DT_SINGLELINE | DT_VCENTER);
-    if (B.battery >= 0) {
+    if (S.battery >= 0) {
         wchar_t pct[16];
-        wsprintfW(pct, L"%d %%", B.battery);
+        wsprintfW(pct, L"%d %%", S.battery);
         Gfx_Text(c, C.fIconBig, pct, r.left, r.top, r.right - r.left - CS(16), r.bottom - r.top, L->fg, DT_SINGLELINE | DT_VCENTER | DT_RIGHT);
     }
 }
@@ -1414,9 +1447,9 @@ static int  s_ndevs;
 static BOOL WifiIface(GUID *g)
 {
     DWORD ver = 0;
-    if (!B.wlan && WlanOpenHandle(2, NULL, &ver, &B.wlan) != ERROR_SUCCESS) { B.wlan = NULL; return FALSE; }
+    if (!S.wlan && WlanOpenHandle(2, NULL, &ver, &S.wlan) != ERROR_SUCCESS) { S.wlan = NULL; return FALSE; }
     PWLAN_INTERFACE_INFO_LIST list = NULL;
-    if (WlanEnumInterfaces(B.wlan, NULL, &list) != ERROR_SUCCESS || !list) return FALSE;
+    if (WlanEnumInterfaces(S.wlan, NULL, &list) != ERROR_SUCCESS || !list) return FALSE;
     const BOOL ok = list->dwNumberOfItems > 0;
     if (ok) *g = list->InterfaceInfo[0].InterfaceGuid;
     WlanFreeMemory(list);
@@ -1428,7 +1461,7 @@ static void ReadNetworks(void)
     s_nnets = 0;
     if (!WifiIface(&C.wguid)) return;
     PWLAN_AVAILABLE_NETWORK_LIST nl = NULL;
-    if (WlanGetAvailableNetworkList(B.wlan, &C.wguid, 0, NULL, &nl) != ERROR_SUCCESS || !nl) return;
+    if (WlanGetAvailableNetworkList(S.wlan, &C.wguid, 0, NULL, &nl) != ERROR_SUCCESS || !nl) return;
     for (DWORD i = 0; i < nl->dwNumberOfItems; ++i) {
         const WLAN_AVAILABLE_NETWORK *n = &nl->Network[i];
         if (!n->dot11Ssid.uSSIDLength) continue;                 /* redes ocultas */
@@ -1594,7 +1627,7 @@ static void CC_GoList(int page)
     C.lhot = 0;
     if (page == 2) {
         ReadNetworks();
-        if (B.wlan) WlanScan(B.wlan, &C.wguid, NULL, NULL, NULL);     /* refresca en segundo plano */
+        if (S.wlan) WlanScan(S.wlan, &C.wguid, NULL, NULL, NULL);     /* refresca en segundo plano */
         SetTimer(C.hwnd, TIMER_WSCAN, 1800, NULL);
     } else {
         ReadBluetooth();
@@ -1615,12 +1648,12 @@ static void ListClick(int id)
     if (C.page == 2 && i >= 0 && i < s_nnets) {
         const WNet *w = &s_nets[i];
         if (w->connected) return;
-        if (w->prof[0] && B.wlan) {         /* red conocida: conectar aquí mismo */
+        if (w->prof[0] && S.wlan) {         /* red conocida: conectar aquí mismo */
             WLAN_CONNECTION_PARAMETERS cp = { 0 };
             cp.wlanConnectionMode = wlan_connection_mode_profile;
             cp.strProfile = w->prof;
             cp.dot11BssType = dot11_BSS_type_any;
-            WlanConnect(B.wlan, &C.wguid, &cp, NULL);
+            WlanConnect(S.wlan, &C.wguid, &cp, NULL);
             SetTimer(C.hwnd, TIMER_WSCAN, 1500, NULL);     /* y se refresca el estado */
         } else {                            /* nueva: la contraseña se pide en Windows */
             CC_Close();
@@ -1753,7 +1786,7 @@ static BOOL CCAdvance(void)
     }
     /* deslizadores: el relleno sigue al valor y el icono vuelve de su "pop" */
     for (int k = 0; k < 2; ++k) {
-        const float real = k ? (B.muted ? 0.0f : max(0.0f, B.volume)) : max(0, C.brightness) / 100.0f;
+        const float real = k ? (S.muted ? 0.0f : max(0.0f, S.volume)) : max(0, C.brightness) / 100.0f;
         const float f0 = C.fill[k], i0 = C.is[k];
         for (int j = 0; j < 2; ++j) {
             CCSpring(&C.fill[k], &C.fillv[k], real, dt * 0.5f, 320.0f, max(0.55f, z));
@@ -1788,6 +1821,14 @@ static void CC_GoSettings(int tab)
     CCKick();
 }
 
+static void CC_GoSettingsOn(int tab)
+{
+    Bar *keep = s_b;
+    s_b = Anchor(C.bar);
+    CC_GoSettings(tab);
+    s_b = keep;
+}
+
 void CC_ShowControls(void)
 {
     if (!C.hwnd) return;
@@ -1802,7 +1843,7 @@ void CC_SettingsResized(int h)
     if (C.hwnd) CCKick();
 }
 
-BOOL Bar_IsOn(void) { return B.hwnd && !B.fullscreen; }
+BOOL Bar_IsOn(void) { return BP.hwnd && !BP.fullscreen; }
 
 
 static int CCHitTest(int x, int y)
@@ -1818,7 +1859,7 @@ static void SliderValue(int which, int x)
     const RECT *r = &C.hit[which];
     const float v = max(0.0f, min(1.0f, (float)(x - r->left) / max(1, (int)(r->right - r->left))));
     const int k = which == CH_VOL ? 1 : 0;
-    const float before = k ? (B.muted ? 0.0f : B.volume) : C.brightness / 100.0f;
+    const float before = k ? (S.muted ? 0.0f : S.volume) : C.brightness / 100.0f;
     if (which == CH_VOL) SetVolume(v);
     else { C.brightness = (int)(v * 100.0f + 0.5f); Brightness_Request(C.brightness); }
     /* el icono responde al cambio: crece hacia donde va el valor y rebota */
@@ -1828,13 +1869,13 @@ static void SliderValue(int which, int x)
     if (k) Bar_PulseVolume(v > before);
     CCKick();
     InvalidateRect(C.hwnd, NULL, FALSE);
-    if (B.hwnd) InvalidateRect(B.hwnd, NULL, FALSE);
+    FOR_BARS(InvalidateRect(B.hwnd, NULL, FALSE));
 }
 
 static void CC_Close(void) { if (C.hwnd) Pop_Close(&C.pop); }
 void CC_CloseAll(void) { CC_Close(); }
 
-static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
+static LRESULT CCProcOn(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m >= WM_MOUSEFIRST && m <= WM_MOUSELAST && m != WM_MOUSEWHEEL && m != WM_MOUSEHWHEEL) l = Pop_Mouse(&C.pop, l);
     /* en la sección de ajustes, ratón, teclado y temporizadores son del panel alojado */
@@ -1876,7 +1917,7 @@ static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
             if (C.section == 1 && C.page == 2) {
                 ReadNetworks();
                 ReadWifi();
-                BarSync();
+                BarsSync();
                 C.listH = CS(ListHeight());
                 CCKick();
             }
@@ -1943,7 +1984,7 @@ static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     case WM_MOUSEWHEEL: {
         const BOOL up = GET_WHEEL_DELTA_WPARAM(w) > 0;
-        SetVolume((B.muted ? 0 : B.volume) + (up ? 0.05f : -0.05f));
+        SetVolume((S.muted ? 0 : S.volume) + (up ? 0.05f : -0.05f));
         C.isv[1] = up ? max(C.isv[1], 2.2f) : min(C.isv[1], -1.4f);
         CCKick();
         Bar_PulseVolume(up);
@@ -1975,21 +2016,31 @@ static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
     return DefWindowProcW(h, m, w, l);
 }
 
-/* Abre el centro de control. Estilo "Notch": pegado al borde de la barra, con hombros, se
+static LRESULT CALLBACK CCProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    Bar *keep = s_b;
+    s_b = Anchor(C.bar);
+    const LRESULT r = CCProcOn(h, m, w, l);
+    s_b = keep;
+    return r;
+}
+
+/* Abre el centro de control bajo la barra actual. Estilo "Notch": pegado al borde de la barra, con hombros, se
  * despliega hacia abajo como el panel de notificaciones del notch. "Flotante": tarjeta
  * separada que crece desde el engrane. Las dos con el rebote configurado. */
 static void CC_Open(int section, int tab)
 {
     if (C.hwnd) DestroyWindow(C.hwnd);
+    C.bar = s_b;
     ReadVolume();
     ReadWifi();
     ReadBattery();
     ReadBluetooth();
-    BarSync();
+    BarsSync();
     C.brightness = s_brightCurrent;
     C.hot = C.press = 0;
     for (int i = 0; i < CH_COUNT; ++i) { C.hs[i] = 1.0f; C.hsv[i] = 0; }
-    C.fill[0] = max(0, C.brightness) / 100.0f; C.fill[1] = B.muted ? 0.0f : max(0.0f, B.volume);
+    C.fill[0] = max(0, C.brightness) / 100.0f; C.fill[1] = S.muted ? 0.0f : max(0.0f, S.volume);
     C.fillv[0] = C.fillv[1] = 0; C.is[0] = C.is[1] = 1.0f; C.isv[0] = C.isv[1] = 0;
     Brightness_Request(-1);                             /* refresca para la próxima vez */
 
@@ -2040,7 +2091,7 @@ static void CC_Toggle(void)
 /* Ajustes de OpenDock: una sección del centro de control, no otra ventana. */
 void CC_OpenSettings(int tab)
 {
-    if (C.hwnd && !C.pop.closing) { CC_GoSettings(tab); SetForegroundWindow(C.hwnd); return; }
+    if (C.hwnd && !C.pop.closing) { CC_GoSettingsOn(tab); SetForegroundWindow(C.hwnd); return; }
     CC_Open(1, tab);
 }
 
@@ -2064,6 +2115,7 @@ static struct {
     HFONT    fTip;
     LARGE_INTEGER last;
     DWORD    closedAt;
+    Bar     *bar;               /* barra bajo la que se abrió */
 } TP;
 
 static int TPCell(void) { return CS(42); }
@@ -2218,7 +2270,7 @@ static BOOL TPAdvance(void)
 
 static void TP_Close(void) { if (TP.hwnd) Pop_Close(&TP.pop); }
 
-static LRESULT CALLBACK TPProc(HWND h, UINT m, WPARAM w, LPARAM l)
+static LRESULT TPProcOn(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m >= WM_MOUSEFIRST && m <= WM_MOUSELAST && m != WM_MOUSEWHEEL && m != WM_MOUSEHWHEEL) l = Pop_Mouse(&TP.pop, l);
     switch (m) {
@@ -2285,10 +2337,20 @@ static LRESULT CALLBACK TPProc(HWND h, UINT m, WPARAM w, LPARAM l)
     return DefWindowProcW(h, m, w, l);
 }
 
-/* Abre el panel de la bandeja; FALSE si no hay iconos propios que enseñar. */
+static LRESULT CALLBACK TPProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    Bar *keep = s_b;
+    s_b = Anchor(TP.bar);
+    const LRESULT r = TPProcOn(h, m, w, l);
+    s_b = keep;
+    return r;
+}
+
+/* Abre el panel de la bandeja bajo la barra actual; FALSE si no hay iconos propios que enseñar. */
 static BOOL TP_Open(void)
 {
     if (TP.hwnd) DestroyWindow(TP.hwnd);
+    TP.bar = s_b;
     TP.hot = TP.press = -1;
     TPLoad();
     if (!TP.n) return FALSE;
@@ -2323,14 +2385,19 @@ static BOOL TP_Open(void)
 static void TP_Refresh(void)
 {
     if (!TP.hwnd || TP.pop.closing) return;
+    Bar *keep = s_b;
+    s_b = Anchor(TP.bar);
     TPLoad();
-    if (!TP.n) { TP_Close(); return; }
-    TP.w = TPWidth(); TP.h = TPHeight();
-    const RECT *hb = &B.hit[BH_TRAY];
-    const int cx = B.mon.left + (hb->left + hb->right) / 2;
-    TP.ox = max(B.mon.left + CS(8), min(B.mon.right - CS(8) - TP.w, cx - TP.w / 2));
-    Pop_SetBounds(&TP.pop, TP.ox, TP.oy, TP.w, TP.h);
-    TPPaint();
+    if (!TP.n) TP_Close();
+    else {
+        TP.w = TPWidth(); TP.h = TPHeight();
+        const RECT *hb = &B.hit[BH_TRAY];
+        const int cx = B.mon.left + (hb->left + hb->right) / 2;
+        TP.ox = max(B.mon.left + CS(8), min(B.mon.right - CS(8) - TP.w, cx - TP.w / 2));
+        Pop_SetBounds(&TP.pop, TP.ox, TP.oy, TP.w, TP.h);
+        TPPaint();
+    }
+    s_b = keep;
 }
 
 /* ───────────────────────── Barra: ventana ───────────────────────── */
@@ -2359,9 +2426,8 @@ static void BarPosition(void)
     InvalidateRect(B.hwnd, NULL, FALSE);
 }
 
-static void BarMeasure(void)
+static void BarMeasure(HMONITOR m)
 {
-    HMONITOR m = MonitorFromPoint((POINT){ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFO mi = { sizeof(mi) };
     GetMonitorInfoW(m, &mi);
     B.mon = mi.rcMonitor;
@@ -2376,9 +2442,10 @@ static void RefreshStatus(void)
     ReadBattery();
     ReadWifi();
     ReadVolume();
-    ForegroundAppName(B.app, 64);
-    ForegroundAppIcon(BS(13));
+    ForegroundAppName(S.app, 64);
 }
+
+static HMONITOR PrimaryMonitor(void) { return MonitorFromPoint((POINT){ 0, 0 }, MONITOR_DEFAULTTOPRIMARY); }
 
 /* El reloj solo cambia una vez por minuto: se despierta justo al cambiar (con vidrio,
  * cada 5 s como mucho, para recomponer el fondo si algo se movió detrás). */
@@ -2400,17 +2467,22 @@ static void ArmClock(HWND h)
 static HWND s_trayFly;
 static HWINEVENTHOOK s_trayHook;
 static BOOL s_trayKeepTaskbar;
+static Bar *s_trayBar;          /* barra en la que se pulsó el chevrón */
 
 static void PlaceTrayFlyout(HWND w)
 {
     RECT r;
-    if (!B.hwnd || !GetWindowRect(w, &r)) return;
-    const int fw = r.right - r.left;
-    const RECT *hb = &B.hit[BH_TRAY];
-    int x = B.mon.left + (hb->left + hb->right) / 2 - fw / 2;
-    x = max(B.mon.left + BS(8), min(B.mon.right - BS(8) - fw, x));
-    const int y = B.mon.top + B.h + BS(6);
-    if (r.left != x || r.top != y) SetWindowPos(w, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+    Bar *keep = s_b;
+    s_b = Anchor(s_trayBar);
+    if (B.hwnd && GetWindowRect(w, &r)) {
+        const int fw = r.right - r.left;
+        const RECT *hb = &B.hit[BH_TRAY];
+        int x = B.mon.left + (hb->left + hb->right) / 2 - fw / 2;
+        x = max(B.mon.left + BS(8), min(B.mon.right - BS(8) - fw, x));
+        const int y = B.mon.top + B.h + BS(6);
+        if (r.left != x || r.top != y) SetWindowPos(w, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+    s_b = keep;
 }
 
 static void StopTrayWatch(void)
@@ -2426,9 +2498,10 @@ static void CALLBACK TrayHook(HWINEVENTHOOK hk, DWORD ev, HWND w, LONG obj, LONG
     if (ev == EVENT_OBJECT_HIDE) { StopTrayWatch(); return; }
     if (ev == EVENT_OBJECT_SHOW || ev == EVENT_OBJECT_LOCATIONCHANGE) {
         PlaceTrayFlyout(w);
-        if (ev == EVENT_OBJECT_SHOW && B.hwnd && g_cfg.dock && g_cfg.dockHideTaskbar && !s_trayKeepTaskbar) {
-            B.trayStep = 3;
-            SetTimer(B.hwnd, TIMER_TRAY, 250, NULL);
+        const HWND bar = Anchor(s_trayBar)->hwnd;
+        if (ev == EVENT_OBJECT_SHOW && bar && g_cfg.dock && g_cfg.dockHideTaskbar && !s_trayKeepTaskbar) {
+            S.trayStep = 3;
+            SetTimer(bar, TIMER_TRAY, 250, NULL);
         }
     }
 }
@@ -2445,16 +2518,15 @@ static void StartTrayWatch(void)
 }
 
 /* Pantalla completa: lo avisa Windows (ABN_FULLSCREENAPP) o lo vemos nosotros en la ventana
- * de delante (el Escritorio remoto maximizado, por ejemplo, no siempre lo avisa). */
-static BOOL s_fsAbn, s_fsFg;
-
+ * de delante (el Escritorio remoto maximizado, por ejemplo, no siempre lo avisa). Cada barra
+ * mira su monitor. */
 static void BarApplyFullscreen(void)
 {
-    const BOOL fs = s_fsAbn || s_fsFg;
+    const BOOL fs = B.fsAbn || B.fsFg;
     if (!B.hwnd || fs == B.fullscreen) return;
     B.fullscreen = fs;
-    if (fs && TP.hwnd) DestroyWindow(TP.hwnd);
-    if (fs) CC_Close();
+    if (fs && TP.hwnd && Anchor(TP.bar) == s_b) DestroyWindow(TP.hwnd);
+    if (fs && Anchor(C.bar) == s_b) CC_Close();
     ShowWindow(B.hwnd, fs ? SW_HIDE : SW_SHOWNOACTIVATE);
     if (g_ctrl) PostMessageW(g_ctrl, WM_BARCHANGED, 0, 0);
     if (!fs) SetWindowPos(B.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -2462,11 +2534,10 @@ static void BarApplyFullscreen(void)
 
 void Bar_FullscreenFg(const RECT *mon)
 {
-    s_fsFg = mon && EqualRect(mon, &B.mon);
-    BarApplyFullscreen();
+    FOR_BARS(B.fsFg = mon && EqualRect(mon, &B.mon); BarApplyFullscreen());
 }
 
-static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
+static LRESULT BarProcOn(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
     case WM_ERASEBKGND: return 1;
@@ -2482,7 +2553,7 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_BAR_APPBAR:
         if (w == ABN_POSCHANGED) BarPosition();
         else if (w == ABN_FULLSCREENAPP) {          /* juegos, vídeo, presentaciones: fuera */
-            s_fsAbn = (BOOL)l;
+            B.fsAbn = (BOOL)l;
             BarApplyFullscreen();
         }
         return 0;
@@ -2530,18 +2601,19 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
         case BH_VOL: case BH_WIFI: case BH_BATT: case BH_CC: CC_Toggle(); break;
         case BH_TRAY:  /* el panel propio con los iconos de la bandeja */
             if (TP.hwnd && !TP.pop.closing) { TP_Close(); break; }
+            s_trayBar = s_b;
             if (!TP.hwnd && GetTickCount() - TP.closedAt < 300) break;     /* el clic ya lo cerró */
             if (TP_Open()) break;
             /* aún sin iconos propios: el panel de Windows, dejando ver la barra de tareas */
             Dock_TrayPeek(TRUE);
-            B.trayStep = 0;
+            S.trayStep = 0;
             SetTimer(h, TIMER_TRAY, 120, NULL);
             break;
         }
         return 0;
     }
     case WM_MOUSEWHEEL:     /* rueda sobre la barra = volumen, como en muchas barras de macOS */
-        SetVolume((B.muted ? 0 : B.volume) + (GET_WHEEL_DELTA_WPARAM(w) > 0 ? 0.04f : -0.04f));
+        SetVolume((S.muted ? 0 : S.volume) + (GET_WHEEL_DELTA_WPARAM(w) > 0 ? 0.04f : -0.04f));
         Bar_PulseVolume(GET_WHEEL_DELTA_WPARAM(w) > 0);
         return 0;
     case WM_TIMER:
@@ -2557,7 +2629,7 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
         } else if (w == TIMER_TRAY) {
             /* Win+B lleva el foco al área de notificación (al botón de iconos ocultos) y
              * Entrar lo abre: el panel real de Windows, con todo funcionando */
-            if (B.trayStep == 0) {
+            if (S.trayStep == 0) {
                 StartTrayWatch();
                 INPUT in[4] = { 0 };
                 for (int i = 0; i < 4; ++i) in[i].type = INPUT_KEYBOARD;
@@ -2565,22 +2637,22 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 in[2].ki.wVk = 'B'; in[2].ki.dwFlags = KEYEVENTF_KEYUP;
                 in[3].ki.wVk = VK_LWIN; in[3].ki.dwFlags = KEYEVENTF_KEYUP;
                 SendInput(4, in, sizeof(INPUT));
-                B.trayStep = 1;
+                S.trayStep = 1;
                 SetTimer(h, TIMER_TRAY, 380, NULL);
-            } else if (B.trayStep == 1) {
+            } else if (S.trayStep == 1) {
                 INPUT in[2] = { 0 };
                 in[0].type = in[1].type = INPUT_KEYBOARD;
                 in[0].ki.wVk = in[1].ki.wVk = VK_RETURN;
                 in[1].ki.dwFlags = KEYEVENTF_KEYUP;
                 SendInput(2, in, sizeof(INPUT));
-                B.trayStep = 2;
+                S.trayStep = 2;
                 SetTimer(h, TIMER_TRAY, 2000, NULL);     /* si no llega a abrirse, se deja de vigilar */
-            } else if (B.trayStep == 2) {
+            } else if (S.trayStep == 2) {
                 KillTimer(h, TIMER_TRAY);
                 if (!s_trayFly || !IsWindowVisible(s_trayFly)) StopTrayWatch();
-            } else if (B.trayStep == 3) {           /* el panel ya está arriba */
+            } else if (S.trayStep == 3) {           /* el panel ya está arriba */
                 Dock_TrayPeek(FALSE);
-                B.trayStep = 4;
+                S.trayStep = 4;
                 SetTimer(h, TIMER_TRAY, 450, NULL);
             } else {
                 KillTimer(h, TIMER_TRAY);
@@ -2591,13 +2663,11 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
             ReadBattery();
             ReadWifi();
             ReadVolume();
-            BarSync();
-            InvalidateRect(h, NULL, FALSE);
+            BarsSync();
         } else if (w == TIMER_WIFIQ) {
             KillTimer(h, TIMER_WIFIQ);
             ReadWifi();
-            BarSync();
-            InvalidateRect(h, NULL, FALSE);
+            BarsSync();
         }
         return 0;
     case WM_TRAYCHANGED:
@@ -2606,14 +2676,13 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_BAR_STATUS:
         if (w == 1) {                           /* volumen o silencio: al momento */
             ReadVolume();
-            BarSync();
-            InvalidateRect(h, NULL, FALSE);
+            BarsSync();
         } else SetTimer(h, TIMER_WIFIQ, 250, NULL);
         return 0;
     case WM_POWERBROADCAST:                     /* enchufar, desenchufar, cambio de porcentaje */
+        if (s_b != &BP) return TRUE;            /* llega a todas: la atiende la principal */
         ReadBattery();
-        BarSync();
-        InvalidateRect(h, NULL, FALSE);
+        BarsSync();
         return TRUE;
     case WM_SETTINGCHANGE:
         LoadBarLook();
@@ -2625,10 +2694,19 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
         KillTimer(h, TIMER_BANIM);
         KillTimer(h, TIMER_TRAY);
         KillTimer(h, TIMER_WIFIQ);
-        StopTrayWatch();
-        if (TP.hwnd) DestroyWindow(TP.hwnd);
-        Tray_Stop();
-        if (B.battNotify) { UnregisterPowerSettingNotification(B.battNotify); B.battNotify = NULL; }
+        if (s_b == &BP) {                       /* los servicios del sistema son de la principal */
+            StopTrayWatch();
+            if (TP.hwnd) DestroyWindow(TP.hwnd);
+            Tray_Stop();
+            if (S.battNotify) { UnregisterPowerSettingNotification(S.battNotify); S.battNotify = NULL; }
+        } else {                                /* otra barra: se cierra lo que colgaba de ella */
+            if (TP.hwnd && TP.bar == s_b) DestroyWindow(TP.hwnd);
+            if (C.hwnd && C.bar == s_b) DestroyWindow(C.hwnd);
+            if (s_trayBar == s_b) s_trayBar = NULL;
+            HFONT *all[] = { &B.fBold, &B.fText, &B.fIcon };
+            for (int i = 0; i < 3; ++i) if (*all[i]) { DeleteObject(*all[i]); *all[i] = NULL; }
+            if (B.appIcon) { DeleteObject(B.appIcon); B.appIcon = NULL; B.appKey[0] = 0; }
+        }
         B.synced = FALSE;
         if (B.registered) {
             APPBARDATA abd = { sizeof(abd) };
@@ -2637,13 +2715,27 @@ static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
             B.registered = FALSE;
         }
         Canvas_Free(&B.cv);
-        Canvas_Free(&s_back);
-        s_backHash = 0;
+        Canvas_Free(&B.back);
+        B.backHash = 0;
         B.hwnd = NULL;
         return 0;
     }
     }
     return DefWindowProcW(h, m, w, l);
+}
+
+/* Cada ventana de barra lleva su Bar (GWLP_USERDATA) y, mientras atiende un mensaje, es la
+ * barra actual; al terminar vuelve la que hubiera (la principal, fuera de aquí). */
+static LRESULT CALLBACK BarProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_NCCREATE) SetWindowLongPtrW(h, GWLP_USERDATA, (LONG_PTR)((CREATESTRUCTW *)l)->lpCreateParams);
+    Bar *v = (Bar *)GetWindowLongPtrW(h, GWLP_USERDATA);
+    if (!v) return DefWindowProcW(h, m, w, l);
+    Bar *keep = s_b;
+    s_b = v;
+    const LRESULT r = BarProcOn(h, m, w, l);
+    s_b = keep;
+    return r;
 }
 
 /* ───────────────────────── Reloj de Windows ───────────────────────── */
@@ -2711,91 +2803,155 @@ void Bar_Register(void)
     RegisterClassExW(&tp);
 }
 
-/* Muestra u oculta la barra según g_cfg (y el reloj de Windows con ella). */
+/* Crea la ventana de la barra actual en el monitor m (ya medida). La principal además
+ * arranca los servicios del sistema. */
+static BOOL BarCreate(HMONITOR m)
+{
+    BarMeasure(m);
+    B.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, BAR_CLASS, L"OpenDock", WS_POPUP,
+                             B.mon.left, B.mon.top, B.mon.right - B.mon.left, B.h, NULL, NULL, g_inst, s_b);
+    if (!B.hwnd) return FALSE;
+    APPBARDATA abd = { sizeof(abd) };
+    abd.hWnd = B.hwnd;
+    abd.uCallbackMessage = WM_BAR_APPBAR;
+    B.registered = SHAppBarMessage(ABM_NEW, &abd) != 0;
+    BarApplyCapture();
+    BarPosition();
+    ArmClock(B.hwnd);
+    ForegroundAppIcon(BS(13));
+    if (s_b == &BP) {
+        SetTimer(B.hwnd, TIMER_STATUS, 30000, NULL);
+        Tray_Start(B.hwnd);             /* los iconos de la bandeja, para el chevrón */
+        S.battNotify = RegisterPowerSettingNotification(B.hwnd, &kGUID_BatteryPercent, DEVICE_NOTIFY_WINDOW_HANDLE);
+        Brightness_Request(-1);
+    }
+    BarSync();
+    return TRUE;
+}
+
+typedef struct { HMONITOR m[MAX_BARS]; RECT r[MAX_BARS]; int n; } MonList;
+
+static BOOL CALLBACK AddMonitor(HMONITOR m, HDC dc, LPRECT rc, LPARAM p)
+{
+    (void)dc; (void)rc;
+    MonList *l = (MonList *)p;
+    MONITORINFO mi = { sizeof(mi) };
+    if (l->n < MAX_BARS - 1 && GetMonitorInfoW(m, &mi) && !(mi.dwFlags & MONITORINFOF_PRIMARY)) {
+        l->m[l->n] = m;
+        l->r[l->n++] = mi.rcMonitor;
+    }
+    return TRUE;
+}
+
+/* Una barra en cada monitor secundario: se cierran las de monitores que ya no están (o que
+ * pasaron a ser el principal) y se abren las que faltan. */
+static void SyncSecondaryBars(void)
+{
+    MonList l = { 0 };
+    EnumDisplayMonitors(NULL, NULL, AddMonitor, (LPARAM)&l);
+    for (int i = 1; i < MAX_BARS; ++i) {
+        if (!s_bars[i].hwnd) continue;
+        BOOL keep = FALSE;
+        for (int k = 0; k < l.n; ++k) if (EqualRect(&l.r[k], &s_bars[i].mon)) keep = TRUE;
+        if (!keep) DestroyWindow(s_bars[i].hwnd);
+    }
+    for (int k = 0; k < l.n; ++k) {
+        int slot = -1;
+        for (int i = 1; i < MAX_BARS; ++i) {
+            if (s_bars[i].hwnd && EqualRect(&l.r[k], &s_bars[i].mon)) { slot = 0; break; }
+            if (!s_bars[i].hwnd && slot < 0) slot = i;
+        }
+        if (slot <= 0) continue;                /* ya tiene barra, o no queda sitio */
+        Bar *keep = s_b;
+        s_b = &s_bars[slot];
+        ZeroMemory(s_b, sizeof(*s_b));          /* lo de la anterior ya se liberó en WM_DESTROY */
+        BarCreate(l.m[k]);
+        s_b = keep;
+    }
+}
+
+/* Muestra u oculta las barras según g_cfg (y el reloj de Windows con ellas). */
 void Bar_Apply(void)
 {
     if (!g_cfg.menubar) {
         CC_Close();
-        if (B.hwnd) DestroyWindow(B.hwnd);
+        for (int i = MAX_BARS - 1; i >= 0; --i) if (s_bars[i].hwnd) DestroyWindow(s_bars[i].hwnd);
         Bar_ApplyClock(FALSE);
         return;
     }
-    if (!B.hwnd) {
-        BarMeasure();
+    if (!BP.hwnd) {
         RefreshStatus();
-        B.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, BAR_CLASS, L"OpenDock", WS_POPUP,
-                                 B.mon.left, B.mon.top, B.mon.right - B.mon.left, B.h, NULL, NULL, g_inst, NULL);
-        if (!B.hwnd) return;
-        APPBARDATA abd = { sizeof(abd) };
-        abd.hWnd = B.hwnd;
-        abd.uCallbackMessage = WM_BAR_APPBAR;
-        B.registered = SHAppBarMessage(ABM_NEW, &abd) != 0;
-        BarApplyCapture();
-        BarPosition();
-        ArmClock(B.hwnd);
-        SetTimer(B.hwnd, TIMER_STATUS, 30000, NULL);
-        Tray_Start(B.hwnd);             /* los iconos de la bandeja, para el chevrón */
-        B.battNotify = RegisterPowerSettingNotification(B.hwnd, &kGUID_BatteryPercent, DEVICE_NOTIFY_WINDOW_HANDLE);
-        BarSync();
-        Brightness_Request(-1);
+        if (!BarCreate(PrimaryMonitor())) return;
     } else {
-        LoadBarLook();
-        InvalidateRect(B.hwnd, NULL, FALSE);
+        FOR_BARS(LoadBarLook(); InvalidateRect(B.hwnd, NULL, FALSE));
     }
+    SyncSecondaryBars();
     Bar_ApplyClock(g_cfg.hideClock);
 }
 
 /* Cambió el material, el acento o "ocultar en capturas". */
 void Bar_StyleChanged(void)
 {
-    if (!B.hwnd) return;
-    LoadBarLook();
-    BarApplyCapture();
-    s_backHash = 0;
-    Canvas_Free(&s_back);
-    InvalidateRect(B.hwnd, NULL, FALSE);
+    if (!BP.hwnd) return;
+    FOR_BARS(
+        LoadBarLook();
+        BarApplyCapture();
+        B.backHash = 0;
+        Canvas_Free(&B.back);
+        InvalidateRect(B.hwnd, NULL, FALSE));
     if (C.hwnd) InvalidateRect(C.hwnd, NULL, FALSE);
 }
 
 /* Cambios de resolución, escala o monitores. */
 void Bar_Reposition(void)
 {
-    if (!B.hwnd) return;
-    BarMeasure();
+    if (!BP.hwnd) return;
+    BarMeasure(PrimaryMonitor());
     BarPosition();
+    SyncSecondaryBars();
+    for (int i = 1; i < MAX_BARS; ++i)
+        if (s_bars[i].hwnd) {
+            Bar *keep = s_b;
+            s_b = &s_bars[i];
+            BarMeasure(MonitorFromRect(&B.mon, MONITOR_DEFAULTTONEAREST));    /* la escala pudo cambiar */
+            BarPosition();
+            s_b = keep;
+        }
 }
 
 void Bar_ForegroundChanged(void)
 {
-    if (!B.hwnd) return;
+    if (!BP.hwnd) return;
     wchar_t name[64];
     ForegroundAppName(name, 64);
-    const BOOL icon = ForegroundAppIcon(BS(13));
-    if (name[0] && lstrcmpW(name, B.app)) lstrcpynW(B.app, name, 64);
-    else if (!icon) return;
-    InvalidateRect(B.hwnd, NULL, FALSE);
+    const BOOL renamed = name[0] && lstrcmpW(name, S.app);
+    if (renamed) lstrcpynW(S.app, name, 64);
+    FOR_BARS(if (ForegroundAppIcon(BS(13)) || renamed) InvalidateRect(B.hwnd, NULL, FALSE));
 }
 
 /* Alto que ocupa la barra en el monitor indicado (0 si no está en él). */
 int Bar_HeightOn(const RECT *mon)
 {
-    if (!B.hwnd || B.fullscreen || !EqualRect(mon, &B.mon)) return 0;
-    return B.h;
+    for (int i = 0; i < MAX_BARS; ++i)
+        if (s_bars[i].hwnd && !s_bars[i].fullscreen && EqualRect(mon, &s_bars[i].mon)) return s_bars[i].h;
+    return 0;
 }
 
 void Bar_Raise(void)
 {
-    if (B.hwnd && !B.fullscreen && App_Covered(B.hwnd))
-        SetWindowPos(B.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    FOR_BARS(if (!B.fullscreen && App_Covered(B.hwnd))
+        SetWindowPos(B.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER));
 }
 
 void Bar_Destroy(void)
 {
     if (C.hwnd) DestroyWindow(C.hwnd);      /* al salir, sin animación */
+    for (int i = MAX_BARS - 1; i >= 1; --i) if (s_bars[i].hwnd) DestroyWindow(s_bars[i].hwnd);
+    s_b = &BP;
     if (B.hwnd) DestroyWindow(B.hwnd);
     if (B.appIcon) { DeleteObject(B.appIcon); B.appIcon = NULL; B.appKey[0] = 0; }
     CloseVolume();
-    if (B.wlan) { WlanCloseHandle(B.wlan, NULL); B.wlan = NULL; }     /* también quita sus avisos */
+    if (S.wlan) { WlanCloseHandle(S.wlan, NULL); S.wlan = NULL; }     /* también quita sus avisos */
     HFONT *all[] = { &B.fBold, &B.fText, &B.fIcon };
     for (int i = 0; i < 3; ++i) if (*all[i]) { DeleteObject(*all[i]); *all[i] = NULL; }
 }
