@@ -23,6 +23,7 @@
 #define WM_SHOTFILE     (WM_APP + 4)   /* hay una captura guardada pendiente (sin parámetros) */
 #define WM_WNCHANGED    (WM_APP + 5)   /* cambió la base de notificaciones de Windows */
 #define WM_BARCHANGED   (WM_APP + 6)   /* la barra superior apareció/desapareció: recolocar esquinas */
+#define WM_LAUNCHER     (WM_APP + 7)   /* tecla Windows sola: abrir o cerrar el buscador */
 #define WM_POPFRAME     (WM_APP + 80)  /* fotograma de la animación de una ventana emergente */
 #define WM_TRAYCHANGED  (WM_APP + 81)  /* cambió algún icono de la bandeja de Windows */
 
@@ -62,6 +63,7 @@ typedef struct {
     BOOL dockWinFull;   /* con el dock oculto, las ventanas maximizadas llegan hasta abajo */
     BOOL siteIcons;     /* avisos del navegador: el icono del sitio (si lo trae) en vez de su inicial */
     int  soundVol;      /* volumen del sonido de notificación, 0..100 */
+    BOOL launcher;      /* la tecla Windows abre el buscador propio en vez del Inicio */
 } Config;
 
 enum { MAT_OLED, MAT_GLASS, MAT_SYSTEM };
@@ -291,6 +293,12 @@ void Dock_ConfigChanged(void);
 void Dock_TrayPeek(BOOL on);
 void Dock_Destroy(void);
 BOOL Dock_WindowAumid(HWND w, wchar_t *out, int cch);   /* AppUserModelID de una ventana (Store, PWA…) */
+
+/* ── launcher.c: buscador de apps y archivos con la tecla Windows ── */
+void Launcher_Register(void);
+void Launcher_Apply(void);      /* arranca o para el gancho de la tecla y los índices según g_cfg.launcher */
+void Launcher_Toggle(void);
+void Launcher_Destroy(void);
 
 /* ── install.c: instalación por usuario (sin admin) ── */
 BOOL Inst_IsRunningInstalled(void);

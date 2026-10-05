@@ -28,7 +28,7 @@
 
 /* Opciones (claves de los elementos) */
 enum {
-    K_RADIUS, K_HIDECAP, K_STARTUP, K_BAR, K_CLOCK, K_BATTPCT, K_DOCK, K_DOCKTB, K_DHIDE, K_DWINFULL, K_DBLUR, K_DOPAC, K_DICON,
+    K_RADIUS, K_HIDECAP, K_STARTUP, K_LAUNCHER, K_BAR, K_CLOCK, K_BATTPCT, K_DOCK, K_DOCKTB, K_DHIDE, K_DWINFULL, K_DBLUR, K_DOPAC, K_DICON,
     K_NOTCH, K_MIRROR, K_BANNERS, K_SITEICON, K_EDGE, K_SHOTS,
     K_SOUND, K_SOUNDVOL, K_STYLE, K_MATERIAL, K_SIZE, K_BOUNCE, K_ACCENT, K_TEST,
     K_COUNT
@@ -46,6 +46,7 @@ static const ItemDef kGeneral[] = {
     { IT_DIVIDER, -1 },
     { IT_TOGGLE,  K_HIDECAP, L"Ocultar en capturas", L"No salen en screenshots ni grabaciones" },
     { IT_TOGGLE,  K_STARTUP, L"Iniciar con Windows", L"Arranca sola al encender el equipo" },
+    { IT_TOGGLE,  K_LAUNCHER, L"Buscador con la tecla Windows", L"Apps y archivos al instante \x00B7 Ctrl+Esc abre el Inicio de Windows" },
     { IT_DIVIDER, -1 },
     { IT_SEGMENT, K_MATERIAL, L"Material \x00B7 notch, barra y dock", NULL, { L"OLED", L"Vidrio", L"Sistema" } },
     { IT_DIVIDER, -1 },
@@ -124,6 +125,7 @@ static BOOL ToggleValue(int key)
     switch (key) {
     case K_HIDECAP: return g_cfg.hideCapture;
     case K_STARTUP: return Inst_IsStartup();
+    case K_LAUNCHER: return g_cfg.launcher;
     case K_BAR:     return g_cfg.menubar;
     case K_CLOCK:   return g_cfg.hideClock;
     case K_BATTPCT: return g_cfg.battPct;
@@ -626,6 +628,7 @@ static void Activate(int hit)
     case K_RADIUS:   if (sub >= 1) App_SetRadius(kChips[sub - 1], 0); return;
     case K_HIDECAP:  App_SetHideCapture(!g_cfg.hideCapture); return;
     case K_STARTUP:  Inst_SetStartup(!Inst_IsStartup(), NULL); Panel_Refresh(); return;
+    case K_LAUNCHER: g_cfg.launcher = !g_cfg.launcher; Cfg_Save(); Launcher_Apply(); Panel_Refresh(); return;
     case K_BAR:      App_SetMenuBar(!g_cfg.menubar, FALSE); return;
     case K_CLOCK:    App_SetHideClock(!g_cfg.hideClock); return;
     case K_BATTPCT:  g_cfg.battPct = !g_cfg.battPct; Cfg_Save(); Bar_StyleChanged(); Panel_Refresh(); return;

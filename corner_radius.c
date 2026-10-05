@@ -197,6 +197,7 @@ void Cfg_Save(void)
     RegWriteDword(L"DockWindowsFull", (DWORD)g_cfg.dockWinFull);
     RegWriteDword(L"NotchSiteIcons", (DWORD)g_cfg.siteIcons);
     RegWriteDword(L"NotchSoundVol", (DWORD)g_cfg.soundVol);
+    RegWriteDword(L"Launcher", (DWORD)g_cfg.launcher);
     RegWriteDword(L"NotchX", (DWORD)g_cfg.notchX);
     RegWriteDword(L"NotchY", (DWORD)g_cfg.notchY);
 }
@@ -238,6 +239,7 @@ static void LoadConfig(void)
     g_cfg.dockAutoHide = (int)min(RegReadDword(L"DockAutoHide", 0), 2);
     g_cfg.dockWinFull  = RegReadDword(L"DockWindowsFull", 1) != 0;
     g_cfg.siteIcons    = RegReadDword(L"NotchSiteIcons", 1) != 0;
+    g_cfg.launcher     = RegReadDword(L"Launcher", 1) != 0;
     {   /* antes eran cuatro niveles; ahora 0..100 */
         static const int kOld[4] = { 25, 55, 80, 100 };
         const DWORD v = RegReadDword(L"NotchSoundVol", 0xFFFF);
@@ -883,6 +885,10 @@ static LRESULT CALLBACK CtrlProc(HWND h, UINT m, WPARAM w, LPARAM l)
         RebuildCorners();
         return 0;
 
+    case WM_LAUNCHER:
+        Launcher_Toggle();
+        return 0;
+
     case WM_WNCHANGED:         /* la base se escribe en ráfagas: agrupar */
         if (w == 1) {          /* una respuesta rápida que la app no aceptó */
             Notch_Show(NI_WARN, L"No se pudo enviar", L"Esta app solo acepta respuestas desde Windows", -1, TRUE);
@@ -953,6 +959,7 @@ static LRESULT CALLBACK CtrlProc(HWND h, UINT m, WPARAM w, LPARAM l)
         Bar_ApplyClock(FALSE);      /* sin OpenDock, el reloj de Windows vuelve */
         Dock_Destroy();
         Dock_RestoreTaskbar();
+        Launcher_Destroy();
         Wn_Stop();
         UnregisterHotKey(h, HK_TOGGLE);
         UnregisterHotKey(h, HK_UP);
@@ -987,6 +994,7 @@ static void RegisterClasses(HINSTANCE hInst)
     Notch_Register();
     Bar_Register();
     Dock_Register();
+    Launcher_Register();
 }
 
 static void MessageLoop(void)
@@ -1181,6 +1189,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
     App_NotchConfigChanged();
     Bar_Apply();
     Dock_Apply();
+    Launcher_Apply();
     RebuildCorners();
 
     RebuildCorners();
