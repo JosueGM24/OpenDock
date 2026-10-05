@@ -19,7 +19,10 @@
 #include <gio/gdesktopappinfo.h>
 #include <gtk/gtk.h>
 #include <math.h>
+#include <signal.h>
+#include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #if HAVE_LAYER_SHELL
 #include <gtk4-layer-shell/gtk4-layer-shell.h>
@@ -551,6 +554,101 @@ static void menu_nueva_ventana(GtkButton *b, gpointer d)
     if (g_item_menu) lanzar(g_item_menu);
 }
 
+/* Una ventana de la lista: la trae al frente (si sigue abierta). */
+static void menu_ventana(GtkButton *b, gpointer d)
+{
+    (void)d;
+    gtk_popover_popdown(GTK_POPOVER(g_d.menu));
+    OdVentana *v = g_object_get_data(G_OBJECT(b), "od-ventana");
+    GPtrArray *todas = od_ventanas_lista();
+    for (guint i = 0; v && todas && i < todas->len; i++)
+        if (g_ptr_array_index(todas, i) == v) { od_ventana_activar(v); break; }
+}
+
+/* Acción del .desktop ("Nueva ventana privada", "Redactar"...), como las listas
+ * de la barra de tareas de Windows. */
+static void menu_accion(GtkButton *b, gpointer d)
+{
+    (void)d;
+    gtk_popover_popdown(GTK_POPOVER(g_d.menu));
+    const char *accion = g_object_get_data(G_OBJECT(b), "od-accion");
+    if (!g_item_menu || !g_item_menu->info || !accion) return;
+    GdkAppLaunchContext *ctx = gdk_display_get_app_launch_context(gdk_display_get_default());
+    g_desktop_app_info_launch_action(g_item_menu->info, accion, G_APP_LAUNCH_CONTEXT(ctx));
+    g_object_unref(ctx);
+    rebotar(g_item_menu, 3, 0.75 * g_d.icono);
+}
+
+static void menu_ajustes(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    gtk_popover_popdown(GTK_POPOVER(g_d.menu));
+    od_config_abrir(g_d.cfg);
+}
+
+/* --- Finalizar tarea: SIGTERM y, si a los 2 s sigue vivo, SIGKILL --- */
+
+/* Momento de arranque del proceso (campo 22 de /proc/PID/stat): así no se mata a
+ * otro proceso que haya heredado el número entretanto. */
+static unsigned long long arranque_proceso(int pid)
+{
+    char ruta[64], linea[1024];
+    g_snprintf(ruta, sizeof ruta, "/proc/%d/stat", pid);
+    FILE *f = fopen(ruta, "r");
+    if (!f) return 0;
+    size_t n = fread(linea, 1, sizeof linea - 1, f);
+    fclose(f);
+    linea[n] = 0;
+    const char *p = strrchr(linea, ')');       /* el nombre puede llevar espacios */
+    if (!p) return 0;
+    unsigned long long inicio = 0;
+    int campo = 2;
+    for (const char *q = p + 1; *q && campo < 22; q++) {
+        if (*q == ' ') {
+            campo++;
+            if (campo == 22) inicio = g_ascii_strtoull(q + 1, NULL, 10);
+        }
+    }
+    return inicio;
+}
+
+typedef struct { int pid; unsigned long long inicio; } OdTarea;
+
+static gboolean rematar(gpointer datos)
+{
+    OdTarea *t = datos;
+    if (kill(t->pid, 0) == 0 && arranque_proceso(t->pid) == t->inicio) kill(t->pid, SIGKILL);
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean pid_finalizable(int pid)
+{
+    return pid > 1 && pid != getpid();
+}
+
+static void menu_finalizar(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    gtk_popover_popdown(GTK_POPOVER(g_d.menu));
+    if (!g_item_menu) return;
+    GPtrArray *vs = ventanas_de(g_item_menu);
+    GArray *hechos = g_array_new(FALSE, FALSE, sizeof(int));
+    for (guint i = 0; i < vs->len; i++) {
+        int pid = od_ventana_pid(g_ptr_array_index(vs, i));
+        gboolean repetido = FALSE;
+        for (guint k = 0; k < hechos->len; k++) repetido |= g_array_index(hechos, int, k) == pid;
+        if (!pid_finalizable(pid) || repetido) continue;
+        g_array_append_val(hechos, pid);
+        OdTarea *t = g_new(OdTarea, 1);
+        t->pid = pid;
+        t->inicio = arranque_proceso(pid);
+        if (kill(pid, SIGTERM) == 0) g_timeout_add_full(G_PRIORITY_DEFAULT, 2000, rematar, t, g_free);
+        else g_free(t);
+    }
+    g_array_free(hechos, TRUE);
+    g_ptr_array_free(vs, TRUE);
+}
+
 static void menu_anclar(GtkButton *b, gpointer d)
 {
     (void)b; (void)d;
@@ -580,33 +678,97 @@ static void menu_cerrar(GtkButton *b, gpointer d)
     g_ptr_array_free(vs, TRUE);
 }
 
-static GtkWidget *boton_menu(const char *texto, GCallback cb)
+/* Fila del menú: icono de 16 px (crece al pasar el cursor) y texto. */
+static GtkWidget *fila_menu(const char *icono, GdkPaintable *pintable, const char *texto,
+    GCallback cb, const char *clase)
 {
-    GtkWidget *b = gtk_button_new_with_label(texto);
+    GtkWidget *b = gtk_button_new();
     gtk_widget_add_css_class(b, "flat");
-    gtk_widget_set_halign(gtk_button_get_child(GTK_BUTTON(b)), GTK_ALIGN_START);
+    gtk_widget_add_css_class(b, "od-menu-fila");
+    if (clase) gtk_widget_add_css_class(b, clase);
+    GtkWidget *caja = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    GtkWidget *img = pintable ? gtk_image_new_from_paintable(pintable) : gtk_image_new_from_icon_name(icono);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), 16);
+    gtk_box_append(GTK_BOX(caja), img);
+    GtkWidget *lbl = gtk_label_new(texto);
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0);
+    gtk_label_set_ellipsize(GTK_LABEL(lbl), PANGO_ELLIPSIZE_END);
+    gtk_label_set_max_width_chars(GTK_LABEL(lbl), 34);
+    gtk_widget_set_hexpand(lbl, TRUE);
+    gtk_box_append(GTK_BOX(caja), lbl);
+    gtk_button_set_child(GTK_BUTTON(b), caja);
     g_signal_connect(b, "clicked", cb, NULL);
     return b;
 }
 
+static void separador_menu(GtkWidget *caja)
+{
+    GtkWidget *s = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_add_css_class(s, "od-menu-sep");
+    gtk_box_append(GTK_BOX(caja), s);
+}
+
+/* Como el de la barra de tareas de Windows: ventanas abiertas, acciones de la app,
+ * nueva ventana, anclar, cerrar, finalizar tarea y ajustes del dock. */
 static void abrir_menu(OdItem *it)
 {
     g_item_menu = it;
     GPtrArray *vs = ventanas_de(it);
-    GtkWidget *caja = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    GtkWidget *caja = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1);
+
     GtkWidget *titulo = gtk_label_new(nombre_item(it));
-    gtk_widget_add_css_class(titulo, "heading");
-    gtk_widget_set_margin_bottom(titulo, 4);
+    gtk_widget_add_css_class(titulo, "od-menu-cabecera");
+    gtk_label_set_xalign(GTK_LABEL(titulo), 0);
+    gtk_label_set_ellipsize(GTK_LABEL(titulo), PANGO_ELLIPSIZE_END);
     gtk_box_append(GTK_BOX(caja), titulo);
-    if (it->info) {
-        gtk_box_append(GTK_BOX(caja), boton_menu(vs->len ? "Nueva ventana" : "Abrir",
-            G_CALLBACK(menu_nueva_ventana)));
-        gtk_box_append(GTK_BOX(caja), boton_menu(it->anclada ? "Quitar del dock" : "Anclar al dock",
-            G_CALLBACK(menu_anclar)));
+
+    /* ventanas abiertas: la del frente, resaltada */
+    for (guint i = 0; i < vs->len && i < 8; i++) {
+        OdVentana *v = g_ptr_array_index(vs, i);
+        const char *t = od_ventana_titulo(v);
+        GtkWidget *f = fila_menu("view-restore-symbolic", it->icono, t && *t ? t : nombre_item(it),
+            G_CALLBACK(menu_ventana), od_ventana_activa(v) ? "od-menu-activa" : NULL);
+        g_object_set_data(G_OBJECT(f), "od-ventana", v);
+        gtk_box_append(GTK_BOX(caja), f);
     }
-    if (vs->len)
-        gtk_box_append(GTK_BOX(caja), boton_menu(vs->len > 1 ? "Cerrar todas" : "Cerrar",
-            G_CALLBACK(menu_cerrar)));
+    if (vs->len) separador_menu(caja);
+
+    /* acciones del .desktop */
+    const gchar * const *acciones = it->info ? g_desktop_app_info_list_actions(it->info) : NULL;
+    int n_acciones = 0;
+    for (int i = 0; acciones && acciones[i] && n_acciones < 6; i++) {
+        gchar *nombre = g_desktop_app_info_get_action_name(it->info, acciones[i]);
+        if (!nombre) continue;
+        GtkWidget *f = fila_menu("media-playlist-consecutive-symbolic", NULL, nombre, G_CALLBACK(menu_accion), NULL);
+        g_object_set_data_full(G_OBJECT(f), "od-accion", g_strdup(acciones[i]), g_free);
+        gtk_box_append(GTK_BOX(caja), f);
+        g_free(nombre);
+        n_acciones++;
+    }
+    if (n_acciones) separador_menu(caja);
+
+    if (it->info) {
+        gtk_box_append(GTK_BOX(caja), vs->len
+            ? fila_menu("window-new-symbolic", NULL, "Nueva ventana", G_CALLBACK(menu_nueva_ventana), NULL)
+            : fila_menu(NULL, it->icono, nombre_item(it), G_CALLBACK(menu_nueva_ventana), NULL));
+        gtk_box_append(GTK_BOX(caja), fila_menu(it->anclada ? "list-remove-symbolic" : "view-pin-symbolic",
+            NULL, it->anclada ? "Quitar del dock" : "Anclar al dock", G_CALLBACK(menu_anclar), NULL));
+    }
+    if (vs->len) {
+        separador_menu(caja);
+        gtk_box_append(GTK_BOX(caja), fila_menu("window-close-symbolic", NULL,
+            vs->len > 1 ? "Cerrar todas las ventanas" : "Cerrar ventana", G_CALLBACK(menu_cerrar), NULL));
+        /* sólo si se sabe el proceso (X11); en Wayland el compositor no lo dice */
+        gboolean hay_pid = FALSE;
+        for (guint i = 0; i < vs->len && !hay_pid; i++)
+            hay_pid = pid_finalizable(od_ventana_pid(g_ptr_array_index(vs, i)));
+        if (hay_pid)
+            gtk_box_append(GTK_BOX(caja), fila_menu("process-stop-symbolic", NULL, "Finalizar tarea",
+                G_CALLBACK(menu_finalizar), "od-menu-peligro"));
+    }
+    separador_menu(caja);
+    gtk_box_append(GTK_BOX(caja), fila_menu("emblem-system-symbolic", NULL, "Ajustes del dock\u2026",
+        G_CALLBACK(menu_ajustes), NULL));
     g_ptr_array_free(vs, TRUE);
 
     gtk_popover_set_child(GTK_POPOVER(g_d.menu), caja);
@@ -860,10 +1022,25 @@ void od_dock_iniciar(OdConfig *cfg, OdBackendTipo backend)
     g_d.menu = gtk_popover_new();
     gtk_popover_set_position(GTK_POPOVER(g_d.menu), GTK_POS_TOP);
     gtk_popover_set_has_arrow(GTK_POPOVER(g_d.menu), FALSE);
+    gtk_widget_add_css_class(g_d.menu, "od-menu-dock");
     gtk_widget_set_parent(g_d.menu, lienzo);
 
     GtkCssProvider *css = gtk_css_provider_new();
-    gtk_css_provider_load_from_string(css, "window.od-dock-ventana { background: transparent; }");
+    gtk_css_provider_load_from_string(css,
+        "window.od-dock-ventana { background: transparent; }"
+        /* Menú del clic derecho con el material del dock, como en Windows. */
+        "popover.od-menu-dock > contents { background-color: rgba(28,28,30,0.97); color: #FFFFFF;"
+        "  border-radius: 14px; padding: 6px; border: 1px solid rgba(255,255,255,0.08);"
+        "  box-shadow: 0 8px 24px rgba(0,0,0,0.45); }"
+        ".od-menu-cabecera { color: #8E8E93; font-size: 12px; font-weight: 600; padding: 4px 10px 6px; }"
+        ".od-menu-fila { min-height: 30px; padding: 0 10px; border-radius: 8px; color: #FFFFFF;"
+        "  font-size: 13px; }"
+        ".od-menu-fila:hover { background-color: rgba(255,255,255,0.10); }"
+        ".od-menu-fila image { transition: transform 160ms cubic-bezier(0.34, 1.4, 0.64, 1); }"
+        ".od-menu-fila:hover image { transform: scale(1.18); }"
+        ".od-menu-activa { font-weight: 700; }"
+        ".od-menu-peligro, .od-menu-peligro image { color: #FF453A; }"
+        ".od-menu-sep { background-color: rgba(255,255,255,0.10); min-height: 1px; margin: 4px 6px; }");
     gtk_style_context_add_provider_for_display(gtk_widget_get_display(win),
         GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(css);

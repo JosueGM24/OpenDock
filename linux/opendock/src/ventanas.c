@@ -395,6 +395,22 @@ const char *od_ventana_titulo(const OdVentana *v) { return v->titulo; }
 gboolean od_ventana_activa(const OdVentana *v) { return v->activa; }
 gboolean od_ventana_minimizada(const OdVentana *v) { return v->minimizada; }
 
+int od_ventana_pid(const OdVentana *v)
+{
+#if HAVE_X11
+    if (v->xid) {
+        Display *d = display_x11();
+        unsigned long n = 0;
+        unsigned long *pid = leer_lista(d, v->xid, atomo(d, "_NET_WM_PID"), XA_CARDINAL, &n);
+        int r = (pid && n) ? (int)pid[0] : 0;
+        if (pid) XFree(pid);
+        return r;
+    }
+#endif
+    (void)v;
+    return 0;
+}
+
 void od_ventana_activar(OdVentana *v)
 {
 #if HAVE_FOREIGN_TOPLEVEL

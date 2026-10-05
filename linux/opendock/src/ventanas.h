@@ -30,6 +30,8 @@ const char *od_ventana_app_id(const OdVentana *v);
 const char *od_ventana_titulo(const OdVentana *v);
 gboolean od_ventana_activa(const OdVentana *v);
 gboolean od_ventana_minimizada(const OdVentana *v);
+/* Proceso dueño de la ventana (_NET_WM_PID en X11); 0 si no se sabe (Wayland). */
+int od_ventana_pid(const OdVentana *v);
 
 void od_ventana_activar(OdVentana *v);
 void od_ventana_minimizar(OdVentana *v);
