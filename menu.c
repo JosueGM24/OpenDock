@@ -21,8 +21,9 @@
 static struct {
     HWND     hwnd;
     Pop      pop;
-    Canvas   cv;
+    Canvas   cv, bgc;               /* bgc: el fondo (vidrio teñido o liso), hecho una vez al abrir */
     PopGlass glass;
+    struct { int px; HFONT f; } gf[12];     /* iconos a cada tamaño del muelle */
     UINT     dpi;
     HFONT    fText, fHead;
     MenuItem it[MN_MAX];
@@ -50,6 +51,18 @@ static int HitRow(int x, int y)
     return -1;
 }
 
+/* Fuente de iconos a un tamaño: el muelle pasa por pocos tamaños, se guardan los últimos. */
+static HFONT GlyphFont(int px)
+{
+    static int next;
+    for (int i = 0; i < 12; ++i) if (M.gf[i].f && M.gf[i].px == px) return M.gf[i].f;
+    const int k = next++ % 12;
+    if (M.gf[k].f) DeleteObject(M.gf[k].f);
+    M.gf[k].px = px;
+    M.gf[k].f = Gfx_Font(Gfx_IconFace(), px, FW_NORMAL, ANTIALIASED_QUALITY);
+    return M.gf[k].f;
+}
+
 static void Paint(void)
 {
     if (!M.hwnd) return;
@@ -58,9 +71,9 @@ static void Paint(void)
         if (!Canvas_Init(&M.cv, M.w, M.h)) return;
     }
     Canvas *c = &M.cv;
-    if (M.light)                          Canvas_Clear(c, 0xE5E5EA);
-    else if (g_cfg.material == MAT_GLASS) Pop_PaintGlass(c, &M.glass, M.ox, M.oy, 0x1C1C1E, 0.58f);
-    else                                  Canvas_Clear(c, M.bg);
+    GdiFlush();
+    if (M.bgc.px) CopyMemory(c->px, M.bgc.px, (SIZE_T)M.w * M.h * 4);
+    else Canvas_Clear(c, M.bg);
     const int pad = MS(8);
     for (int i = 0; i < M.n; ++i) {
         const MenuItem *m = &M.it[i];
@@ -79,12 +92,10 @@ static void Paint(void)
         const float sc = M.s[i];
         const int gx = pad + MS(8), gw = MS(22), nudge = (int)lroundf((sc - 1.0f) * MS(18));
         if (m->glyph || (m->flags & MI_CHECKED)) {
-            /* el icono crece con el muelle: se dibuja a su tamaño escalado (GDI guarda las fuentes ya hechas) */
-            const int gpx = max(8, (int)lroundf(MS(15) * sc));
-            HFONT gf = Gfx_Font(Gfx_IconFace(), gpx, FW_NORMAL, ANTIALIASED_QUALITY);
+            /* el icono crece con el muelle: se dibuja a su tamaño escalado */
+            const HFONT gf = GlyphFont(max(8, (int)lroundf(MS(15) * sc)));
             const WCHAR g[2] = { m->flags & MI_CHECKED ? 0xE73E : m->glyph, 0 };
-            Gfx_Text(c, gf, g, gx - MS(4), y, gw + MS(8), h, m->flags & MI_CHECKED ? M.fg : col, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            DeleteObject(gf);
+            if (gf) Gfx_Text(c, gf, g, gx - MS(4), y, gw + MS(8), h, m->flags & MI_CHECKED ? M.fg : col, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
         const int tx = gx + gw + MS(10) + nudge;
         Gfx_Text(c, M.fText, m->text, tx, y, M.w - tx - MS(14), h, col, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -209,6 +220,8 @@ static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l)
         Pop_Destroyed(&M.pop);
         Pop_FreeGlass(&M.glass);
         Canvas_Free(&M.cv);
+        Canvas_Free(&M.bgc);
+        for (int i = 0; i < 12; ++i) if (M.gf[i].f) { DeleteObject(M.gf[i].f); M.gf[i].f = NULL; }
         if (M.fText) { DeleteObject(M.fText); M.fText = NULL; }
         if (M.fHead) { DeleteObject(M.fHead); M.fHead = NULL; }
         M.hwnd = NULL;
@@ -230,8 +243,9 @@ void Menu_Register(void)
 
 int Menu_Track(const MenuItem *items, int n, POINT at)
 {
-    if (M.hwnd) DestroyWindow(M.hwnd);
-    if (n <= 0) return 0;
+    static BOOL busy;           /* no se anida: un clic fuera cierra el que hay */
+    if (busy || n <= 0) return 0;
+    if (M.hwnd) DestroyWindow(M.hwnd);      /* el anterior, aún cerrándose */
     M.n = min(n, MN_MAX);
     CopyMemory(M.it, items, M.n * sizeof(MenuItem));
     HMONITOR hm = MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST);
@@ -269,7 +283,14 @@ int Menu_Track(const MenuItem *items, int n, POINT at)
     M.ox = max((int)wk->left + MS(8), min((int)wk->right - MS(8) - M.w, (int)at.x - M.w / 2));
     M.oy = at.y - M.h - MS(6);
     if (M.oy < wk->top + MS(8)) M.oy = at.y + MS(6);
-    if (g_cfg.material == MAT_GLASS && !M.light) Pop_CaptureGlass(&M.glass, M.ox, M.oy, M.w, M.h, MS(28));
+    Canvas_Free(&M.bgc);
+    if (Canvas_Init(&M.bgc, M.w, M.h)) {
+        if (M.light) Canvas_Clear(&M.bgc, 0xE5E5EA);
+        else if (g_cfg.material == MAT_GLASS) {
+            Pop_CaptureGlass(&M.glass, M.ox, M.oy, M.w, M.h, MS(28));
+            Pop_PaintGlass(&M.bgc, &M.glass, M.ox, M.oy, 0x1C1C1E, 0.58f);
+        } else Canvas_Clear(&M.bgc, M.bg);
+    }
 
     M.hot = M.press = -1;
     M.done = FALSE; M.result = 0; M.anim = FALSE; M.tracking = FALSE;
@@ -285,12 +306,22 @@ int Menu_Track(const MenuItem *items, int n, POINT at)
     SetForegroundWindow(M.hwnd);
 
     /* bucle propio hasta elegir o cerrar (como TrackPopupMenu) */
+    busy = TRUE;
     MSG msg;
     while (!M.done) {
         const BOOL r = GetMessageW(&msg, NULL, 0, 0);
         if (r <= 0) { if (r == 0) PostQuitMessage((int)msg.wParam); break; }
+        /* un clic en otra ventana nuestra (el dock no toma el foco, así que el menú no se
+         * entera por WM_ACTIVATE): cierra el menú y ese clic no hace nada más, como en Win32 */
+        const UINT mm = msg.message;
+        if (msg.hwnd != M.hwnd && (mm == WM_LBUTTONDOWN || mm == WM_RBUTTONDOWN || mm == WM_MBUTTONDOWN ||
+                                   mm == WM_NCLBUTTONDOWN || mm == WM_NCRBUTTONDOWN || mm == WM_LBUTTONUP || mm == WM_RBUTTONUP)) {
+            Finish(0);
+            continue;
+        }
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    busy = FALSE;
     return M.result;
 }
