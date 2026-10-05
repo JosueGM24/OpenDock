@@ -8,12 +8,18 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Etiqueta ya publicada a la que subir los paquetes (p. ej. v2.1.0)'
+        required: false
 
 permissions:
   contents: write
 
 env:
   UUID: opendock@josuegm24.github.io
+  # la versión: la etiqueta que se empuja, o la que se indica al lanzarlo a mano
+  TAG: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
 
 jobs:
   extension:
@@ -45,7 +51,7 @@ jobs:
       - name: Versión
         run: |
           v=$(sed -n "s/^  version: '\(.*\)',$/\1/p" linux/opendock/meson.build)
-          case "$GITHUB_REF" in refs/tags/v*) v="${GITHUB_REF_NAME#v}" ;; esac
+          [ -n "$TAG" ] && v="${TAG#v}"
           echo "VER=$v" >> "$GITHUB_ENV"
           # la de la etiqueta también en el binario (opendock --version)
           sed -i "s/^  version: '.*',\$/  version: '$v',/" linux/opendock/meson.build
@@ -98,7 +104,7 @@ jobs:
       - name: Versión
         run: |
           v=$(sed -n "s/^  version: '\(.*\)',$/\1/p" linux/opendock/meson.build)
-          case "$GITHUB_REF" in refs/tags/v*) v="${GITHUB_REF_NAME#v}" ;; esac
+          [ -n "$TAG" ] && v="${TAG#v}"
           echo "VER=$v" >> "$GITHUB_ENV"
           # la de la etiqueta también en el binario (opendock --version)
           sed -i "s/^  version: '.*',\$/  version: '$v',/" linux/opendock/meson.build
@@ -165,13 +171,11 @@ jobs:
           install -d -o constructor /tmp/pkg/src
           cp linux/opendock/PKGBUILD /tmp/pkg/
           git clone -q "$GITHUB_WORKSPACE" /tmp/pkg/src/OpenDock
-          case "$GITHUB_REF" in refs/tags/v*)
-            sed -i "s/^  version: '.*',\$/  version: '${GITHUB_REF_NAME#v}',/" /tmp/pkg/src/OpenDock/linux/opendock/meson.build ;;
-          esac
+          [ -z "$TAG" ] || sed -i "s/^  version: '.*',\$/  version: '${TAG#v}',/" /tmp/pkg/src/OpenDock/linux/opendock/meson.build
           chown -R constructor /tmp/pkg
           cd /tmp/pkg
           runuser -u constructor -- makepkg -e -f --noconfirm
-          cp /tmp/pkg/opendock-git-*.pkg.tar.zst "$GITHUB_WORKSPACE/opendock-linux-x86_64.pkg.tar.zst"
+          cp /tmp/pkg/opendock-git-[0-9]*.pkg.tar.zst "$GITHUB_WORKSPACE/opendock-linux-x86_64.pkg.tar.zst"
       - uses: actions/upload-artifact@v4
         with:
           name: linux-arch
@@ -180,7 +184,7 @@ jobs:
   publicar:
     name: Subir a la versión
     needs: [extension, deb, rpm, arch]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: inputs.tag != '' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -198,8 +202,8 @@ jobs:
           cat SHA256SUMS-linux.txt >> "$GITHUB_STEP_SUMMARY"
           # la versión la crea el workflow de Windows; si tarda o falló, la creamos aquí
           for i in $(seq 1 40); do
-            gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && break
-            [ "$i" = 40 ] && gh release create "$GITHUB_REF_NAME" --title "OpenDock ${GITHUB_REF_NAME#v}" --generate-notes
+            gh release view "$TAG" >/dev/null 2>&1 && break
+            [ "$i" = 40 ] && gh release create "$TAG" --title "OpenDock ${TAG#v}" --generate-notes
             sleep 30
           done
-          gh release upload "$GITHUB_REF_NAME" * --clobber
+          gh release upload "$TAG" * --clobber
