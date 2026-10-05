@@ -743,6 +743,7 @@ static struct {
     /* animación: alto del panel */
     float    hcur, hv;
     BOOL     anim, tracking;
+    BOOL     menu;                  /* menú del clic derecho abierto: perder el foco no cierra */
     /* barra de sesión: huecos, señalado/pulsado y su escala */
     RECT     fb[FB_COUNT];
     int      fhot, fpress;
@@ -1393,6 +1394,198 @@ static void Run(int i, BOOL locate)
     }
 }
 
+/* ───────────────────────── Clic derecho ─────────────────────────
+ * Las opciones del menú de Windows, hechas aquí con el menú propio: el de verdad
+ * (IContextMenu) cargaría extensiones de shell de terceros dentro del proceso, y las
+ * mitigaciones de OpenDock solo dejan entrar binarios firmados por Microsoft. */
+enum { LM_OPEN = 1, LM_ADMIN, LM_FOLDER, LM_PIN, LM_UNINSTALL, LM_COPY, LM_OPENWITH, LM_TERMINAL };
+
+/* Ruta absoluta sin comillas ni caracteres de control (como App_ShellOpen). */
+static BOOL SafePath(const WCHAR *p)
+{
+    const int n = lstrlenW(p);
+    if (n < 3 || n >= MAX_PATH || p[1] != L':' || p[2] != L'\\') return FALSE;
+    for (int i = 0; i < n; ++i) if (p[i] == L'"' || p[i] < 0x20 || p[i] == 0x7F) return FALSE;
+    return TRUE;
+}
+
+/* Ruta real de una app de escritorio: su id es la ruta o empieza por una carpeta conocida
+ * ({GUID}\...). Las empaquetadas (AppUserModelID, sin '\') no tienen. */
+static BOOL AppPath(const WCHAR *id, WCHAR *out)
+{
+    out[0] = 0;
+    if (!wcschr(id, L'\\')) return FALSE;
+    if (id[0] == L'{') {
+        const WCHAR *end = wcschr(id, L'}');
+        if (!end || end[1] != L'\\' || end - id > 38) return FALSE;
+        WCHAR g[40];
+        lstrcpynW(g, id, (int)(end - id) + 2);
+        GUID kf;
+        PWSTR base = NULL;
+        if (FAILED(CLSIDFromString(g, &kf)) || FAILED(SHGetKnownFolderPath(&kf, 0, NULL, &base))) return FALSE;
+        const BOOL fits = lstrlenW(base) + lstrlenW(end + 1) < MAX_PATH;
+        if (fits) { lstrcpyW(out, base); lstrcatW(out, end + 1); }
+        CoTaskMemFree(base);
+        if (!fits) return FALSE;
+    } else lstrcpynW(out, id, MAX_PATH);
+    return SafePath(out) && GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES;
+}
+
+static BOOL ExtIs(const WCHAR *path, const WCHAR *const *exts, int n)
+{
+    const WCHAR *dot = wcsrchr(path, L'.'), *slash = wcsrchr(path, L'\\');
+    if (!dot || (slash && dot < slash)) return FALSE;
+    for (int i = 0; i < n; ++i) if (!lstrcmpiW(dot, exts[i])) return TRUE;
+    return FALSE;
+}
+
+static void RunAdmin(const WCHAR *path)
+{
+    if (!SafePath(path)) return;
+    SHELLEXECUTEINFOW sei = { sizeof(sei) };
+    sei.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+    sei.lpVerb = L"runas";
+    sei.lpFile = path;
+    sei.nShow = SW_SHOWNORMAL;
+    ShellExecuteExW(&sei);
+}
+
+static void CopyText(const WCHAR *t)
+{
+    const SIZE_T sz = (SIZE_T)(lstrlenW(t) + 1) * sizeof(WCHAR);
+    HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, sz);
+    if (!g) return;
+    void *p = GlobalLock(g);
+    if (p) { CopyMemory(p, t, sz); GlobalUnlock(g); }
+    if (p && OpenClipboard(L.hwnd)) {
+        EmptyClipboard();
+        if (SetClipboardData(CF_UNICODETEXT, g)) g = NULL;      /* ahora es del portapapeles */
+        CloseClipboard();
+    }
+    if (g) GlobalFree(g);
+}
+
+/* Terminal en la carpeta: la ruta va como directorio de trabajo, nunca en la línea de
+ * órdenes; los ejecutables, por ruta completa (no se busca en el directorio actual). */
+static void OpenTerminal(const WCHAR *dir)
+{
+    if (!SafePath(dir)) return;
+    WCHAR exe[MAX_PATH];
+    PWSTR la = NULL;
+    exe[0] = 0;
+    if (SUCCEEDED(SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, NULL, &la))) {
+        if (lstrlenW(la) < MAX_PATH - 40) wsprintfW(exe, L"%s\\Microsoft\\WindowsApps\\wt.exe", la);
+        CoTaskMemFree(la);
+    }
+    SHELLEXECUTEINFOW sei = { sizeof(sei) };
+    sei.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+    sei.lpDirectory = dir;
+    sei.nShow = SW_SHOWNORMAL;
+    if (exe[0] && GetFileAttributesW(exe) != INVALID_FILE_ATTRIBUTES) {
+        sei.lpFile = exe;
+        sei.lpParameters = L"-d .";
+        if (ShellExecuteExW(&sei)) return;
+    }
+    const UINT n = GetSystemDirectoryW(exe, MAX_PATH);
+    if (!n || n > MAX_PATH - 48) return;
+    lstrcatW(exe, L"\\WindowsPowerShell\\v1.0\\powershell.exe");
+    sei.lpFile = exe;
+    sei.lpParameters = NULL;
+    ShellExecuteExW(&sei);
+}
+
+static void ContextMenu(int i, POINT at)
+{
+    if (i < 0 || i >= L.nres || L.menu) return;
+    const Res r = L.res[i];
+    static const WCHAR *const kRunnable[] = { L".exe", L".bat", L".cmd", L".msi" };
+    static const WCHAR *const kPinnable[] = { L".exe", L".lnk" };
+    WCHAR path[MAX_PATH], pin[MAX_PATH + 8];
+    path[0] = pin[0] = 0;
+    BOOL admin = FALSE;
+    MenuItem m[12];
+    int n = 0;
+    #define ADD(id_, text_, glyph_, flags_) do { if (n < 12) { m[n].id = (id_); m[n].text = (text_); m[n].glyph = (glyph_); m[n].flags = (flags_); ++n; } } while (0)
+
+    switch (r.kind) {
+    case RK_APP:
+        if (AppPath(r.target, path)) { lstrcpynW(pin, path, MAX_PATH); admin = TRUE; }
+        else if (!wcschr(r.target, L'\\')) wsprintfW(pin, L"aumid:%.250s", r.target);
+        ADD(LM_OPEN, L"Abrir", 0xE8A7, 0);
+        if (admin) ADD(LM_ADMIN, L"Ejecutar como administrador", 0xE7EF, 0);
+        if (path[0]) ADD(LM_FOLDER, L"Abrir ubicaci\x00F3n del archivo", 0xE838, 0);
+        break;
+    case RK_FILE:
+        if (!SafePath(r.target)) return;
+        lstrcpynW(path, r.target, MAX_PATH);
+        if (ExtIs(path, kPinnable, 2)) lstrcpynW(pin, path, MAX_PATH);
+        admin = ExtIs(path, kRunnable, 4);
+        ADD(LM_OPEN, L"Abrir", 0xE8E5, 0);
+        ADD(LM_OPENWITH, L"Abrir con\x2026", 0xE7AC, 0);
+        if (admin) ADD(LM_ADMIN, L"Ejecutar como administrador", 0xE7EF, 0);
+        ADD(LM_FOLDER, L"Abrir ubicaci\x00F3n del archivo", 0xE838, 0);
+        break;
+    case RK_DIR:
+        if (!SafePath(r.target)) return;
+        lstrcpynW(path, r.target, MAX_PATH);
+        ADD(LM_OPEN, L"Abrir", 0xE838, 0);
+        ADD(LM_TERMINAL, L"Abrir en Terminal", 0xE756, 0);
+        ADD(LM_FOLDER, L"Abrir ubicaci\x00F3n de la carpeta", 0xE8DA, 0);
+        break;
+    default:
+        ADD(LM_OPEN, L"Buscar en la web", 0xE774, 0);
+        break;
+    }
+    if (pin[0] && g_cfg.dock) {
+        const BOOL pinned = Dock_IsPinned(pin);
+        ADD(LM_PIN, pinned ? L"Quitar del dock" : L"Anclar al dock", pinned ? 0xE77A : 0xE718, 0);
+    }
+    if (path[0]) ADD(LM_COPY, L"Copiar ruta", 0xE8C8, 0);
+    if (r.kind == RK_APP) {
+        ADD(0, NULL, 0, MI_SEPARATOR);
+        ADD(LM_UNINSTALL, L"Desinstalar\x2026", 0xE74D, 0);
+    }
+    #undef ADD
+
+    L.menu = TRUE;
+    const int cmd = Menu_Track(m, n, at);
+    L.menu = FALSE;
+    if (!L.hwnd) return;
+    if (i >= L.nres || lstrcmpiW(L.res[i].target, r.target)) return;   /* la lista cambió mientras tanto */
+    switch (cmd) {
+    case LM_OPEN:      Run(i, FALSE); return;
+    case LM_FOLDER:    AllowSetForegroundWindow(ASFW_ANY); Close(); App_ShellSelect(path); return;
+    case LM_ADMIN:     Close(); RunAdmin(path); return;
+    case LM_TERMINAL:  AllowSetForegroundWindow(ASFW_ANY); Close(); OpenTerminal(path); return;
+    case LM_UNINSTALL: AllowSetForegroundWindow(ASFW_ANY); Close(); App_ShellOpen(L"ms-settings:appsfeatures"); return;
+    case LM_COPY:      CopyText(path); Close(); return;
+    case LM_OPENWITH: {
+        Close();
+        OPENASINFO oi = { path, NULL, OAIF_ALLOW_REGISTRATION | OAIF_REGISTER_EXT | OAIF_EXEC };
+        SHOpenWithDialog(NULL, &oi);
+        return;
+    }
+    case LM_PIN:       Dock_TogglePin(pin); break;     /* el buscador sigue abierto */
+    }
+    /* sin elegir nada, o tras anclar: si el clic fue a otra app, fuera; si no, vuelve el foco */
+    HWND fg = GetForegroundWindow();
+    DWORD pid = 0;
+    if (fg) GetWindowThreadProcessId(fg, &pid);
+    if (fg && pid != GetCurrentProcessId()) Close();
+    else { SetForegroundWindow(L.hwnd); SetFocus(L.hwnd); }
+}
+
+/* Con el teclado (tecla de menú o Mayús+F10): sobre la fila seleccionada. */
+static void KeyMenu(void)
+{
+    if (L.sel < 0 || L.sel >= L.nres) return;
+    RECT wr;
+    GetWindowRect(L.hwnd, &wr);
+    const RECT *rc = &L.res[L.sel].rc;
+    POINT at = { wr.left + L.pop.margin + (rc->left + rc->right) / 2, wr.top + L.pop.mtop + rc->top };
+    ContextMenu(L.sel, at);
+}
+
 /* ── edición del texto ── */
 static void Edit(int del0, int del1, const WCHAR *ins, int nins)
 {
@@ -1485,13 +1678,13 @@ static LRESULT CALLBACK LnProc(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     }
     case WM_ACTIVATE:
-        if (LOWORD(w) == WA_INACTIVE) Close();
+        if (LOWORD(w) == WA_INACTIVE && !L.menu) Close();
         return 0;
     case WM_TIMER:
         if (w == TIMER_CARET) { L.caretOn = !L.caretOn; Paint(); }
         else if (w == TIMER_FOCUS) {
             /* si no llegó a tener el foco (Windows lo negó) o lo perdió sin avisar, fuera */
-            if (GetForegroundWindow() != h && GetTickCount() - L.openedAt > 600) Close();
+            if (!L.menu && GetForegroundWindow() != h && GetTickCount() - L.openedAt > 600) Close();
         }
         return 0;
     case WM_KEYDOWN: {
@@ -1502,6 +1695,7 @@ static LRESULT CALLBACK LnProc(HWND h, UINT m, WPARAM w, LPARAM l)
             else Close();
             return 0;
         case VK_RETURN: Run(L.sel, ctrl || shift); return 0;
+        case VK_APPS:   KeyMenu(); return 0;            /* tecla de menú contextual */
         case VK_DOWN:   MoveSel(0, 1); return 0;
         case VK_UP:     MoveSel(0, -1); return 0;
         case VK_TAB:    MoveSel(0, shift ? -1 : 1); return 0;
@@ -1523,6 +1717,21 @@ static LRESULT CALLBACK LnProc(HWND h, UINT m, WPARAM w, LPARAM l)
             else if (L.caret < L.qlen) Edit(L.caret, L.caret + 1, NULL, 0);
             return 0;
         }
+        return 0;
+    }
+    case WM_SYSKEYDOWN:
+        if (w == VK_F10 && GetKeyState(VK_SHIFT) < 0) { KeyMenu(); return 0; }    /* Mayús+F10 */
+        break;
+    case WM_CONTEXTMENU:
+        if (l == -1) KeyMenu();
+        return 0;
+    case WM_RBUTTONUP: {
+        const int hit = HitRes((short)LOWORD(l), (short)HIWORD(l));
+        if (hit < 0) return 0;
+        if (hit != L.sel) { L.sel = hit; Kick(); }
+        POINT at;
+        GetCursorPos(&at);
+        ContextMenu(hit, at);
         return 0;
     }
     case WM_CHAR: {
