@@ -697,6 +697,7 @@ typedef struct {
     BOOL  tile;
     /* entrada con muelle: ap 0→1 (posición y opacidad), tras `delay`; el icono hace "pop" al llegar */
     float ap, av, delay, is, isv;
+    float hs, hsv;                  /* escala del señalado (crece, como en el dock) */
     BOOL  iconUp;
 } Res;
 
@@ -708,7 +709,7 @@ static struct {
     UINT     dpi;
     RECT     mon;
     BOOL     light;
-    DWORD    fg, fg2, fg3, line, hl, accent;
+    DWORD    fg, fg2, fg3, line, accent;
     HFONT    fQuery, fTitle, fSub, fLabel, fIcon, fGlyph;
     WCHAR    q[256];
     int      qlen, caret;
@@ -719,10 +720,9 @@ static struct {
     int      w, h, maxH, ox, oy;
     DWORD    openedAt, closedAt;
     DWORD    bgBase;                /* color medio del fondo: hacia él se funde lo que entra */
-    /* animación: alto del panel y resaltado que se desliza entre resultados */
+    /* animación: alto del panel */
     float    hcur, hv;
-    float    sx, sy, sw, sh, svx, svy, svw, svh;
-    BOOL     selInit, anim;
+    BOOL     anim;
     LARGE_INTEGER last;
 } L;
 
@@ -1036,10 +1036,6 @@ static void Paint(void)
     if (!L.qlen && !L.nres)
         Gfx_Text(c, L.fSub, L"Escribe para buscar entre tus apps y archivos", 0, qh + SS(6), L.w, SS(30), L.fg3, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-    /* el resaltado, que se desliza de un resultado a otro */
-    if (L.sel >= 0 && L.sel < L.nres && L.selInit)
-        Gfx_FillRRect(c, L.sx, L.sy, L.sw, L.sh, (float)SS(8), L.hl, Clamp01(L.res[L.sel].ap));
-
     for (int i = 0; i < L.nres; ++i) {
         Res *r = &L.res[i];
         const float a = Clamp01(r->ap);
@@ -1051,7 +1047,7 @@ static void Paint(void)
         const int rw = rc.right - rc.left, rh = rc.bottom - rc.top;
         if (r->tile) {
             const int is = SS(44);
-            const float pop = (0.55f + 0.45f * r->ap) * (r->iconUp ? r->is : 1.0f);
+            const float pop = (0.55f + 0.45f * r->ap) * (r->iconUp ? r->is : 1.0f) * r->hs;
             BlitIcon(c, RowIcon(r, is), rc.left + rw * 0.5f, rc.top + SS(10) + is * 0.5f, pop, a);
             Gfx_Text(c, L.fSub, r->title, rc.left + SS(4), rc.top + SS(10) + is + SS(4), rw - SS(8), SS(32), Gfx_Mix(L.bgBase, L.fg, a),
                      DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
@@ -1059,8 +1055,9 @@ static void Paint(void)
         }
         const int is = r->kind == RK_APP ? SS(32) : SS(28), ix = rc.left + SS(8);
         if (r->kind == RK_WEB) Gfx_Text(c, L.fIcon, L"\xE774", ix, rc.top, is, rh, Gfx_Mix(L.bgBase, L.fg2, a), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        else BlitIcon(c, RowIcon(r, is), ix + is * 0.5f, rc.top + rh * 0.5f, r->iconUp ? r->is : 1.0f, a);
-        const int lx = ix + is + SS(12), lw = rw - (lx - rc.left) - SS(80), half = rh / 2;
+        else BlitIcon(c, RowIcon(r, is), ix + is * 0.5f, rc.top + rh * 0.5f, (r->iconUp ? r->is : 1.0f) * r->hs, a);
+        /* el texto del señalado se aparta un poco, al ritmo de su icono */
+        const int lx = ix + is + SS(12) + (int)lroundf((r->hs - 1.0f) * SS(22)), lw = rw - (lx - rc.left) - SS(80), half = rh / 2;
         Gfx_Text(c, L.fTitle, r->title, lx, rc.top + SS(3), lw, half, Gfx_Mix(L.bgBase, L.fg, a), DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
         Gfx_Text(c, L.fSub, r->sub, lx, rc.top + half + SS(1), lw, half - SS(3), Gfx_Mix(L.bgBase, L.fg2, a), DT_LEFT | DT_TOP | DT_SINGLELINE | DT_PATH_ELLIPSIS);
         static const WCHAR *const kKind[] = { L"App", L"Archivo", L"Carpeta", L"Web" };
@@ -1106,23 +1103,6 @@ static BOOL Advance(void)
     for (int k = 0; k < 2; ++k) Spring(&L.hcur, &L.hv, (float)L.h, dt * 0.5f, 240.0f, max(0.42f, z));
     if (!Settled(&L.hcur, &L.hv, (float)L.h, 0.4f, 3.0f)) moving = TRUE;
 
-    if (L.sel >= 0 && L.sel < L.nres) {
-        const RECT *rc = &L.res[L.sel].rc;
-        const float tx = (float)rc->left, ty = (float)rc->top, tw = (float)(rc->right - rc->left), th = (float)(rc->bottom - rc->top);
-        if (!L.selInit) { L.sx = tx; L.sy = ty; L.sw = tw; L.sh = th; L.svx = L.svy = L.svw = L.svh = 0; L.selInit = TRUE; }
-        const float zs = min(1.0f, z + 0.18f);
-        for (int k = 0; k < 2; ++k) {
-            Spring(&L.sx, &L.svx, tx, dt * 0.5f, 560.0f, zs);
-            Spring(&L.sy, &L.svy, ty, dt * 0.5f, 560.0f, zs);
-            Spring(&L.sw, &L.svw, tw, dt * 0.5f, 560.0f, zs);
-            Spring(&L.sh, &L.svh, th, dt * 0.5f, 560.0f, zs);
-        }
-        BOOL ok = Settled(&L.sx, &L.svx, tx, 0.3f, 3.0f);
-        ok = Settled(&L.sy, &L.svy, ty, 0.3f, 3.0f) && ok;
-        ok = Settled(&L.sw, &L.svw, tw, 0.3f, 3.0f) && ok;
-        ok = Settled(&L.sh, &L.svh, th, 0.3f, 3.0f) && ok;
-        if (!ok) moving = TRUE;
-    } else L.selInit = FALSE;
 
     for (int i = 0; i < L.nres; ++i) {
         Res *r = &L.res[i];
@@ -1133,6 +1113,9 @@ static BOOL Advance(void)
             for (int k = 0; k < 2; ++k) Spring(&r->is, &r->isv, 1.0f, dt * 0.5f, 430.0f, max(0.30f, z * 0.8f));
             if (!Settled(&r->is, &r->isv, 1.0f, 0.002f, 0.02f)) moving = TRUE;
         }
+        const float hg = i == L.sel ? (r->tile ? 1.16f : 1.22f) : 1.0f;     /* el señalado crece, con rebote */
+        for (int k = 0; k < 2; ++k) Spring(&r->hs, &r->hsv, hg, dt * 0.5f, 420.0f, z);
+        if (!Settled(&r->hs, &r->hsv, hg, 0.0008f, 0.01f)) moving = TRUE;
     }
     return moving;
 }
@@ -1158,8 +1141,10 @@ static void Rebuild_UI(void)
         if (i < oldN && old[i].kind == r->kind && old[i].tile == r->tile && !lstrcmpiW(old[i].target, r->target)) {
             r->ap = old[i].ap; r->av = old[i].av; r->delay = old[i].delay;
             r->is = old[i].is; r->isv = old[i].isv; r->iconUp = old[i].iconUp;
+            r->hs = old[i].hs; r->hsv = old[i].hsv;
         } else {
             r->ap = r->av = 0; r->is = 1; r->isv = 0; r->iconUp = FALSE;
+            r->hs = 1; r->hsv = 0;
             r->delay = 0.018f * fresh++;
         }
     }
@@ -1414,8 +1399,8 @@ static void Open(void)
     Theme th;
     Theme_Load(&th);
     L.light = g_cfg.material == MAT_SYSTEM && !th.dark;
-    if (L.light) { L.fg = 0x1C1C1E; L.fg2 = 0x6E6E73; L.fg3 = 0x8E8E93; L.line = 0xD1D1D6; L.hl = 0xD8D8DE; }
-    else         { L.fg = 0xFFFFFF; L.fg2 = 0xA1A1A6; L.fg3 = 0x6E6E73; L.line = 0x2C2C2E; L.hl = 0x3A3A3C; }
+    if (L.light) { L.fg = 0x1C1C1E; L.fg2 = 0x6E6E73; L.fg3 = 0x8E8E93; L.line = 0xD1D1D6; }
+    else         { L.fg = 0xFFFFFF; L.fg2 = 0xA1A1A6; L.fg3 = 0x6E6E73; L.line = 0x2C2C2E; }
     L.accent = g_cfg.accent ? kAccentPresets[g_cfg.accent] : th.accentOnBlack;
 
     L.w = min(SS(LW), (int)(mi.rcWork.right - mi.rcWork.left) - SS(32));
@@ -1454,10 +1439,11 @@ static void Open(void)
     for (int i = 0; i < L.nres; ++i) {
         Res *r = &L.res[i];
         r->ap = r->av = 0; r->is = 1; r->isv = 0; r->iconUp = FALSE;
+        r->hs = 1; r->hsv = 0;
         r->delay = i < L.ngrid ? 0.06f + 0.032f * i : 0.10f + 0.03f * (i - L.ngrid);
     }
     L.sel = L.nres ? 0 : -1;
-    L.selInit = FALSE; L.anim = FALSE;
+    L.anim = FALSE;
     L.h = Layout();
     L.hcur = (float)SS(QH) + 2; L.hv = 0;
     Pop_SetBounds(&L.pop, L.ox, L.oy, L.w, (int)L.hcur);
