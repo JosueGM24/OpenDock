@@ -23,6 +23,9 @@
 #define OD_AVISO_ANCHO   360
 #define OD_AVISO_ALTO    54
 #define OD_AVISO_HOLD_S  4.5   /* DESIGN.md: "se queda 4,5 s" */
+#define OD_AVISO_DEJAR_S 1.2   /* al salir el cursor, se va 1,2 s después */
+#define OD_EXPANDIR_MS   260   /* cursor quieto encima: crece hasta enseñar todo el texto */
+#define OD_AVISO_LINEAS  7     /* líneas del cuerpo como mucho al expandirlo */
 #define OD_DISCRETO_ANCHO 112
 #define OD_DISCRETO_ALTO  34
 #define OD_DISCRETO_HOLD_S 3.5
@@ -33,6 +36,8 @@ typedef struct {
     GtkWidget *lbl_titulo;
     GtkWidget *lbl_cuerpo;
     GtkWidget *lbl_hora;
+    GtkWidget *desliz;         /* recorta título + cuerpo al alto animado */
+    GtkWidget *textos;         /* caja vertical con título y cuerpo */
     GtkWidget *pila;           /* "aviso" o "discreto" */
     GtkWidget *lbl_no_leidas;
     guint no_leidas;
@@ -44,6 +49,15 @@ typedef struct {
     int       alto_barra;
     OdBackendTipo backend;
     gboolean  iniciado;
+
+    /* Expansión al pasar el cursor (como las tarjetas del centro). */
+    OdMuelle  muelle_alto;     /* alto de los textos: alto_base cerrado, más al expandir */
+    double    alto_base;
+    gboolean  expandido;
+    gboolean  cursor_dentro;
+    guint     temporizador_expandir;
+    guint     tic_alto;
+    gint64    ultimo_alto_us;
 } OdEstadoNotch;
 
 static OdEstadoNotch g_notch;
@@ -93,6 +107,13 @@ static void aplicar_margen(int margen_px)
     (void)margen_px;
 }
 
+/* Margen que deja la isla justo por encima del borde: depende del alto actual. */
+static int margen_oculto(void)
+{
+    int alto = g_notch.ventana ? gtk_widget_get_height(g_notch.ventana) : 0;
+    return -(MAX(alto, OD_AVISO_ALTO) + 8);
+}
+
 static gboolean fotograma_muelle(GtkWidget *widget, GdkFrameClock *clock, gpointer datos)
 {
     (void)widget; (void)datos;
@@ -136,12 +157,128 @@ static gboolean al_expirar(gpointer datos)
     return G_SOURCE_REMOVE;
 }
 
+static void programar_cierre(double segundos)
+{
+    if (g_notch.temporizador_autocierre) g_source_remove(g_notch.temporizador_autocierre);
+    g_notch.temporizador_autocierre = g_timeout_add((guint)(segundos * 1000), al_expirar, NULL);
+}
+
+/* ── Expansión del aviso ── */
+static void cuerpo_en_varias_lineas(gboolean si)
+{
+    gtk_label_set_wrap(GTK_LABEL(g_notch.lbl_cuerpo), si);
+    gtk_label_set_lines(GTK_LABEL(g_notch.lbl_cuerpo), si ? OD_AVISO_LINEAS : 1);
+}
+
+static void fijar_alto_textos(double alto)
+{
+    int px = (int)lround(MAX(alto, 1.0));
+    /* el máximo primero: GTK exige min <= max en cada llamada */
+    if (px > gtk_scrolled_window_get_max_content_height(GTK_SCROLLED_WINDOW(g_notch.desliz))) {
+        gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(g_notch.desliz), px);
+        gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(g_notch.desliz), px);
+    } else {
+        gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(g_notch.desliz), px);
+        gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(g_notch.desliz), px);
+    }
+}
+
+static gboolean fotograma_alto(GtkWidget *widget, GdkFrameClock *clock, gpointer datos)
+{
+    (void)widget; (void)datos;
+    gint64 ahora = gdk_frame_clock_get_frame_time(clock);
+    double dt = g_notch.ultimo_alto_us ? (ahora - g_notch.ultimo_alto_us) / 1000000.0 : (1.0 / 60.0);
+    g_notch.ultimo_alto_us = ahora;
+    if (dt > 0.05) dt = 0.05;
+    gboolean sigue = od_muelle_actualizar(&g_notch.muelle_alto, dt);
+    if (g_notch.muelle_alto.valor < g_notch.alto_base) g_notch.muelle_alto.valor = g_notch.alto_base;
+    fijar_alto_textos(g_notch.muelle_alto.valor);
+    if (sigue) return G_SOURCE_CONTINUE;
+    g_notch.tic_alto = 0;
+    g_notch.ultimo_alto_us = 0;
+    /* ya cerrado: el cuerpo vuelve a una línea con puntos suspensivos */
+    if (!g_notch.expandido) cuerpo_en_varias_lineas(FALSE);
+    return G_SOURCE_REMOVE;
+}
+
+static void animar_alto(double objetivo)
+{
+    od_muelle_fijar_objetivo(&g_notch.muelle_alto, objetivo);
+    if (!g_notch.tic_alto)
+        g_notch.tic_alto = gtk_widget_add_tick_callback(g_notch.ventana, fotograma_alto, NULL, NULL);
+}
+
+/* Cierra la expansión de golpe (aviso nuevo) o con muelle (el cursor se fue). */
+static void plegar(gboolean al_momento)
+{
+    if (g_notch.temporizador_expandir) {
+        g_source_remove(g_notch.temporizador_expandir);
+        g_notch.temporizador_expandir = 0;
+    }
+    g_notch.expandido = FALSE;
+    if (!al_momento) {
+        animar_alto(g_notch.alto_base);
+        return;
+    }
+    if (g_notch.tic_alto) {
+        gtk_widget_remove_tick_callback(g_notch.ventana, g_notch.tic_alto);
+        g_notch.tic_alto = 0;
+    }
+    g_notch.ultimo_alto_us = 0;
+    cuerpo_en_varias_lineas(FALSE);
+    od_muelle_iniciar(&g_notch.muelle_alto, g_notch.alto_base, 340.0, MAX(0.7, OD_ZETA_NORMAL));
+    fijar_alto_textos(g_notch.alto_base);
+}
+
+static gboolean al_vencer_expandir(gpointer datos)
+{
+    (void)datos;
+    g_notch.temporizador_expandir = 0;
+    if (!g_notch.cursor_dentro || !g_notch.objetivo_visible) return G_SOURCE_REMOVE;
+    if (g_strcmp0(gtk_stack_get_visible_child_name(GTK_STACK(g_notch.pila)), "aviso") != 0)
+        return G_SOURCE_REMOVE;
+    /* alto que necesitan título y cuerpo con el cuerpo partido en líneas (hasta 7) */
+    cuerpo_en_varias_lineas(TRUE);
+    int ancho = gtk_widget_get_width(g_notch.desliz);
+    int min = 0, nat = 0;
+    gtk_widget_measure(g_notch.textos, GTK_ORIENTATION_VERTICAL, ancho > 0 ? ancho : -1, &min, &nat, NULL, NULL);
+    if (nat <= g_notch.alto_base + 1) {         /* cabía en una línea: nada que enseñar */
+        if (!g_notch.tic_alto) cuerpo_en_varias_lineas(FALSE);
+        return G_SOURCE_REMOVE;
+    }
+    g_notch.expandido = TRUE;
+    animar_alto(nat);
+    return G_SOURCE_REMOVE;
+}
+
+static void al_entrar_aviso(GtkEventControllerMotion *c, double x, double y, gpointer datos)
+{
+    (void)c; (void)x; (void)y; (void)datos;
+    g_notch.cursor_dentro = TRUE;
+    /* con el cursor encima no se va: se lee con calma */
+    if (g_notch.temporizador_autocierre) {
+        g_source_remove(g_notch.temporizador_autocierre);
+        g_notch.temporizador_autocierre = 0;
+    }
+    if (g_notch.temporizador_expandir) g_source_remove(g_notch.temporizador_expandir);
+    g_notch.temporizador_expandir = g_timeout_add(OD_EXPANDIR_MS, al_vencer_expandir, NULL);
+}
+
+static void al_salir_aviso(GtkEventControllerMotion *c, gpointer datos)
+{
+    (void)c; (void)datos;
+    g_notch.cursor_dentro = FALSE;
+    plegar(FALSE);
+    if (g_notch.objetivo_visible) programar_cierre(OD_AVISO_DEJAR_S);
+}
+
 static void mostrar(double segundos)
 {
     if (g_notch.temporizador_autocierre) {
         g_source_remove(g_notch.temporizador_autocierre);
         g_notch.temporizador_autocierre = 0;
     }
+    plegar(TRUE);                   /* el aviso nuevo nace cerrado */
     /* Con el centro abierto ya se ven las notificaciones: no hace falta aviso. */
     if (od_centro_abierto()) return;
 
@@ -158,7 +295,9 @@ static void mostrar(double segundos)
         iniciar_animacion();
     }
 
-    g_notch.temporizador_autocierre = g_timeout_add((guint)(segundos * 1000), al_expirar, NULL);
+    /* con el cursor ya encima espera a que salga (al_salir_aviso programa el cierre) */
+    if (!g_notch.cursor_dentro) programar_cierre(segundos);
+    else g_notch.temporizador_expandir = g_timeout_add(OD_EXPANDIR_MS, al_vencer_expandir, NULL);
 }
 
 static void al_pulsar_notch(GtkGestureClick *g, int n, double x, double y, gpointer datos)
@@ -186,7 +325,8 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
     GtkWidget *caja_icono = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_set_size_request(caja_icono, 30, 30);
     gtk_widget_set_halign(caja_icono, GTK_ALIGN_CENTER);
-    gtk_widget_set_valign(caja_icono, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(caja_icono, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(caja_icono, (OD_AVISO_ALTO - 30) / 2);
     gtk_widget_set_margin_start(caja_icono, 12);
     GtkWidget *icono = gtk_image_new_from_icon_name("dialog-information-symbolic");
     gtk_image_set_pixel_size(GTK_IMAGE(icono), 18);
@@ -194,9 +334,7 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
     gtk_box_append(GTK_BOX(tarjeta), caja_icono);
 
     GtkWidget *vcaja = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-    gtk_widget_set_valign(vcaja, GTK_ALIGN_CENTER);
-    gtk_widget_set_hexpand(vcaja, TRUE);
-    gtk_widget_set_margin_start(vcaja, 10);
+    gtk_widget_set_valign(vcaja, GTK_ALIGN_START);
 
     GtkWidget *titulo = gtk_label_new("");
     gtk_widget_add_css_class(titulo, "opendock-aviso-titulo");
@@ -210,12 +348,25 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
     gtk_label_set_ellipsize(GTK_LABEL(cuerpo), PANGO_ELLIPSIZE_END);
     gtk_box_append(GTK_BOX(vcaja), cuerpo);
 
-    gtk_box_append(GTK_BOX(tarjeta), vcaja);
+    /* Los textos van en un recorte de alto animado: al expandir, el cuerpo completo
+     * se va descubriendo según crece la isla. */
+    GtkWidget *desliz = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(desliz), GTK_POLICY_NEVER, GTK_POLICY_EXTERNAL);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(desliz), vcaja);
+    gtk_widget_set_valign(desliz, GTK_ALIGN_START);
+    gtk_widget_set_hexpand(desliz, TRUE);
+    gtk_widget_set_margin_start(desliz, 10);
+    gtk_widget_set_margin_top(desliz, 7);
+    gtk_widget_set_margin_bottom(desliz, 7);
+    gtk_widget_set_can_target(desliz, FALSE);   /* el clic y el cursor son de la isla */
+    gtk_box_append(GTK_BOX(tarjeta), desliz);
 
     GtkWidget *hora = gtk_label_new("");
     gtk_widget_add_css_class(hora, "opendock-aviso-hora");
     gtk_widget_set_margin_end(hora, 16);
-    gtk_widget_set_valign(hora, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_start(hora, 8);
+    gtk_widget_set_valign(hora, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(hora, 9);
     gtk_box_append(GTK_BOX(tarjeta), hora);
 
     /* Campana discreta (No molestar): campana de 14 px + contador en
@@ -250,6 +401,12 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
     g_signal_connect(clic, "released", G_CALLBACK(al_pulsar_notch), NULL);
     gtk_widget_add_controller(win, GTK_EVENT_CONTROLLER(clic));
 
+    /* Cursor encima: no se oculta y, tras un instante, enseña el texto completo. */
+    GtkEventController *cursor = gtk_event_controller_motion_new();
+    g_signal_connect(cursor, "enter", G_CALLBACK(al_entrar_aviso), NULL);
+    g_signal_connect(cursor, "leave", G_CALLBACK(al_salir_aviso), NULL);
+    gtk_widget_add_controller(win, cursor);
+
     GtkCssProvider *css = gtk_css_provider_new();
     gtk_css_provider_load_from_string(css,
         "window.opendock-notch { background: transparent; }"
@@ -258,10 +415,10 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
         "  border-radius: 16px;"
         "}"
         ".opendock-aviso-titulo {"
-        "  color: #FFFFFF; font-weight: 600; font-size: 14px;"
+        "  color: #FFFFFF; font-weight: 700; font-size: 14px;"
         "}"
         ".opendock-aviso-cuerpo {"
-        "  color: #AEAEB2; font-size: 12px;"
+        "  color: #AEAEB2; font-weight: 600; font-size: 13px;"
         "}"
         ".opendock-aviso-hora {"
         "  color: #6E6E73; font-size: 12px;"
@@ -279,6 +436,8 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
     g_notch.lbl_titulo = titulo;
     g_notch.lbl_cuerpo = cuerpo;
     g_notch.lbl_hora = hora;
+    g_notch.desliz = desliz;
+    g_notch.textos = vcaja;
     g_notch.pila = pila;
     g_notch.lbl_no_leidas = no_leidas;
 
@@ -299,6 +458,10 @@ void od_notch_iniciar(OdConfig *cfg, OdBackendTipo backend)
 #endif
 
     od_muelle_iniciar(&g_notch.muelle_margen, -(OD_AVISO_ALTO + 8), 420.0, OD_ZETA_NORMAL + 0.1);
+    /* alto de título + cuerpo en una línea: lo que cabe en los 54 px del aviso */
+    g_notch.alto_base = OD_AVISO_ALTO - 14;
+    od_muelle_iniciar(&g_notch.muelle_alto, g_notch.alto_base, 340.0, MAX(0.7, OD_ZETA_NORMAL));
+    fijar_alto_textos(g_notch.alto_base);
     g_notch.objetivo_visible = FALSE;
     gtk_widget_set_visible(win, FALSE);
 }
@@ -370,6 +533,6 @@ void od_notch_ocultar(void)
         return;
     }
 #endif
-    od_muelle_fijar_objetivo(&g_notch.muelle_margen, -(OD_AVISO_ALTO + 8));
+    od_muelle_fijar_objetivo(&g_notch.muelle_margen, margen_oculto());
     iniciar_animacion();
 }
