@@ -52,7 +52,10 @@ static int       s_nhist;
 static LONGLONG  s_histSeq = 0x4000000000000000LL;
 static LONGLONG  s_lastSeen = -1;      /* -1 = primera carga: no avisar de lo antiguo */
 static LONGLONG  s_cleared;            /* "Borrar todo": oculta ids <= este */
-static LONGLONG  s_dismissed[64];
+/* Borradas una a una: se guardan en el registro (Windows las conserva en su base y al
+ * reiniciar volverían). Se olvidan cuando Windows las quita de la base. */
+#define MAX_DISMISSED 128
+static LONGLONG  s_dismissed[MAX_DISMISSED];
 static int       s_ndismissed;
 static AppInfo   s_apps[MAX_APPS];
 static int       s_napps;
@@ -424,10 +427,44 @@ static BOOL OpenDb(void)
 static BOOL IsDismissed(LONGLONG id)
 {
     if (id <= s_cleared) return TRUE;
-    /* s_ndismissed sigue contando pasado 64 (anillo): no leer fuera de la tabla */
-    const int n = min(s_ndismissed, (int)(sizeof(s_dismissed) / sizeof(s_dismissed[0])));
-    for (int i = 0; i < n; ++i) if (s_dismissed[i] == id) return TRUE;
+    for (int i = 0; i < s_ndismissed; ++i) if (s_dismissed[i] == id) return TRUE;
     return FALSE;
+}
+
+static void SaveDismissed(void)
+{
+    HKEY k;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) return;
+    if (s_ndismissed) RegSetValueExW(k, L"DismissedIds", 0, REG_BINARY, (const BYTE *)s_dismissed, s_ndismissed * sizeof(LONGLONG));
+    else RegDeleteValueW(k, L"DismissedIds");
+    RegCloseKey(k);
+}
+
+static void LoadDismissed(void)
+{
+    DWORD sz = sizeof(s_dismissed);
+    if (RegGetValueW(HKEY_CURRENT_USER, REG_KEY, L"DismissedIds", RRF_RT_REG_BINARY, NULL, s_dismissed, &sz) == ERROR_SUCCESS)
+        s_ndismissed = (int)(sz / sizeof(LONGLONG));
+}
+
+/* Olvida las borradas que ya no están en la base de Windows (no volverán) o que tapa
+ * "Borrar todo". rows: ids leídos; complete: la lectura llegó al final de la base, si no
+ * sólo se sabe de los ids mayores que el menor leído. */
+static void PruneDismissed(const LONGLONG *rows, int nrows, BOOL complete)
+{
+    LONGLONG low = 0;
+    for (int i = 0; i < nrows; ++i) if (!i || rows[i] < low) low = rows[i];
+    int out = 0;
+    for (int i = 0; i < s_ndismissed; ++i) {
+        const LONGLONG d = s_dismissed[i];
+        BOOL keep = d > s_cleared;
+        if (keep && (complete || d > low)) {
+            keep = FALSE;
+            for (int j = 0; j < nrows && !keep; ++j) keep = rows[j] == d;
+        }
+        if (keep) s_dismissed[out++] = d;
+    }
+    if (out != s_ndismissed) { s_ndismissed = out; SaveDismissed(); }
 }
 
 static BOOL SameChat(const WinNote *a, const NoteKey *ka, const WinNote *b, const NoteKey *kb)
@@ -499,8 +536,11 @@ void Wn_Refresh(BOOL notify)
     static NoteKey freshKey[WN_MAX];
     int n = 0;
     LONGLONG maxId = s_lastSeen, newestId = 0;
-    while (n < WN_MAX && sqlite3_step(st) == SQLITE_ROW) {
+    static LONGLONG rows[60];           /* todos los ids leídos (LIMIT 60), borrados incluidos */
+    int nrows = 0, rc = SQLITE_DONE;
+    while (n < WN_MAX && (rc = sqlite3_step(st)) == SQLITE_ROW) {
         const LONGLONG id = sqlite3_column_int64(st, 0);
+        if (nrows < 60) rows[nrows++] = id;
         if (id > maxId) maxId = id;
         if (IsDismissed(id)) continue;
 
@@ -519,6 +559,7 @@ void Wn_Refresh(BOOL notify)
         ++n;
     }
     sqlite3_finalize(st);
+    PruneDismissed(rows, nrows, rc == SQLITE_DONE && nrows < 60);
 
     /* Lo que había y ya no está porque otro del mismo chat lo reemplazó: al historial.
      * (También si Windows lo reescribió en el sitio con otro texto.) */
@@ -708,8 +749,12 @@ const WinNote *Wn_Get(int i)
 
 void Wn_Dismiss(LONGLONG id)
 {
-    if (s_ndismissed < 64) s_dismissed[s_ndismissed++] = id;
-    else s_dismissed[(s_ndismissed++) % 64] = id;
+    /* los del historial (ids propios) se quitan abajo y no sobreviven al reinicio */
+    if (id < 0x4000000000000000LL && !IsDismissed(id)) {
+        if (s_ndismissed == MAX_DISMISSED) MoveMemory(&s_dismissed[0], &s_dismissed[1], --s_ndismissed * sizeof(LONGLONG));
+        s_dismissed[s_ndismissed++] = id;
+        SaveDismissed();
+    }
     for (int i = 0; i < s_nhist; ++i)
         if (s_hist[i].id == id) { DropHistory(i); break; }
     for (int i = 0; i < s_count; ++i)
@@ -729,6 +774,8 @@ void Wn_DismissAll(void)
         RegSetValueExW(k, L"ClearedId", 0, REG_QWORD, (const BYTE *)&s_cleared, sizeof(s_cleared));
         RegCloseKey(k);
     }
+    s_ndismissed = 0;           /* ya las tapa ClearedId */
+    SaveDismissed();
     s_count = 0;
     s_ncur = s_nhist = 0;
     Notch_NotesChanged();
@@ -994,6 +1041,7 @@ void Wn_Start(void)
     started = TRUE;
     DWORD sz = sizeof(s_cleared);
     RegGetValueW(HKEY_CURRENT_USER, REG_KEY, L"ClearedId", RRF_RT_REG_QWORD, NULL, &s_cleared, &sz);
+    LoadDismissed();
     Wn_Refresh(FALSE);
     HANDLE t = CreateThread(NULL, 0, Watcher, NULL, 0, NULL);
     if (t) CloseHandle(t);
