@@ -26,6 +26,8 @@
 #define HOLD_SHOT   3500
 #define MAX_HITS    96
 #define BODY_LINE   18     /* alto de línea del cuerpo de un aviso (fBody, 13 px) */
+#define PEEK_H      54     /* aviso de Windows recién llegado, cerrado (lógico) */
+#define PEEK_LINES  7      /* líneas como mucho al expandirlo: cabe el cuerpo entero (256) */
 
 enum { M_HIDDEN, M_PEEK, M_MINI, M_QUICK, M_CENTER };
 enum { A_BOTTOM, A_TOP, A_MIDDLE };
@@ -105,6 +107,8 @@ static struct {
     POINT   dwellPt;
     DWORD   dwellSince;
     Peek    peek;
+    float   pex, pexv;          /* alto extra animado del aviso recién llegado (hover) */
+    DWORD   peekSince;          /* desde cuándo está el cursor encima (0 = fuera) */
 
     /* borrado animado: la tarjeta sale hacia la derecha y las de abajo suben */
     LONGLONG outId;             /* 0 = ninguna · -1 = todas ("Borrar") */
@@ -370,20 +374,37 @@ static void RenderPeekAlert(void)
     if (dw) Text(c, N.fBody, p->detail, x + gap2, 0, min(dw + 2, N.W - x - gap2 - padR / 2), N.H, detailColor, 0);
 }
 
+/* Alto extra que necesita el aviso recién llegado para enseñar su texto entero. */
+static float PeekNeed(void)
+{
+    const int tx = NS(12) + NS(30) + NS(10), right = NS(360) - NS(16);
+    if (!N.peek.detail[0] || !N.content.dc) return 0.0f;
+    RECT r = { 0, 0, right - tx, 0 };
+    HGDIOBJ o = SelectObject(N.content.dc, N.fBody);
+    DrawTextW(N.content.dc, N.peek.detail, -1, &r, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
+    SelectObject(N.content.dc, o);
+    return (float)max(0, min((int)(r.bottom - r.top), NS(BODY_LINE) * PEEK_LINES) - NS(BODY_LINE));
+}
+
 static void RenderPeekNote(void)
 {
     const Peek *p = &N.peek;
-    if (!BeginContent(NS(360), NS(54))) return;
+    const int extra = (int)(N.pex + 0.5f);
+    if (!BeginContent(NS(360), NS(PEEK_H) + extra)) return;
     Canvas *c = &N.content;
     const int box = NS(30), bx = NS(12), tx = bx + box + NS(10), right = N.W - NS(16);
     wchar_t ago[32];
     Ago(p->arrival, ago);
     const int aw = Gfx_TextWidth(N.fSmall, ago);
 
-    DrawAppIcon(c, bx, (N.H - box) / 2, box, p->aumid, p->app, p->logo, 1.0f);
+    DrawAppIcon(c, bx, (NS(PEEK_H) - box) / 2, box, p->aumid, p->app, p->logo, 1.0f);
     Text(c, N.fTitle, p->title[0] ? p->title : p->app, tx, NS(8), right - aw - NS(8) - tx, NS(20), N.look.fg, 0);
     Text(c, N.fSmall, ago, right - aw, NS(8), aw + 1, NS(20), N.look.fg3, 0);
-    Text(c, N.fBody, p->detail[0] ? p->detail : p->app, tx, NS(28), right - tx, NS(BODY_LINE), N.look.fg2, 0);
+    if (extra <= 1)
+        Text(c, N.fBody, p->detail[0] ? p->detail : p->app, tx, NS(28), right - tx, NS(BODY_LINE), N.look.fg2, 0);
+    else    /* con el cursor encima: el texto completo se descubre según crece la isla */
+        Gfx_Text(c, N.fBody, p->detail, tx, NS(28), right - tx, NS(BODY_LINE) + extra, N.look.fg2,
+                 DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL | DT_NOPREFIX);
 }
 
 
@@ -1411,6 +1432,16 @@ static void Tick(void)
         if (busy) RenderContent();
     }
 
+    /* aviso recién llegado: con el cursor encima un instante, crece hasta enseñar todo el texto */
+    if (N.mode == M_PEEK && N.peek.isNote && !N.peek.isBell && !N.closing) {
+        const BOOL dwell = N.peekSince && !N.down && GetTickCount() - N.peekSince > 260;
+        const float et = dwell ? PeekNeed() : 0.0f, eb = N.pex;
+        for (int k = 0; k < 2; ++k) Spring(&N.pex, &N.pexv, et, dt * 0.5f, 340.0f, max(0.7f, N.look.zeta));
+        if (fabsf(N.pex - et) < 0.3f && fabsf(N.pexv) < 2.0f) { N.pex = et; N.pexv = 0; }
+        if (N.pex < 0) N.pex = 0;
+        if (fabsf(N.pex - eb) > 0.01f) RenderContent();
+    }
+
     if ((N.mode == M_QUICK || N.mode == M_CENTER || (N.mode == M_PEEK && N.peek.isBell))
         && !N.closing && (LONG)(GetTickCount() - N.ringStart) < 2400) RenderContent();
 
@@ -1640,6 +1671,7 @@ static LRESULT CALLBACK NotchProc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (!N.hover) {
             TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 };
             N.hover = TrackMouseEvent(&tme);
+            N.peekSince = GetTickCount();
         }
         if (N.down && N.mode == M_PEEK) {
             POINT p;
@@ -1671,6 +1703,7 @@ static LRESULT CALLBACK NotchProc(HWND h, UINT m, WPARAM w, LPARAM l)
 
     case WM_MOUSELEAVE:
         N.hover = FALSE;
+        N.peekSince = 0;
         N.mx = -100000;
         if (N.hot != HT_NONE) { N.hot = HT_NONE; if (N.mode == M_CENTER || N.mode == M_QUICK) RenderContent(); }
         if ((LONG)(N.hideAt - (GetTickCount() + 1200)) < 0) N.hideAt = GetTickCount() + 1200;
@@ -1728,6 +1761,7 @@ static void StartPeek(DWORD hold)
     }
     N.hold = hold;
     N.hideAt = GetTickCount() + hold;
+    N.pex = N.pexv = 0;             /* el aviso nuevo nace cerrado */
     Enter(M_PEEK);
 }
 
