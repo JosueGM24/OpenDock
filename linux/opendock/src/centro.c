@@ -30,6 +30,10 @@
 #define OD_BORRAR_MS        260
 #define OD_OCULTO_PX        (-720)   /* margen con el que queda fuera de la pantalla */
 #define OD_MAX_ACCIONES     3
+/* Ids propios del historial, lejos de los del servidor (que cuentan desde 1):
+ * nunca se avisa de ellos al cliente. */
+#define OD_ID_HISTORIAL     0xF0000000u
+#define OD_MAX_HISTORIAL    40
 
 typedef struct {
     OdConfig *cfg;
@@ -45,9 +49,15 @@ typedef struct {
     OdMuelle muelle;
     gint64 ultimo_us;
     gboolean iniciado;
+    guint32 siguiente_historial;
 } OdEstadoCentro;
 
 static OdEstadoCentro g_c;
+
+static gboolean es_historial(guint32 id)
+{
+    return id >= OD_ID_HISTORIAL;
+}
 
 void od_notif_liberar(OdNotif *n)
 {
@@ -164,7 +174,7 @@ static gboolean al_terminar_borrado(gpointer datos)
 {
     guint32 id = GPOINTER_TO_UINT(datos);
     quitar_tarjeta_y_notif(id);
-    if (g_c.rr.descartada) g_c.rr.descartada(id);
+    if (g_c.rr.descartada && !es_historial(id)) g_c.rr.descartada(id);
     return G_SOURCE_REMOVE;
 }
 
@@ -263,6 +273,20 @@ static void al_pulsar_tarjeta(GtkGestureClick *g, int n, double x, double y, gpo
     if (tiene_default) {
         invocar(tarjeta, "default");
         od_centro_cerrar();
+        return;
+    }
+    /* Del historial: abre el chat con el aviso vivo que lo reemplazó, si sigue ahí. */
+    if (notif && notif->cadena) {
+        OdNotif *viva = buscar(notif->cadena);
+        GtkWidget *t_viva = tarjeta_de(notif->cadena);
+        gboolean viva_default = FALSE;
+        for (int i = 0; viva && viva->acciones && viva->acciones[i] && viva->acciones[i + 1]; i += 2)
+            if (g_strcmp0(viva->acciones[i], "default") == 0) viva_default = TRUE;
+        if (viva_default && t_viva) {
+            quitar_tarjeta_y_notif(id);
+            invocar(t_viva, "default");
+            od_centro_cerrar();
+        }
     }
 }
 
@@ -554,13 +578,64 @@ void od_centro_iniciar(OdConfig *cfg, OdBackendTipo backend, const OdCentroRetro
     gtk_widget_set_visible(win, FALSE);
 }
 
-void od_centro_agregar(OdNotif *n)
+static gboolean mismo_aviso(const OdNotif *a, const char *app, const char *titulo, const char *cuerpo)
+{
+    return g_strcmp0(a->app, app) == 0 && g_strcmp0(a->titulo, titulo) == 0 &&
+           g_strcmp0(a->cuerpo, cuerpo) == 0;
+}
+
+gboolean od_centro_ya_visto(const char *app, const char *titulo, const char *cuerpo)
+{
+    for (GList *l = g_c.notifs; l; l = l->next)
+        if (mismo_aviso(l->data, app, titulo, cuerpo)) return TRUE;
+    return FALSE;
+}
+
+/* La notificación 'vieja' (reemplazada por otra del mismo chat) se queda como historial:
+ * otro id, sin botones (sus acciones ya no valen) y en su sitio, debajo de la nueva. */
+static void pasar_a_historial(OdNotif *vieja)
+{
+    guint historial = 0;
+    OdNotif *mas_antigua = NULL;
+    for (GList *l = g_c.notifs; l; l = l->next) {
+        OdNotif *x = l->data;
+        if (x->cadena) { historial++; mas_antigua = x; }
+    }
+    if (historial >= OD_MAX_HISTORIAL && mas_antigua) quitar_tarjeta_y_notif(mas_antigua->id);
+
+    GtkWidget *t = tarjeta_de(vieja->id);
+    if (++g_c.siguiente_historial < OD_ID_HISTORIAL) g_c.siguiente_historial = OD_ID_HISTORIAL;
+    vieja->cadena = vieja->id;
+    vieja->id = g_c.siguiente_historial;
+    g_strfreev(vieja->acciones);
+    vieja->acciones = NULL;
+    if (!t) return;
+    g_object_set_data(G_OBJECT(t), "od-id", GUINT_TO_POINTER(vieja->id));
+    GtkWidget *revelador = g_object_get_data(G_OBJECT(t), "od-acciones");
+    if (revelador) {
+        gtk_box_remove(GTK_BOX(gtk_widget_get_parent(revelador)), revelador);
+        g_object_set_data(G_OBJECT(t), "od-acciones", NULL);
+    }
+}
+
+void od_centro_agregar(OdNotif *n, gboolean historial)
 {
     if (!g_c.iniciado || !n) {
         od_notif_liberar(n);
         return;
     }
-    if (buscar(n->id)) quitar_tarjeta_y_notif(n->id);
+    OdNotif *vieja = buscar(n->id);
+    if (vieja) {
+        /* mismo texto: es el mismo aviso publicado otra vez, no un mensaje nuevo */
+        if (historial && !mismo_aviso(vieja, n->app, n->titulo, n->cuerpo)) pasar_a_historial(vieja);
+        else quitar_tarjeta_y_notif(n->id);
+    }
+    /* Cada aviso una sola vez: fuera las copias (con otro id) del mismo texto. */
+    for (GList *l = g_c.notifs; l; ) {
+        OdNotif *x = l->data;
+        l = l->next;
+        if (mismo_aviso(x, n->app, n->titulo, n->cuerpo)) quitar_tarjeta_y_notif(x->id);
+    }
     g_c.notifs = g_list_prepend(g_c.notifs, n);
     gtk_box_prepend(GTK_BOX(g_c.lista), crear_tarjeta(n));
     actualizar_vacio();
@@ -570,6 +645,12 @@ void od_centro_quitar(guint32 id)
 {
     if (!g_c.iniciado) return;
     quitar_tarjeta_y_notif(id);
+    /* el cliente la cerró (p. ej. ya leíste el chat): se va también su historial */
+    for (GList *l = g_c.notifs; l; ) {
+        OdNotif *x = l->data;
+        l = l->next;
+        if (x->cadena == id) quitar_tarjeta_y_notif(x->id);
+    }
 }
 
 guint od_centro_cantidad(void)

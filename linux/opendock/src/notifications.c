@@ -121,6 +121,24 @@ static gchar **leer_acciones(GVariantIter *iter)
     return (gchar **)g_ptr_array_free(v, FALSE);
 }
 
+/* Los navegadores (y sus apps web) usan el mismo id para todo un chat: lo de antes no se
+ * debe perder al llegar otro mensaje. El resto (progreso, reproductores...) sí reemplaza. */
+static gboolean es_navegador(const gchar *app_name, GVariant *hints)
+{
+    static const char *const nombres[] = { "chrom", "firefox", "brave", "vivaldi", "opera",
+        "microsoft-edge", "microsoft edge", "epiphany", "librewolf", "floorp", "waterfox",
+        "zen-browser", "zen_browser", "thorium", "yandex", NULL };
+    const gchar *entrada = NULL;
+    if (hints) g_variant_lookup(hints, "desktop-entry", "&s", &entrada);
+    gchar *a = g_utf8_strdown(app_name ? app_name : "", -1);
+    gchar *e = g_utf8_strdown(entrada ? entrada : "", -1);
+    gboolean si = FALSE;
+    for (int i = 0; nombres[i] && !si; i++) si = strstr(a, nombres[i]) || strstr(e, nombres[i]);
+    g_free(a);
+    g_free(e);
+    return si;
+}
+
 static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocacion)
 {
     const gchar *app_name_in = NULL, *app_icon_in = NULL, *summary_in = NULL, *body_in = NULL;
@@ -168,7 +186,11 @@ static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocaci
         g_variant_lookup(hints, "transient", "b", &transitoria);
         g_variant_lookup(hints, "suppress-sound", "b", &sin_sonido);
     }
-    if (!g_srv.cfg->no_molestar || urgencia >= 2) {
+    /* El mismo aviso publicado otra vez (Gmail y otras webs lo hacen al sincronizar):
+     * se queda en el centro, sin volver a saltar ni sonar. */
+    if (od_centro_ya_visto(app_name, summary, body)) {
+        /* nada */
+    } else if (!g_srv.cfg->no_molestar || urgencia >= 2) {
         od_notch_mostrar_aviso(app_name, summary, body, pixbuf,
             (app_icon && *app_icon) ? app_icon : NULL);
         if (!sin_sonido) od_sonido_notificacion();
@@ -192,7 +214,7 @@ static void manejar_notify(GVariant *parametros, GDBusMethodInvocation *invocaci
         n->acciones = acciones;
         acciones = NULL;
         n->hora_us = g_get_real_time();
-        od_centro_agregar(n);
+        od_centro_agregar(n, es_navegador(app_name, hints));
         od_mini_refrescar();
     }
     g_strfreev(acciones);
