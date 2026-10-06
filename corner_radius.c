@@ -414,8 +414,10 @@ static BOOL s_remote;
 static BOOL DetectRemote(void)
 {
     if (GetSystemMetrics(SM_REMOTESESSION)) return TRUE;          /* Escritorio remoto de Windows */
-    DWORD me = 0, sid = 0;
-    ProcessIdToSessionId(GetCurrentProcessId(), &me);
+    /* Chrome Remote Desktop transmite la sesión de consola: si no es la nuestra, no nos ve.
+     * (Su proceso corre como SYSTEM: no se puede preguntar su sesión sin permisos.) */
+    DWORD me = 0;
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &me) || me != WTSGetActiveConsoleSessionId()) return FALSE;
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) return FALSE;
     PROCESSENTRY32W pe = { sizeof(pe) };
@@ -423,8 +425,7 @@ static BOOL DetectRemote(void)
     /* el proceso de escritorio de Chrome Remote Desktop solo existe con alguien conectado
      * (remoting_host.exe, el servicio, corre siempre y no cuenta) */
     for (BOOL ok = Process32FirstW(snap, &pe); ok && !found; ok = Process32NextW(snap, &pe))
-        if ((!lstrcmpiW(pe.szExeFile, L"remoting_desktop.exe") || !lstrcmpiW(pe.szExeFile, L"remote_assistance_host.exe")) &&
-            ProcessIdToSessionId(pe.th32ProcessID, &sid) && sid == me)
+        if (!lstrcmpiW(pe.szExeFile, L"remoting_desktop.exe") || !lstrcmpiW(pe.szExeFile, L"remote_assistance_host.exe"))
             found = TRUE;
     CloseHandle(snap);
     return found;
