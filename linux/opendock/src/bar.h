@@ -1,6 +1,6 @@
 /*
  * Barra superior: 28 px, zona exclusiva (layer-shell en Wayland, strut en
- * X11). App activa a la izquierda; reloj, Wi-Fi, batería, volumen y el
+ * X11), una en cada monitor. App activa a la izquierda; reloj, Wi-Fi, batería, volumen y el
  * centro de control a la derecha. Ver DESIGN.md.
  */
 #ifndef OPENDOCK_BAR_H
@@ -8,6 +8,7 @@
 
 #include "config.h"
 #include "session.h"
+#include <gtk/gtk.h>
 
 void od_bar_iniciar(OdConfig *cfg, OdBackendTipo backend);
 
@@ -17,5 +18,11 @@ void od_bar_set_app_activa(const char *nombre, const char *icono_nombre);
 
 /* Activa o desactiva No molestar (lo guarda y lo refleja en todas partes). */
 void od_bar_fijar_no_molestar(gboolean activo);
+
+/* ¿Hay una ventana a pantalla completa arriba del todo en ese monitor? */
+typedef gboolean (*OdPantallaCompletaFn)(GdkMonitor *monitor);
+
+/* Vuelve a mirar cada monitor: su barra se aparta si hay pantalla completa. */
+void od_bar_pantalla_completa(OdPantallaCompletaFn en_monitor);
 
 #endif
