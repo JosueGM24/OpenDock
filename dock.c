@@ -2784,14 +2784,10 @@ static LRESULT DockProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
             const DockItem *it = &D.items[hit];
             const BOOL open = PreviewOpenHere() && !PV.closing && !lstrcmpiW(PV.key, ItemKey(it));
             if (D.prevArm >= 0) { KillTimer(h, TIMER_DPREV); D.prevArm = -1; }
-            if (LiveWins(it) >= 2 && !open) {           /* varias ventanas: se elige en la vista previa */
-                PV.suppress[0] = 0;
-                PreviewOpen(hit);
-            } else {
-                lstrcpynW(PV.suppress, ItemKey(it), MAX_PATH);  /* sin reabrirse bajo el cursor */
-                PreviewClose();
-                if (LiveWins(it) < 2) Activate(hit);
-            }
+            /* el clic abre o recorre sus ventanas (como el Dock de macOS); la vista previa es
+             * cosa del cursor: si ya estaba abierta se queda, si no, no se abre bajo el clic */
+            if (!open) lstrcpynW(PV.suppress, ItemKey(it), MAX_PATH);
+            Activate(hit);
         }
         D.pressed = -1;
         return 0;

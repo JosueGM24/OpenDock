@@ -1207,10 +1207,12 @@ static void AnchorY(void)
     else                     N.ay = TopEdge() + FloatGap();
 }
 
-static void PlaceFromConfig(void)
+/* Monitor de la isla: los avisos salen en el principal, como los de Windows; el centro de
+ * notificaciones y lo que se pide con el ratón, en el monitor del cursor. */
+static void PlaceFromConfig(BOOL atCursor)
 {
-    POINT pt;
-    GetCursorPos(&pt);
+    POINT pt = { 0, 0 };            /* (0,0) siempre es del monitor principal */
+    if (atCursor) GetCursorPos(&pt);
     UseMonitorAt(pt);
     const int nx = max(0, min(10000, g_cfg.notchX));
     N.tx = N.mon.left + MulDiv(N.mon.right - N.mon.left, nx, 10000);
@@ -1756,8 +1758,8 @@ static BOOL CanPeek(BOOL force)
 static void StartPeek(DWORD hold)
 {
     if (N.mode == M_HIDDEN || N.mode == M_MINI || N.mode == M_QUICK) {
-        if (N.mode == M_HIDDEN) PlaceFromConfig();
-        else { AnchorY(); if (!N.attached) PlaceFromConfig(); }
+        if (N.mode == M_HIDDEN) PlaceFromConfig(FALSE);
+        else { AnchorY(); if (!N.attached) PlaceFromConfig(FALSE); }
     }
     N.hold = hold;
     N.hideAt = GetTickCount() + hold;
@@ -1783,7 +1785,7 @@ BOOL Notch_Show(int icon, LPCWSTR title, LPCWSTR detail, int level, BOOL force)
 BOOL Notch_ShowCapture(const BITMAPINFO *bi, const void *bits, LPCWSTR title, LPCWSTR detail)
 {
     if (!CanPeek(FALSE)) return FALSE;
-    if (N.mode == M_HIDDEN) PlaceFromConfig();
+    if (N.mode == M_HIDDEN) PlaceFromConfig(FALSE);
     ZeroMemory(&N.peek, sizeof(N.peek));
     N.peek.icon = NI_CHECK;
     N.peek.level = -1;
@@ -1878,7 +1880,7 @@ void Notch_EdgeHover(POINT pt)
 void Notch_OpenCenter(void)
 {
     if (!EnsureWindow()) return;
-    if (N.mode == M_HIDDEN) PlaceFromConfig();
+    if (N.mode == M_HIDDEN) PlaceFromConfig(TRUE);
     Canvas_Free(&N.thumb);
     N.isCapture = FALSE;
     N.openPath[0] = 0;

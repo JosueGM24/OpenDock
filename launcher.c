@@ -1112,6 +1112,7 @@ static void EnablePrivilege(LPCWSTR name)
 }
 
 static void Close(void);
+static void Backdrop_Close(void);
 static void FootAction(int i)
 {
     AllowSetForegroundWindow(ASFW_ANY);
@@ -1351,6 +1352,7 @@ static void Rebuild_UI(void)
 static void Close(void)
 {
     if (L.hwnd) Pop_Close(&L.pop);
+    Backdrop_Close();
 }
 
 static void UrlEncode(const WCHAR *s, WCHAR *out, int cap)
@@ -1787,6 +1789,7 @@ static LRESULT CALLBACK LnProc(HWND h, UINT m, WPARAM w, LPARAM l)
         FreeFonts();
         L.hwnd = NULL;
         L.closedAt = GetTickCount();
+        Backdrop_Close();
         return 0;
     }
     return DefWindowProcW(h, m, w, l);
@@ -1814,11 +1817,101 @@ static void TakeFocus(HWND h)
     }
 }
 
+/* ── Fondo del buscador ──
+ * Como el vistazo del dock: la pantalla, tomada justo antes de abrir, desenfocada y
+ * oscurecida, entra con un fundido por debajo del buscador y se va al cerrarlo. Los clics
+ * la atraviesan (hacen perder el foco al buscador, que se cierra). 1 px menos de alto: una
+ * ventana sin marco que cubre el monitor entero es "pantalla completa" para Windows. */
+#define BD_CLASS L"OpenDock.SearchBackdrop"
+static struct { HWND hwnd; Canvas sm; float a, target; DWORD last; } BD;
+
+static LRESULT CALLBACK BackdropProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    switch (m) {
+    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+    case WM_ERASEBKGND:    return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(h, &ps);
+        RECT rc;
+        GetClientRect(h, &rc);
+        if (BD.sm.dc) {
+            SetStretchBltMode(dc, HALFTONE);
+            SetBrushOrgEx(dc, 0, 0, NULL);
+            StretchBlt(dc, 0, 0, rc.right, rc.bottom, BD.sm.dc, 0, 0, BD.sm.w, BD.sm.h, SRCCOPY);
+        }
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_TIMER: {
+        const DWORD now = GetTickCount();
+        const float dt = min(0.05f, (now - BD.last) / 1000.0f);
+        BD.last = now;
+        BD.a += (BD.target - BD.a) * min(1.0f, dt * (BD.target > BD.a ? 13.0f : 18.0f));
+        if (fabsf(BD.a - BD.target) < 0.01f) BD.a = BD.target;
+        SetLayeredWindowAttributes(h, 0, (BYTE)(255.0f * BD.a + 0.5f), LWA_ALPHA);
+        if (BD.a == BD.target) {
+            KillTimer(h, 1);
+            if (BD.target == 0) DestroyWindow(h);
+        }
+        return 0;
+    }
+    case WM_DESTROY:
+        if (h == BD.hwnd) BD.hwnd = NULL;
+        Canvas_Free(&BD.sm);
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+static void Backdrop_Open(HMONITOR hm)
+{
+    if (BD.hwnd) DestroyWindow(BD.hwnd);
+    MONITORINFO mi = { sizeof(mi) };
+    if (!GetMonitorInfoW(hm, &mi)) return;
+    const RECT r = mi.rcMonitor;
+    const int w = r.right - r.left, h = r.bottom - r.top, sw = max(1, w / 4), sh = max(1, h / 4);
+    if (!Canvas_Init(&BD.sm, sw, sh)) return;
+    HDC screen = GetDC(NULL);
+    SetStretchBltMode(BD.sm.dc, COLORONCOLOR);      /* rápida: el desenfoque la suaviza */
+    StretchBlt(BD.sm.dc, 0, 0, sw, sh, screen, r.left, r.top, w, h, SRCCOPY);
+    ReleaseDC(NULL, screen);
+    GdiFlush();
+    for (int i = 0; i < 2; ++i) Gfx_BoxBlur(BD.sm.px, sw, sh, max(1, SS(14) / 4));
+    for (int i = 0; i < sw * sh; ++i) {             /* menos color y más oscuro, como el vistazo */
+        const DWORD v = BD.sm.px[i];
+        const float rr = (float)((v >> 16) & 255), gg = (float)((v >> 8) & 255), bb = (float)(v & 255);
+        const float y = rr * 0.30f + gg * 0.59f + bb * 0.11f;
+        BD.sm.px[i] = (DWORD)((y + (rr - y) * 0.45f) * 0.42f) << 16 | (DWORD)((y + (gg - y) * 0.45f) * 0.42f) << 8
+                    | (DWORD)((y + (bb - y) * 0.45f) * 0.42f);
+    }
+    BD.hwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+                              BD_CLASS, L"", WS_POPUP, r.left, r.top, w, h - 1, NULL, NULL, g_inst, NULL);
+    if (!BD.hwnd) { Canvas_Free(&BD.sm); return; }
+    if (App_HideFromCapture(FALSE)) SetWindowDisplayAffinity(BD.hwnd, WDA_EXCLUDEFROMCAPTURE);
+    BD.a = 0;
+    BD.target = 1;
+    BD.last = GetTickCount();
+    SetLayeredWindowAttributes(BD.hwnd, 0, 0, LWA_ALPHA);
+    ShowWindow(BD.hwnd, SW_SHOWNOACTIVATE);
+    UpdateWindow(BD.hwnd);
+    SetTimer(BD.hwnd, 1, 10, NULL);
+}
+
+static void Backdrop_Close(void)
+{
+    if (!BD.hwnd || BD.target == 0) return;
+    BD.target = 0;
+    BD.last = GetTickCount();
+    SetTimer(BD.hwnd, 1, 10, NULL);
+}
+
 static void Open(void)
 {
-    POINT pt;
-    GetCursorPos(&pt);
-    HMONITOR hm = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+    /* en el monitor de la ventana activa, como el Inicio de Windows (si no hay, el principal) */
+    POINT pt = { 0, 0 };
+    HWND fg = GetForegroundWindow();
+    HMONITOR hm = fg ? MonitorFromWindow(fg, MONITOR_DEFAULTTOPRIMARY) : MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFO mi = { sizeof(mi) };
     GetMonitorInfoW(hm, &mi);
     L.mon = mi.rcWork;
@@ -1862,6 +1955,7 @@ static void Open(void)
     }
 
     L.q[0] = 0; L.qlen = L.caret = 0; L.selAll = FALSE; L.caretOn = TRUE;
+    Backdrop_Open(hm);          /* antes que el buscador: queda por debajo de él */
     L.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED, LN_CLASS, L"Buscar", WS_POPUP,
                              L.ox, L.oy, L.w, SS(QH), NULL, NULL, g_inst, NULL);
     if (!L.hwnd) return;
@@ -1977,6 +2071,11 @@ void Launcher_Register(void)
     wc.lpszClassName = LN_CLASS;
     wc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
     RegisterClassExW(&wc);
+    WNDCLASSEXW bd = { sizeof(bd) };
+    bd.lpfnWndProc   = BackdropProc;
+    bd.hInstance     = g_inst;
+    bd.lpszClassName = BD_CLASS;
+    RegisterClassExW(&bd);
 }
 
 static void StopHook(void)
@@ -2028,6 +2127,7 @@ void Launcher_Apply(void)
     if (!g_cfg.launcher) {
         StopHook();
         if (L.hwnd) DestroyWindow(L.hwnd);
+        if (BD.hwnd) DestroyWindow(BD.hwnd);
         if (s_filesThread || s_apps) StopIndex();
         return;
     }
@@ -2044,5 +2144,6 @@ void Launcher_Destroy(void)
 {
     StopHook();
     if (L.hwnd) DestroyWindow(L.hwnd);
+    if (BD.hwnd) DestroyWindow(BD.hwnd);
     StopIndex();
 }
