@@ -275,9 +275,12 @@ BOOL App_Covered(HWND h);
 BOOL App_ShellOpen(LPCWSTR target);         /* abre algo con %WINDIR%\\explorer.exe "target" (validado) */
 BOOL App_ShellSelect(LPCWSTR path);        /* explorer /select,"path": abre su carpeta con él marcado */
 void App_BarSurfaceChanged(void);           /* la barra cambió de color o de vidrio: repintar las esquinas */
+BOOL App_FullscreenOn(const RECT *mon);     /* ventana a pantalla completa arriba del todo en ese monitor */
+BOOL App_RemoteView(void);                  /* hay una sesión de escritorio remoto (Chrome Remote Desktop, RDP) */
+BOOL App_HideFromCapture(BOOL glass);       /* ¿fuera de captura? (por la opción o por el vidrio; nunca en remoto) */
 BOOL Bar_Surface(const RECT *mon, int sx, int sy, DWORD *rgb, BOOL *glass);                   /* ¿alguna ventana ajena (visible) está por encima? */
 void Bar_Raise(void);
-void Bar_FullscreenFg(const RECT *mon);     /* monitor con una ventana a pantalla completa delante, o NULL */
+void Bar_FullscreenFg(void);                /* volver a mirar en cada monitor si hay pantalla completa */
 void Bar_StyleChanged(void);
 void Bar_PulseVolume(BOOL up);
 void Bar_Destroy(void);
@@ -287,7 +290,7 @@ void Dock_Register(void);
 void Dock_Apply(void);
 void Dock_Reposition(void);
 void Dock_Raise(void);
-void Dock_FullscreenFg(const RECT *mon);
+void Dock_FullscreenFg(void);
 void Dock_RestoreTaskbar(void);
 void Dock_ConfigChanged(void);
 void Dock_TrayPeek(BOOL on);

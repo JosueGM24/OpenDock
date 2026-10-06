@@ -155,7 +155,7 @@ static void LoadBarLook(void)
  * barra queda fuera de captura para no verse a sí misma. */
 #define BACK_SCALE 4
 
-static BOOL BarGlass(void) { return g_cfg.material == MAT_GLASS && !B.look.light; }
+static BOOL BarGlass(void) { return g_cfg.material == MAT_GLASS && !B.look.light && !App_RemoteView(); }
 
 static BOOL CaptureBarBack(void)
 {
@@ -227,7 +227,7 @@ BOOL Bar_Surface(const RECT *mon, int sx, int sy, DWORD *rgb, BOOL *glass)
 static void BarApplyCapture(void)
 {
     if (B.hwnd)
-        SetWindowDisplayAffinity(B.hwnd, g_cfg.hideCapture || BarGlass() ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
+        SetWindowDisplayAffinity(B.hwnd, App_HideFromCapture(BarGlass()) ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
 }
 
 /* ───────────────────────── Estado del sistema ───────────────────────── */
@@ -2060,7 +2060,7 @@ static void CC_Open(int section, int tab)
     C.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED, CC_CLASS, L"Centro de control", WS_POPUP,
                              C.ox, C.oy, w, h, NULL, NULL, g_inst, NULL);
     if (!C.hwnd) return;
-    if (g_cfg.hideCapture) SetWindowDisplayAffinity(C.hwnd, WDA_EXCLUDEFROMCAPTURE);
+    if (App_HideFromCapture(FALSE)) SetWindowDisplayAffinity(C.hwnd, WDA_EXCLUDEFROMCAPTURE);
     if (attached) {
         /* como el panel de notificaciones del notch: nace de una pastilla bajo el engrane
          * (margen amplio para que el rebote no se recorte) */
@@ -2365,7 +2365,7 @@ static BOOL TP_Open(void)
     TP.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED, TP_CLASS, L"Bandeja", WS_POPUP,
                               TP.ox, TP.oy, TP.w, TP.h, NULL, NULL, g_inst, NULL);
     if (!TP.hwnd) { TPFree(); return FALSE; }
-    if (g_cfg.hideCapture) SetWindowDisplayAffinity(TP.hwnd, WDA_EXCLUDEFROMCAPTURE);
+    if (App_HideFromCapture(FALSE)) SetWindowDisplayAffinity(TP.hwnd, WDA_EXCLUDEFROMCAPTURE);
     const float ax = max(0.05f, min(0.95f, (cx - TP.ox) / (float)TP.w));
     if (attached) {
         Pop_Open(&TP.pop, TP.hwnd, CS(44), (float)CS(20), ax, 0.0f);
@@ -2532,9 +2532,9 @@ static void BarApplyFullscreen(void)
     if (!fs) SetWindowPos(B.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
-void Bar_FullscreenFg(const RECT *mon)
+void Bar_FullscreenFg(void)
 {
-    FOR_BARS(B.fsFg = mon && EqualRect(mon, &B.mon); BarApplyFullscreen());
+    FOR_BARS(B.fsFg = App_FullscreenOn(&B.mon); BarApplyFullscreen());
 }
 
 static LRESULT BarProcOn(HWND h, UINT m, WPARAM w, LPARAM l)

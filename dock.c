@@ -156,6 +156,8 @@ static BOOL AnyShellOpen(void)
 }
 
 static int DS(int v) { return MulDiv(v, (int)D.dpi, 96); }
+/* desenfoque del fondo: el del ajuste, salvo en escritorio remoto (ahí se vería a sí mismo) */
+static int Blur(void) { return App_RemoteView() ? 0 : g_cfg.dockBlur; }
 static int Base(void) { return DS(kIconSizes[max(0, min(3, g_cfg.dockIcon))]); }
 /* alto de la ventana: icono magnificado + salto */
 static int WinH(void) { return (int)(Base() * 2.3f) + DS(36); }
@@ -943,7 +945,7 @@ static BOOL CaptureBackdrop(void)
     D.backX = x0; D.backY = y0;
     D.gstripDirty = TRUE;                              /* el vidrio se vuelve a teñir */
     CopyMemory(D.back.px, D.raw.px, (SIZE_T)sw * sh * 4);
-    const int r = max(1, DS(g_cfg.dockBlur == 2 ? 24 : 11) / BACK_SCALE);
+    const int r = max(1, DS(Blur() == 2 ? 24 : 11) / BACK_SCALE);
     for (int i = 0; i < 2; ++i) Gfx_BoxBlur(D.back.px, sw, sh, r);
     /* vibrancia: algo más de saturación, como el vidrio de Apple */
     for (int i = 0; i < sw * sh; ++i) {
@@ -1095,7 +1097,7 @@ static void Render(void)
     const float panelBottom = PanelBottom(), panelTop = panelBottom - panelH;
     const float rad = panelH * 0.30f;
 
-    if (g_cfg.dockBlur) {
+    if (Blur()) {
         /* durante la animación no se recaptura (daría tirones); el temporizador lo
          * refresca en cuanto el dock queda quieto */
         if (!D.back.px) CaptureBackdrop();
@@ -1236,7 +1238,7 @@ static void Tick(void)
         busy = TRUE;
     } else if (D.sink != kt) {
         D.sink = kt; D.sinkV = 0;
-        if (g_cfg.dockBlur) SetTimer(D.hwnd, TIMER_DBLURQ, 30, NULL);    /* el vidrio, desde su sitio nuevo */
+        if (Blur()) SetTimer(D.hwnd, TIMER_DBLURQ, 30, NULL);    /* el vidrio, desde su sitio nuevo */
     }
     D.sinkPx = (int)lroundf(D.sink * SinkDepth());
     /* con el cursor quieto encima ya no se redibuja 120 veces por segundo: solo si algo
@@ -1423,7 +1425,7 @@ static void PreviewOpen(int i)
         const DWORD edge = Gfx_Mix(L.panel, L.bar, L.light ? 0.12f : 0.16f);
         const COLORREF border = RGB((edge >> 16) & 255, (edge >> 8) & 255, edge & 255);
         DwmSetWindowAttribute(PV.hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
-        if (g_cfg.hideCapture) SetWindowDisplayAffinity(PV.hwnd, WDA_EXCLUDEFROMCAPTURE);
+        if (App_HideFromCapture(FALSE)) SetWindowDisplayAffinity(PV.hwnd, WDA_EXCLUDEFROMCAPTURE);
         SetTimer(PV.hwnd, PREV_TIMER, 50, NULL);
     }
     PV.dock = s_d;
@@ -2023,10 +2025,10 @@ static void CALLBACK WinHook(HWINEVENTHOOK hk, DWORD ev, HWND w, LONG obj, LONG 
 static void ApplyCapture(void)
 {
     /* con desenfoque el dock debe quedar fuera de captura: si no, se vería a sí mismo */
-    const BOOL exclude = g_cfg.hideCapture || g_cfg.dockBlur;
+    const BOOL exclude = App_HideFromCapture(Blur() != 0);
     if (!D.hwnd) return;
     SetWindowDisplayAffinity(D.hwnd, exclude ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
-    if (g_cfg.dockBlur) {
+    if (Blur()) {
         SetTimer(D.hwnd, TIMER_DBLUR, 3000, NULL);
         if (!s_moveHook)
             s_moveHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, NULL, WinHook, 0, 0,
@@ -2101,11 +2103,11 @@ static void CALLBACK WinHook(HWINEVENTHOOK hk, DWORD ev, HWND w, LONG obj, LONG 
             if (!HiddenAway()) SetTimer(D.hwnd, TIMER_DBLURQ, 160, NULL);
         } else if (ev == EVENT_OBJECT_SHOW) {
             if (app) SetTimer(D.hwnd, TIMER_DRESCAN, 150, NULL);
-            if (g_cfg.dockBlur) SetTimer(D.hwnd, TIMER_DBLURQ, 200, NULL);
+            if (Blur()) SetTimer(D.hwnd, TIMER_DBLURQ, 200, NULL);
         } else {
             /* se ocultó o se cerró: solo importa si era de una app del dock */
             if (KnownWindow(w)) SetTimer(D.hwnd, TIMER_DRESCAN, 150, NULL);
-            if (g_cfg.dockBlur && ev == EVENT_OBJECT_HIDE) SetTimer(D.hwnd, TIMER_DBLURQ, 200, NULL);
+            if (Blur() && ev == EVENT_OBJECT_HIDE) SetTimer(D.hwnd, TIMER_DBLURQ, 200, NULL);
         }
     }
     s_d = o;
@@ -2157,7 +2159,7 @@ static void PollCursor(void)
     if (at == D.atDock) return;
     D.atDock = at;
     if (!at) { D.leaveAt = GetTickCount(); SetTimer(D.hwnd, TIMER_DSINK, SINK_DELAY, NULL); }
-    else if (g_cfg.dockBlur && g_cfg.dockAutoHide == 2) {   /* el vidrio, desde donde va a quedar */
+    else if (Blur() && g_cfg.dockAutoHide == 2) {   /* el vidrio, desde donde va a quedar */
         const int keep = D.sinkPx;
         D.sinkPx = 0;
         CaptureBackdrop();
@@ -2184,13 +2186,13 @@ static void DockApplyFullscreen(void)
 }
 
 /* La pantalla completa se mira por monitor: un juego en uno no esconde el dock del otro. */
-void Dock_FullscreenFg(const RECT *mon)
+void Dock_FullscreenFg(void)
 {
     Dock *o = s_d;
     for (int k = 0; k < MAX_DOCKS; ++k) {
         s_d = &s_docks[k];
         if (!D.hwnd) continue;
-        D.fsFg = mon && EqualRect(mon, &D.mon);
+        D.fsFg = App_FullscreenOn(&D.mon);
         DockApplyFullscreen();
     }
     s_d = o;

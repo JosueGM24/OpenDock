@@ -838,7 +838,7 @@ static void RenderFrame(void)
     const int x0 = max(0, (int)floorf(left - fl) - 1), x1 = min(N.winW, (int)ceilf(right + fl) + 1);
     const int y0 = max(0, (int)floorf(top) - 1),       y1 = min(N.winH, (int)ceilf(bottom) + 1);
     const DWORD bg = L->bg, hairColor = L->light ? 0xC7C7CC : 0x5A5A5E;
-    const BOOL glass = g_cfg.material == MAT_GLASS;
+    const BOOL glass = g_cfg.material == MAT_GLASS && !App_RemoteView();
     const BOOL hair = L->hairline && !(N.attached && Bar_HeightOn(&N.mon) > 0);
     if (glass) CaptureBackdrop();
     const BOOL simple = !glass && L->bgA >= 1.0f && N.fade >= 0.999f && N.op >= 0.999f && N.content.px;
@@ -1447,7 +1447,7 @@ static void Tick(void)
 
     /* en reposo no se redibuja nada: el panel abierto no gasta CPU */
     const float moved = fabsf(N.w - fw) + fabsf(N.h - fh) + fabsf(N.ax - fx) + fabsf(N.fade - ff) * 50 + fabsf(N.op - fo) * 50;
-    if (g_cfg.material == MAT_GLASS && GetTickCount() - N.backTick > 80) N.dirty = TRUE;
+    if (g_cfg.material == MAT_GLASS && !App_RemoteView() && GetTickCount() - N.backTick > 80) N.dirty = TRUE;
     if (moved > 0.02f || N.dirty) RenderFrame();
 }
 
@@ -1575,7 +1575,7 @@ static void OpenReply(int i)
     BOOL dark = !N.look.light;
     DwmSetWindowAttribute(N.reply, 33, &round, sizeof(round));
     DwmSetWindowAttribute(N.reply, 20, &dark, sizeof(dark));
-    if (g_cfg.hideCapture) SetWindowDisplayAffinity(N.reply, WDA_EXCLUDEFROMCAPTURE);
+    if (App_HideFromCapture(FALSE)) SetWindowDisplayAffinity(N.reply, WDA_EXCLUDEFROMCAPTURE);
     const int pad = NS(12), eh = NS(18);
     N.replyEdit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
                                   pad, (hgt - eh) / 2, wdt - 2 * pad, eh, N.reply, NULL, g_inst, NULL);
@@ -1914,7 +1914,7 @@ void Notch_Raise(void)
 
 void Notch_ApplyCapture(void)
 {
-    const BOOL exclude = g_cfg.hideCapture || g_cfg.material == MAT_GLASS;
+    const BOOL exclude = App_HideFromCapture(g_cfg.material == MAT_GLASS);
     if (N.hwnd) SetWindowDisplayAffinity(N.hwnd, exclude ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
 }
 

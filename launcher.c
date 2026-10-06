@@ -1865,7 +1865,7 @@ static void Open(void)
     L.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED, LN_CLASS, L"Buscar", WS_POPUP,
                              L.ox, L.oy, L.w, SS(QH), NULL, NULL, g_inst, NULL);
     if (!L.hwnd) return;
-    if (g_cfg.hideCapture) SetWindowDisplayAffinity(L.hwnd, WDA_EXCLUDEFROMCAPTURE);
+    if (App_HideFromCapture(FALSE)) SetWindowDisplayAffinity(L.hwnd, WDA_EXCLUDEFROMCAPTURE);
     s_iconHwnd = L.hwnd;
     Pop_Open(&L.pop, L.hwnd, SS(30), (float)SS(18), 0.5f, 0.0f);
     L.nres = 0;

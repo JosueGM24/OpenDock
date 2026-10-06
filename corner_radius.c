@@ -27,6 +27,7 @@
 #include <shlobj.h>
 #include <knownfolders.h>
 #include <math.h>
+#include <tlhelp32.h>
 #include "resource.h"
 
 #define CTRL_CLASS      L"OpenDock.Controller"
@@ -297,7 +298,7 @@ static BOOL PaintCorner(HWND hwnd, int px, int py, int s, int which, const RECT 
 static void PaintCornerAt(int i, HWND h)
 {
     const BOOL glass = PaintCorner(h, g_cinfo[i].x, g_cinfo[i].y, g_cinfo[i].s, g_cinfo[i].which, &g_cinfo[i].mon);
-    const int aff = g_cfg.hideCapture || glass ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE;
+    const int aff = App_HideFromCapture(glass) ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE;
     if (g_cinfo[i].affinity != aff) { SetWindowDisplayAffinity(h, (DWORD)aff); g_cinfo[i].affinity = aff; }
 }
 
@@ -366,35 +367,83 @@ static void RebuildCorners(void)
     DestroyCornersFrom(used);
 }
 
-/* ¿La ventana de delante ocupa su monitor entero y sin marco (Escritorio remoto maximizado,
- * vídeo, juego)? Entonces la barra y el dock se apartan en lugar de subirse encima. */
-static BOOL FullscreenForeground(RECT *mon)
+/* ¿Hay una ventana a pantalla completa (Escritorio remoto maximizado, vídeo, juego) arriba
+ * del todo en este monitor? Entonces su barra y su dock se apartan en lugar de subirse
+ * encima. Se mira cada monitor por su orden Z, no solo la ventana con el foco: con dos
+ * monitores, un vídeo a pantalla completa en uno sigue tapándolo aunque se use el otro. */
+static BOOL Skippable(HWND w)
 {
-    HWND w = GetForegroundWindow();
-    if (!w || !IsWindowVisible(w)) return FALSE;
     DWORD pid = 0;
     GetWindowThreadProcessId(w, &pid);
-    if (pid == GetCurrentProcessId()) return FALSE;
+    if (pid == GetCurrentProcessId()) return TRUE;
+    BOOL cloaked = FALSE;     /* otro escritorio virtual, apps de la Store suspendidas */
+    if (SUCCEEDED(DwmGetWindowAttribute(w, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) return TRUE;
     wchar_t cls[64];
-    if (GetClassNameW(w, cls, 64) && (!lstrcmpW(cls, L"Progman") || !lstrcmpW(cls, L"WorkerW") ||
-        !lstrcmpW(cls, L"Shell_TrayWnd") || !lstrcmpW(cls, L"Shell_SecondaryTrayWnd")))
-        return FALSE;
-    if ((GetWindowLongW(w, GWL_STYLE) & WS_CAPTION) == WS_CAPTION) return FALSE;   /* maximizada normal */
-    RECT r;
-    MONITORINFO mi = { sizeof(mi) };
-    if (!GetWindowRect(w, &r) || !GetMonitorInfoW(MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST), &mi)) return FALSE;
-    if (r.left > mi.rcMonitor.left || r.top > mi.rcMonitor.top || r.right < mi.rcMonitor.right || r.bottom < mi.rcMonitor.bottom)
-        return FALSE;
-    *mon = mi.rcMonitor;
-    return TRUE;
+    return GetClassNameW(w, cls, 64) && (!lstrcmpW(cls, L"Progman") || !lstrcmpW(cls, L"WorkerW") ||
+           !lstrcmpW(cls, L"Shell_TrayWnd") || !lstrcmpW(cls, L"Shell_SecondaryTrayWnd"));
+}
+
+BOOL App_FullscreenOn(const RECT *mon)
+{
+    for (HWND w = GetTopWindow(NULL); w; w = GetWindow(w, GW_HWNDNEXT)) {
+        RECT r, x;      /* primero lo barato; lo que pregunta a DWM, solo si está en este monitor */
+        if (!IsWindowVisible(w) || IsIconic(w) || !GetWindowRect(w, &r) || !IntersectRect(&x, &r, mon) || Skippable(w))
+            continue;
+        const BOOL covers = r.left <= mon->left && r.top <= mon->top && r.right >= mon->right && r.bottom >= mon->bottom;
+        if (covers && (GetWindowLongW(w, GWL_STYLE) & WS_CAPTION) != WS_CAPTION) return TRUE;
+        /* avisos, menús y paneles flotantes por encima no cuentan; una ventana normal sí */
+        const LONG ex = GetWindowLongW(w, GWL_EXSTYLE);
+        if (!(ex & (WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE))) return FALSE;
+    }
+    return FALSE;
 }
 
 static void CheckFullscreen(void)
 {
-    RECT mon;
-    const BOOL fs = FullscreenForeground(&mon);
-    Bar_FullscreenFg(fs ? &mon : NULL);
-    Dock_FullscreenFg(fs ? &mon : NULL);
+    Bar_FullscreenFg();
+    Dock_FullscreenFg();
+}
+
+/* ───────────────────────── Escritorio remoto ─────────────────────────
+ * Chrome Remote Desktop transmite la pantalla capturándola: lo que está fuera de captura
+ * (WDA_EXCLUDEFROMCAPTURE: "Ocultar en capturas" y el vidrio) no le llega. Mientras hay una
+ * sesión remota, OpenDock se deja capturar y el vidrio pasa a color sólido (si no, al
+ * capturar lo de detrás se vería a sí mismo); al acabar vuelve todo como estaba. */
+static BOOL s_remote;
+
+static BOOL DetectRemote(void)
+{
+    if (GetSystemMetrics(SM_REMOTESESSION)) return TRUE;          /* Escritorio remoto de Windows */
+    DWORD me = 0, sid = 0;
+    ProcessIdToSessionId(GetCurrentProcessId(), &me);
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return FALSE;
+    PROCESSENTRY32W pe = { sizeof(pe) };
+    BOOL found = FALSE;
+    /* el proceso de escritorio de Chrome Remote Desktop solo existe con alguien conectado
+     * (remoting_host.exe, el servicio, corre siempre y no cuenta) */
+    for (BOOL ok = Process32FirstW(snap, &pe); ok && !found; ok = Process32NextW(snap, &pe))
+        if ((!lstrcmpiW(pe.szExeFile, L"remoting_desktop.exe") || !lstrcmpiW(pe.szExeFile, L"remote_assistance_host.exe")) &&
+            ProcessIdToSessionId(pe.th32ProcessID, &sid) && sid == me)
+            found = TRUE;
+    CloseHandle(snap);
+    return found;
+}
+
+BOOL App_RemoteView(void) { return s_remote; }
+
+BOOL App_HideFromCapture(BOOL glass) { return !s_remote && (g_cfg.hideCapture || glass); }
+
+static void CheckRemote(void)
+{
+    const BOOL now = DetectRemote();
+    if (now == s_remote) return;
+    s_remote = now;
+    RebuildCorners();
+    Notch_StyleChanged();
+    Notch_ApplyCapture();
+    Bar_StyleChanged();
+    Dock_ConfigChanged();
 }
 
 /* La ventana de delante se movió o cambió de tamaño (maximizar el Escritorio remoto lo
@@ -430,6 +479,8 @@ BOOL App_Covered(HWND h)
 
 static void RaiseCorners(void)
 {
+    static int tick;
+    if (!(++tick & 1)) CheckRemote();
     CheckFullscreen();
     Bar_Raise();
     Dock_Raise();

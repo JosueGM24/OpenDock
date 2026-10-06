@@ -297,7 +297,7 @@ int Menu_Track(const MenuItem *items, int n, POINT at)
     M.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED, MN_CLASS, L"Menú", WS_POPUP,
                              M.ox, M.oy, M.w, M.h, NULL, NULL, g_inst, NULL);
     if (!M.hwnd) return 0;
-    if (g_cfg.hideCapture) SetWindowDisplayAffinity(M.hwnd, WDA_EXCLUDEFROMCAPTURE);
+    if (App_HideFromCapture(FALSE)) SetWindowDisplayAffinity(M.hwnd, WDA_EXCLUDEFROMCAPTURE);
     const float ax = max(0.05f, min(0.95f, (at.x - M.ox) / (float)M.w));
     Pop_Open(&M.pop, M.hwnd, MS(24), (float)MS(14), ax, M.oy < at.y ? 1.0f : 0.0f);
     Pop_SetBounds(&M.pop, M.ox, M.oy, M.w, M.h);
