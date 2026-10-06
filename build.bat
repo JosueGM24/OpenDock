@@ -2,6 +2,7 @@
 rem Compilar en Windows con MSVC (Developer Command Prompt / vcvars64.bat).
 rem SQLite: sqlite3.c + sqlite3.h (amalgamacion de sqlite.org) junto al codigo, o bien
 rem SQLITE_DIR apuntando a una instalacion estatica de vcpkg (include\ y lib\sqlite3.lib).
+rem /utf-8 el codigo es UTF-8 (sin esto MSVC lo lee como ANSI y los acentos salen mal)
 rem /MT CRT estatica (sin VCRUNTIME140.dll) - /guard:cf Control Flow Guard - /CETCOMPAT shadow stack
 rem /sdl /GS comprobaciones extra - /DEPENDENTLOADFLAG:0x800 DLL que no son KnownDLLs, solo de System32
 set SQL_SRC=sqlite3.c
@@ -17,7 +18,7 @@ if not exist sqlite3.c (
   set SQL_LIB=/LIBPATH:"%SQLITE_DIR%\lib" sqlite3.lib
 )
 rc /nologo /fo app.res app.rc || exit /b 1
-cl /nologo /O2 /MT /W4 /sdl /GS /guard:cf /DUNICODE /D_UNICODE %SQL_INC% ^
+cl /nologo /utf-8 /O2 /MT /W4 /sdl /GS /guard:cf /DUNICODE /D_UNICODE %SQL_INC% ^
    corner_radius.c gfx.c panel.c notch.c install.c winnotif.c menubar.c dock.c pop.c tray.c launcher.c menu.c %SQL_SRC% app.res ^
    /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup /MANIFEST:NO ^
    /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA /CETCOMPAT /guard:cf /DEPENDENTLOADFLAG:0x800 ^
