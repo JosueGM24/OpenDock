@@ -43,6 +43,8 @@
 #define PREV_DELAY    400
 #define PREV_CLASS    L"OpenDock.DockPreview"
 #define PREV_MAX      8
+#define PEEK_CLASS    L"OpenDock.DockPeek"
+#define PEEK_DELAY    350    /* cursor quieto en una tarjeta: esa ventana, en su sitio */
 #define STATUS_MS     10000  /* repaso de seguridad: lo normal llega por avisos */
 #define MAX_ITEMS     48
 #define ICON_GAP      12
@@ -1358,6 +1360,207 @@ static float PvZeta(void)
     static const float z[3] = { 0.85f, 0.62f, 0.40f };     /* suave · normal · bouncy */
     return z[max(0, min(2, g_cfg.bounce))];
 }
+
+/* ── Vistazo: la ventana de la tarjeta señalada, en su sitio ──
+ * Como el vistazo de la barra de tareas, sin su API no documentada: una ventana que cubre
+ * el monitor de esa ventana, por debajo del dock y de la vista previa, con una foto de la
+ * pantalla tomada justo antes que se oscurece y se desenfoca poco a poco, y encima la
+ * miniatura DWM de la ventana a su tamaño real y en su sitio (entra con el muelle del tema).
+ * Solo existe mientras se mira: al soltar la tarjeta se libera todo. */
+static struct {
+    HWND    hwnd, target, arm;
+    HANDLE  thumb;
+    RECT    mon;                /* monitor que cubre (pantalla) */
+    Canvas  cur, dim;           /* lo presentado · la foto oscurecida y desenfocada */
+    float   t, ta, s, sv;       /* fondo 0→1 · miniatura 0→1 · escala de la miniatura */
+    DWORD   armAt, outAt;
+    BOOL    animating;
+    LARGE_INTEGER last;
+} PK;
+
+static void PeekHide(void)
+{
+    PK.arm = NULL;
+    PK.outAt = 0;
+    if (PK.thumb) { DwmUnregisterThumbnail(PK.thumb); PK.thumb = NULL; }
+    if (PK.hwnd) { const HWND h = PK.hwnd; PK.hwnd = NULL; KillTimer(h, 1); DestroyWindow(h); }
+    PK.target = NULL;
+    PK.animating = FALSE;
+    Canvas_Free(&PK.cur);
+    Canvas_Free(&PK.dim);
+}
+
+static void PeekThumb(void)
+{
+    RECT wr;
+    if (!PK.thumb || !PK.target || !GetWindowRect(PK.target, &wr)) return;
+    const float cx = (wr.left + wr.right) * 0.5f - PK.mon.left, cy = (wr.top + wr.bottom) * 0.5f - PK.mon.top;
+    const float hw = (wr.right - wr.left) * 0.5f * PK.s, hh = (wr.bottom - wr.top) * 0.5f * PK.s;
+    DWM_THUMBNAIL_PROPERTIES tp = { 0 };
+    tp.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY;
+    SetRect(&tp.rcDestination, (int)lroundf(cx - hw), (int)lroundf(cy - hh), (int)lroundf(cx + hw), (int)lroundf(cy + hh));
+    tp.opacity = (BYTE)(255.0f * max(0.0f, min(1.0f, PK.ta)) + 0.5f);
+    tp.fVisible = TRUE;
+    tp.fSourceClientAreaOnly = FALSE;
+    DwmUpdateThumbnailProperties(PK.thumb, &tp);
+}
+
+static void PeekKick(void)
+{
+    if (!PK.hwnd || PK.animating) return;
+    PK.animating = TRUE;
+    QueryPerformanceCounter(&PK.last);
+    SetTimer(PK.hwnd, 1, 10, NULL);
+}
+
+/* La foto del monitor: tal cual en cur (así entra sin saltos) y, aparte, a 1/4, desenfocada,
+ * desaturada y oscura, vuelta a su tamaño en dim. */
+static BOOL PeekSnapshot(void)
+{
+    const int w = PK.mon.right - PK.mon.left, h = PK.mon.bottom - PK.mon.top;
+    if (w <= 0 || h <= 0 || !Canvas_Init(&PK.cur, w, h) || !Canvas_Init(&PK.dim, w, h)) return FALSE;
+    HDC screen = GetDC(NULL);
+    BitBlt(PK.cur.dc, 0, 0, w, h, screen, PK.mon.left, PK.mon.top, SRCCOPY);
+    ReleaseDC(NULL, screen);
+    Canvas sm = { 0 };
+    const int sw = max(1, w / 4), sh = max(1, h / 4);
+    if (!Canvas_Init(&sm, sw, sh)) return FALSE;
+    SetStretchBltMode(sm.dc, HALFTONE);
+    SetBrushOrgEx(sm.dc, 0, 0, NULL);
+    StretchBlt(sm.dc, 0, 0, sw, sh, PK.cur.dc, 0, 0, w, h, SRCCOPY);
+    GdiFlush();
+    for (int i = 0; i < 2; ++i) Gfx_BoxBlur(sm.px, sw, sh, max(1, DS(14) / 4));
+    for (int i = 0; i < sw * sh; ++i) {
+        const DWORD v = sm.px[i];
+        const float r = (float)((v >> 16) & 255), g = (float)((v >> 8) & 255), b = (float)(v & 255);
+        const float y = r * 0.30f + g * 0.59f + b * 0.11f;
+        const int R = (int)((y + (r - y) * 0.45f) * 0.42f), G = (int)((y + (g - y) * 0.45f) * 0.42f), B = (int)((y + (b - y) * 0.45f) * 0.42f);
+        sm.px[i] = (DWORD)R << 16 | (DWORD)G << 8 | (DWORD)B;
+    }
+    SetStretchBltMode(PK.dim.dc, HALFTONE);
+    SetBrushOrgEx(PK.dim.dc, 0, 0, NULL);
+    StretchBlt(PK.dim.dc, 0, 0, w, h, sm.dc, 0, 0, sw, sh, SRCCOPY);
+    GdiFlush();
+    Canvas_Free(&sm);
+    return TRUE;
+}
+
+/* Vistazo a target (con la vista previa y su dock en D). */
+static void PeekShow(HWND target)
+{
+    RECT wr;
+    MONITORINFO mi = { sizeof(mi) };
+    if (!IsWindow(target) || IsIconic(target) || !GetWindowRect(target, &wr) ||
+        !GetMonitorInfoW(MonitorFromWindow(target, MONITOR_DEFAULTTONEAREST), &mi)) { PeekHide(); return; }
+    if (PK.hwnd && !EqualRect(&PK.mon, &mi.rcMonitor)) PeekHide();     /* en otro monitor: otra foto */
+    if (!PK.hwnd) {
+        PK.mon = mi.rcMonitor;
+        if (!PeekSnapshot()) { PeekHide(); return; }
+        PK.hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, PEEK_CLASS, L"OpenDock Vistazo", WS_POPUP,
+                                  PK.mon.left, PK.mon.top, PK.mon.right - PK.mon.left, PK.mon.bottom - PK.mon.top,
+                                  NULL, NULL, g_inst, NULL);
+        if (!PK.hwnd) { PeekHide(); return; }
+        const DWORD square = 1;     /* DWMWCP_DONOTROUND: cubre el monitor entero */
+        DwmSetWindowAttribute(PK.hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &square, sizeof(square));
+        if (App_HideFromCapture(FALSE)) SetWindowDisplayAffinity(PK.hwnd, WDA_EXCLUDEFROMCAPTURE);
+        PK.t = 0;
+        /* justo por debajo del dock (y así de la vista previa, que está encima de él) */
+        SetWindowPos(PK.hwnd, D.hwnd ? D.hwnd : HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+    if (PK.target != target) {
+        if (PK.thumb) { DwmUnregisterThumbnail(PK.thumb); PK.thumb = NULL; }
+        PK.target = target;
+        if (FAILED(DwmRegisterThumbnail(PK.hwnd, target, &PK.thumb))) PK.thumb = NULL;
+        PK.ta = 0;
+        PK.s = 0.97f;
+        PK.sv = 0;
+        PeekThumb();
+    }
+    PK.arm = NULL;
+    PK.outAt = 0;
+    PeekKick();
+}
+
+static void PeekFrame(void)
+{
+    LARGE_INTEGER t, f;
+    QueryPerformanceCounter(&t);
+    QueryPerformanceFrequency(&f);
+    float dt = (float)(t.QuadPart - PK.last.QuadPart) / (float)f.QuadPart;
+    PK.last = t;
+    if (dt > 0.05f) dt = 0.05f;
+    const float t0 = PK.t;
+    PK.t += (1.0f - PK.t) * min(1.0f, dt * 12.0f);
+    if (PK.t > 0.995f) PK.t = 1.0f;
+    PK.ta += (1.0f - PK.ta) * min(1.0f, dt * 14.0f);
+    if (PK.ta > 0.995f) PK.ta = 1.0f;
+    for (int k = 0; k < 2; ++k) Spring2(&PK.s, &PK.sv, 1.0f, dt * 0.5f, 380.0f, PvZeta());
+    if (fabsf(PK.s - 1.0f) < 0.0008f && fabsf(PK.sv) < 0.01f) { PK.s = 1.0f; PK.sv = 0; }
+
+    /* el fondo avanza de la foto tal cual a la oscurecida: cur se acerca a dim lo que falta */
+    if (PK.t != t0 && PK.dim.px && PK.cur.px) {
+        const DWORD k = (DWORD)(256.0f * (PK.t - t0) / max(0.001f, 1.0f - t0) + 0.5f), ik = 256 - min(k, 256u);
+        DWORD *a = PK.cur.px;
+        const DWORD *b = PK.dim.px;
+        const int n = PK.cur.w * PK.cur.h;
+        for (int i = 0; i < n; ++i) {
+            const DWORD x = a[i], y = b[i];
+            a[i] = ((((x & 0xFF00FF) * ik + (y & 0xFF00FF) * k) >> 8) & 0xFF00FF) |
+                   ((((x & 0x00FF00) * ik + (y & 0x00FF00) * k) >> 8) & 0x00FF00);
+        }
+        if (PK.t >= 1.0f) Canvas_Free(&PK.dim);     /* ya son iguales */
+        InvalidateRect(PK.hwnd, NULL, FALSE);
+        UpdateWindow(PK.hwnd);
+    }
+    PeekThumb();
+    if (PK.t >= 1.0f && PK.ta >= 1.0f && PK.s == 1.0f) {
+        KillTimer(PK.hwnd, 1);
+        PK.animating = FALSE;
+    }
+}
+
+/* Cada 50 ms con la vista previa abierta: ¿hay que mirar alguna ventana? Un hueco breve
+ * entre tarjetas no lo quita (si no, al pasar de una a otra parpadearía). */
+static void PeekUpdate(void)
+{
+    const int i = PV.closing ? -1 : PV.hot;
+    const HWND want = i >= 0 && i < PV.n && PV.thumb[i] && !IsIconic(PV.wins[i]) ? PV.wins[i] : NULL;
+    const DWORD now = GetTickCount();
+    if (!want) {
+        PK.arm = NULL;
+        if (!PK.hwnd) return;
+        if (!PK.outAt) PK.outAt = now | 1;
+        else if (now - PK.outAt >= 160) PeekHide();
+        return;
+    }
+    PK.outAt = 0;
+    if (PK.hwnd) { if (PK.target != want) PeekShow(want); return; }
+    if (PK.arm != want) { PK.arm = want; PK.armAt = now; return; }
+    if (now - PK.armAt >= PEEK_DELAY) PeekShow(want);
+}
+
+static LRESULT CALLBACK PeekProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    switch (m) {
+    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+    case WM_ERASEBKGND:    return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(h, &ps);
+        if (PK.cur.dc) BitBlt(dc, 0, 0, PK.cur.w, PK.cur.h, PK.cur.dc, 0, 0, SRCCOPY);
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_TIMER:
+        if (h == PK.hwnd && w == 1) PeekFrame();
+        return 0;
+    case WM_LBUTTONDOWN: case WM_RBUTTONDOWN: case WM_MBUTTONDOWN:
+        if (h == PK.hwnd) PeekHide();       /* clic fuera de la vista previa: se acabó el vistazo */
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
 static float PvPillW(void) { return min(PV.W * 0.5f, (float)DS(90)); }
 static float PvPillH(void) { return min(PV.H * 0.4f, (float)DS(16)); }
 
@@ -1536,6 +1739,7 @@ static void PreviewFrame(void)
 static void PreviewClose(void)
 {
     if (!PV.hwnd || PV.closing) return;
+    PeekHide();
     if (!IsWindowVisible(PV.hwnd)) { PreviewDestroy(); return; }
     PV.closing = TRUE;
     PV.hot = PV.pressed = -1;
@@ -1546,6 +1750,7 @@ static void PreviewClose(void)
 static void PreviewDestroy(void)
 {
     if (!PV.hwnd) return;
+    PeekHide();
     const HWND h = PV.hwnd;
     PV.hwnd = NULL;             /* antes de destruir: WM_DESTROY ya no vuelve a entrar aquí */
     PreviewDropThumbs();
@@ -1751,7 +1956,8 @@ static void PreviewCheck(void)
         && WindowFromPoint(pt) != D.hwnd) { PreviewClose(); return; }      /* clic en otra parte */
     if (inside || onIcon) PV.outSince = 0;
     else if (!PV.outSince) PV.outSince = GetTickCount() | 1;
-    else if (GetTickCount() - PV.outSince >= 300) PreviewClose();
+    else if (GetTickCount() - PV.outSince >= 300) { PreviewClose(); return; }
+    PeekUpdate();
 }
 
 static LRESULT PreviewProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -1816,6 +2022,7 @@ static LRESULT PreviewProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
     }
     case WM_DESTROY:
         if (PV.hwnd == h) {
+            PeekHide();
             PV.hwnd = NULL; PreviewDropThumbs(); Canvas_Free(&PV.cv); Canvas_Free(&PV.full);
             PV.dock = NULL; PV.n = 0; PV.closing = PV.animating = FALSE;
         }
@@ -2619,6 +2826,13 @@ void Dock_Register(void)
     pc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
     pc.lpszClassName = PREV_CLASS;
     RegisterClassExW(&pc);
+
+    WNDCLASSEXW kc = { sizeof(kc) };
+    kc.lpfnWndProc   = PeekProc;
+    kc.hInstance     = g_inst;
+    kc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
+    kc.lpszClassName = PEEK_CLASS;
+    RegisterClassExW(&kc);
 }
 
 /* Crea el dock d en el monitor mon (el principal, si d es s_docks[0]). */
