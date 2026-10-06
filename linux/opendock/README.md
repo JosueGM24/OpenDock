@@ -25,7 +25,7 @@ makepkg -si          # paquete opendock-git
 
 ```sh
 sudo apt install build-essential meson ninja-build pkg-config libgtk-4-dev libglib2.0-dev \
-    libwayland-dev libx11-dev libpulse-dev libcanberra-dev
+    libwayland-dev libx11-dev libxcomposite-dev libpulse-dev libcanberra-dev
 # gtk4-layer-shell: en Ubuntu 24.10+ y Debian 13 es libgtk4-layer-shell-dev;
 # en Ubuntu 24.04 hay que compilarlo (https://github.com/wmww/gtk4-layer-shell).
 meson setup build linux/opendock --prefix=/usr
@@ -37,7 +37,7 @@ sudo meson install -C build
 
 ```sh
 sudo dnf install gcc meson ninja-build pkgconf-pkg-config gtk4-devel gtk4-layer-shell-devel \
-    wayland-devel libX11-devel pulseaudio-libs-devel libcanberra-devel
+    wayland-devel libX11-devel libXcomposite-devel pulseaudio-libs-devel libcanberra-devel
 meson setup build linux/opendock --prefix=/usr
 meson compile -C build
 sudo meson install -C build

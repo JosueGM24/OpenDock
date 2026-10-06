@@ -46,7 +46,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates git build-essential meson ninja-build \
             pkg-config dpkg-dev libgtk-4-dev libglib2.0-dev libgtk4-layer-shell-dev libwayland-dev \
-            libwayland-bin libx11-dev libpulse-dev libcanberra-dev
+            libwayland-bin libx11-dev libxcomposite-dev libpulse-dev libcanberra-dev
       - uses: actions/checkout@v4
       - name: Versión
         run: |
@@ -99,7 +99,7 @@ jobs:
       - name: Paquetes
         run: |
           dnf install -y git gcc meson ninja-build pkgconf-pkg-config rpm-build gtk4-devel \
-            gtk4-layer-shell-devel wayland-devel libX11-devel pulseaudio-libs-devel libcanberra-devel
+            gtk4-layer-shell-devel wayland-devel libX11-devel libXcomposite-devel pulseaudio-libs-devel libcanberra-devel
       - uses: actions/checkout@v4
       - name: Versión
         run: |
@@ -160,7 +160,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed base-devel git meson ninja \
-            gtk4 gtk4-layer-shell glib2 libpulse libcanberra libx11 wayland hicolor-icon-theme
+            gtk4 gtk4-layer-shell glib2 libpulse libcanberra libx11 libxcomposite wayland hicolor-icon-theme
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0

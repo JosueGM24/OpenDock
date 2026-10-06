@@ -7,7 +7,7 @@ pkgdesc="Esquinas redondeadas, notch con notificaciones, barra superior y dock p
 arch=('x86_64' 'aarch64')
 url="https://github.com/JosueGM24/OpenDock"
 license=('MIT')
-depends=('gtk4' 'glib2' 'gtk4-layer-shell' 'wayland' 'libx11' 'libpulse' 'libcanberra'
+depends=('gtk4' 'glib2' 'gtk4-layer-shell' 'wayland' 'libx11' 'libxcomposite' 'libpulse' 'libcanberra'
          'hicolor-icon-theme')
 makedepends=('git' 'meson' 'ninja')
 optdepends=('networkmanager: Wi-Fi en la barra y el centro de control'
