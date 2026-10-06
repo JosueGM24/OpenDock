@@ -1,9 +1,16 @@
 // Dock inferior: favoritos + apps abiertas, lupa gaussiana, rebote de
 // lanzamiento, indicadores y ocultación a la mitad / del todo con reserva
 // de espacio de trabajo (ver linux/DESIGN.md, sección "Dock").
+//
+// Un dock en cada monitor (DockView), con las mismas apps y su propia lupa,
+// ocultación y pantalla completa; DockManager lleva las señales comunes y
+// rehace los docks al cambiar los monitores. Al dejar el cursor sobre una app
+// abierta (o al pulsar una con varias ventanas) sale la vista previa de sus
+// ventanas, con el muelle de OpenDock.
 
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
+import Pango from 'gi://Pango';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -21,29 +28,29 @@ const PAD_X = 16;
 const PAD_Y = 11;
 const HIDE_DELAY_MS = 450;
 
+// vista previa (los mismos números que la de Windows)
+const PREVIEW_DELAY_MS = 400;     // cursor quieto sobre la app
+const PREVIEW_LEAVE_MS = 300;     // fuera del icono y de la vista previa
+const THUMB_W = 200;
+const THUMB_H = 130;
+const CARD_PAD = 10;
+const CARD_GAP = 10;
+const PREVIEW_LIFT = 10;          // separación sobre el dock
+
 export class DockManager {
     constructor(settings, extensionObject) {
         this._settings = settings;
         this._extensionObject = extensionObject;
-        this._menu = null;
-        this._menuManager = null;
-        this._menuIdleId = null;
-        this._rebuildPending = false;
-        this._actor = null;
-        this._iconBox = null;
-        this._icons = [];
+        this._views = [];
         this._settingsIds = [];
         this._appSystemIds = [];
         this._favoritesId = null;
         this._monitorsChangedId = null;
-        this._hideTimeoutId = null;
-        this._offsetSpring = new Spring(260, 0.95, 0);
-        this._runner = new SpringRunner(dt => this._tick(dt));
-        this._hovering = false;
+        this._fullscreenId = null;
+        this._focusId = null;
     }
 
     enable() {
-        this._buildActor();
         for (const key of ['material', 'dock-icon-size', 'show-dock', 'dock-hide-mode']) {
             this._settingsIds.push(this._settings.connect(`changed::${key}`,
                 () => this._rebuild()));
@@ -52,9 +59,9 @@ export class DockManager {
         this._appSystemIds.push(appSystem.connect('app-state-changed', () => this._rebuild()));
         this._appSystemIds.push(appSystem.connect('installed-changed', () => this._rebuild()));
         this._favoritesId = AppFavorites.getAppFavorites().connect('changed', () => this._rebuild());
-        this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => this._relayout());
-        this._rebuild();
-        this._relayout();
+        this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => this._syncViews());
+        this._fullscreenId = global.display.connect('in-fullscreen-changed', () => this._syncFullscreen());
+        this._syncViews();
     }
 
     disable() {
@@ -73,15 +80,71 @@ export class DockManager {
             Main.layoutManager.disconnect(this._monitorsChangedId);
             this._monitorsChangedId = null;
         }
-        if (this._hideTimeoutId) {
-            GLib.source_remove(this._hideTimeoutId);
-            this._hideTimeoutId = null;
+        if (this._fullscreenId) {
+            global.display.disconnect(this._fullscreenId);
+            this._fullscreenId = null;
+        }
+        this._destroyViews();
+    }
+
+    _destroyViews() {
+        for (const view of this._views)
+            view.destroy();
+        this._views = [];
+    }
+
+    // Un dock por monitor: al conectar, quitar o reordenar monitores se rehacen todos.
+    _syncViews() {
+        this._destroyViews();
+        const monitors = Main.layoutManager.monitors;
+        for (let i = 0; i < monitors.length; i++)
+            this._views.push(new DockView(this._settings, this._extensionObject, i));
+        this._rebuild();
+        this._syncFullscreen();
+    }
+
+    _rebuild() {
+        for (const view of this._views)
+            view.rebuild();
+    }
+
+    _syncFullscreen() {
+        for (const view of this._views)
+            view.setFullscreen(global.display.get_monitor_in_fullscreen(view.monitorIndex));
+    }
+}
+
+class DockView {
+    constructor(settings, extensionObject, monitorIndex) {
+        this._settings = settings;
+        this._extensionObject = extensionObject;
+        this.monitorIndex = monitorIndex;
+        this._monitor = Main.layoutManager.monitors[monitorIndex];
+        this._menu = null;
+        this._menuIdleId = null;
+        this._rebuildPending = false;
+        this._icons = [];
+        this._hideTimeoutId = null;
+        this._hovering = false;
+        this._fullscreen = false;
+        this._offsetSpring = new Spring(260, 0.95, 0);
+        this._runner = new SpringRunner(dt => this._tick(dt));
+        this._preview = null;
+        this._previewTimeoutId = null;
+        this._previewLeaveId = null;
+        this._previewSuppress = null;    // icono recién pulsado: sin vista previa hasta salir de él
+        this._buildActor();
+    }
+
+    destroy() {
+        for (const id of ['_hideTimeoutId', '_menuIdleId', '_previewTimeoutId', '_previewLeaveId']) {
+            if (this[id]) {
+                GLib.source_remove(this[id]);
+                this[id] = null;
+            }
         }
         this._runner.stop();
-        if (this._menuIdleId) {
-            GLib.source_remove(this._menuIdleId);
-            this._menuIdleId = null;
-        }
+        this._closePreview(true);
         this._destroyMenu(true);
         this._menuManager = null;
         if (this._actor) {
@@ -89,6 +152,7 @@ export class DockManager {
             this._actor.destroy();
             this._actor = null;
         }
+        this._icons = [];
     }
 
     _palette() {
@@ -129,19 +193,9 @@ export class DockManager {
 
         // Reserva la mitad del alto del panel como zona de trabajo, igual
         // que una AppBar: las ventanas maximizadas no quedan tapadas.
-        Main.layoutManager.addChrome(this._actor, {
-            affectsStruts: true,
-            trackFullscreen: true,
-        });
+        // La pantalla completa la lleva setFullscreen(), monitor a monitor.
+        Main.layoutManager.addChrome(this._actor, {affectsStruts: true});
         this._menuManager = new PopupMenu.PopupMenuManager(this._actor);
-    }
-
-    _relayout() {
-        const monitor = Main.layoutManager.primaryMonitor;
-        if (!monitor || !this._actor)
-            return;
-        this._monitor = monitor;
-        this._layoutIcons();
     }
 
     _layoutIcons() {
@@ -160,19 +214,32 @@ export class DockManager {
             this._monitor.y + this._monitor.height - height - MARGIN_BOTTOM);
     }
 
-    _rebuild() {
+    _updateVisible() {
+        if (this._actor)
+            this._actor.visible = this._settings.get_boolean('show-dock') && !this._fullscreen;
+    }
+
+    // Una ventana a pantalla completa en este monitor: su dock se aparta (el de los demás, no).
+    setFullscreen(fullscreen) {
+        if (fullscreen === this._fullscreen)
+            return;
+        this._fullscreen = fullscreen;
+        if (fullscreen) {
+            this._closePreview();
+            this._menu?.close(BoxPointer.PopupAnimation.NONE);
+        }
+        this._updateVisible();
+    }
+
+    rebuild() {
         // con el menú abierto, su icono no puede desaparecer: se rehace al cerrarlo
         if (this._menu) {
             this._rebuildPending = true;
             return;
         }
-        if (!this._settings.get_boolean('show-dock')) {
-            if (this._actor)
-                this._actor.visible = false;
+        this._updateVisible();
+        if (!this._settings.get_boolean('show-dock'))
             return;
-        }
-        if (this._actor)
-            this._actor.visible = true;
 
         this._iconBox.destroy_all_children();
         this._icons = [];
@@ -198,6 +265,8 @@ export class DockManager {
             this._icons.push(this._buildIcon(entry.app, baseSize));
 
         this._layoutIcons();
+        if (this._preview)
+            this._preview.refresh();
     }
 
     _buildIcon(app, baseSize) {
@@ -207,14 +276,16 @@ export class DockManager {
 
         const wrapper = new St.BoxLayout({vertical: true, reactive: true});
         const texture = app.create_icon_texture(baseSize);
-        const iconButton = new St.Button({child: texture});
+        const iconButton = new St.Button({child: texture, track_hover: true});
         iconButton.connect('clicked', () => this._activate(app, iconButton));
         iconButton.connect('button-press-event', (_actor, event) => {
             if (event.get_button() !== Clutter.BUTTON_SECONDARY)
                 return Clutter.EVENT_PROPAGATE;
+            this._closePreview();
             this._openMenu(app, iconButton);
             return Clutter.EVENT_STOP;
         });
+        iconButton.connect('notify::hover', () => this._onIconHover(app, iconButton));
         wrapper.add_child(iconButton);
 
         const indicator = new St.Widget({
@@ -232,6 +303,16 @@ export class DockManager {
     }
 
     _activate(app, iconButton) {
+        // varias ventanas: se elige en la vista previa (como en la barra de tareas)
+        if (app.get_n_windows() >= 2) {
+            if (this._preview && this._preview.app === app)
+                this._closePreview();
+            else
+                this._openPreview(app, iconButton);
+            return;
+        }
+        this._closePreview();
+        this._previewSuppress = iconButton;
         const wasRunning = app.get_n_windows() > 0;
         if (!wasRunning)
             this._bounce(iconButton);
@@ -240,6 +321,96 @@ export class DockManager {
         } catch (e) {
             logError(e, `OpenDock: no se pudo abrir ${app.get_id()}`);
         }
+    }
+
+    // ---- vista previa de las ventanas --------------------------------------
+
+    _onIconHover(app, iconButton) {
+        if (iconButton.hover) {
+            this._cancelPreviewLeave();
+            if (this._previewSuppress === iconButton || this._menu || app.get_n_windows() === 0)
+                return;
+            if (this._preview) {          // ya abierta: cambia al momento de app
+                if (this._preview.app !== app)
+                    this._openPreview(app, iconButton);
+                return;
+            }
+            if (this._previewTimeoutId)
+                GLib.source_remove(this._previewTimeoutId);
+            this._previewTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, PREVIEW_DELAY_MS, () => {
+                this._previewTimeoutId = null;
+                if (iconButton.hover && !this._menu && app.get_n_windows() > 0)
+                    this._openPreview(app, iconButton);
+                return GLib.SOURCE_REMOVE;
+            });
+        } else {
+            if (this._previewSuppress === iconButton)
+                this._previewSuppress = null;
+            if (this._previewTimeoutId) {
+                GLib.source_remove(this._previewTimeoutId);
+                this._previewTimeoutId = null;
+            }
+            this._schedulePreviewLeave();
+        }
+    }
+
+    _openPreview(app, iconButton) {
+        if (this._previewTimeoutId) {
+            GLib.source_remove(this._previewTimeoutId);
+            this._previewTimeoutId = null;
+        }
+        this._cancelPreviewLeave();
+        this._closePreview(true);
+        const preview = new WindowPreview(this, app, iconButton);
+        if (preview.empty) {
+            preview.close(true);
+            return;
+        }
+        this._preview = preview;
+        this._show();
+    }
+
+    _closePreview(now = false) {
+        const preview = this._preview;
+        if (!preview)
+            return;
+        this._preview = null;
+        preview.close(now);
+        if (!now && !this._hovering)
+            this._scheduleHide();
+    }
+
+    _cancelPreviewLeave() {
+        if (this._previewLeaveId) {
+            GLib.source_remove(this._previewLeaveId);
+            this._previewLeaveId = null;
+        }
+    }
+
+    // se cierra un momento después de salir del icono y de la vista previa
+    _schedulePreviewLeave() {
+        if (!this._preview)
+            return;
+        this._cancelPreviewLeave();
+        this._previewLeaveId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, PREVIEW_LEAVE_MS, () => {
+            this._previewLeaveId = null;
+            const p = this._preview;
+            if (p && !p.hovered && !p.iconButton.hover)
+                this._closePreview();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    previewHoverChanged() {
+        if (this._preview?.hovered)
+            this._cancelPreviewLeave();
+        else
+            this._schedulePreviewLeave();
+    }
+
+    previewEmptied(preview) {
+        if (this._preview === preview)
+            this._closePreview();
     }
 
     // ---- menú del clic derecho -------------------------------------------
@@ -345,7 +516,7 @@ export class DockManager {
         }
         if (this._rebuildPending && this._actor) {
             this._rebuildPending = false;
-            this._rebuild();
+            this.rebuild();
         }
         if (!this._hovering)
             this._scheduleHide();
@@ -416,7 +587,7 @@ export class DockManager {
             GLib.source_remove(this._hideTimeoutId);
         this._hideTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, HIDE_DELAY_MS, () => {
             this._hideTimeoutId = null;
-            if (!this._hovering && !this._menu)
+            if (!this._hovering && !this._menu && !this._preview)
                 this._hide(mode);
             return GLib.SOURCE_REMOVE;
         });
@@ -433,9 +604,283 @@ export class DockManager {
 
     _tick(dt) {
         this._offsetSpring.step(dt);
-        if (this._actor && this._monitor) {
+        if (this._actor && this._monitor)
             this._actor.translation_y = this._offsetSpring.value;
-        }
         return this._offsetSpring.isSettled();
+    }
+
+    get palette() {
+        return this._palette();
+    }
+
+    get bounce() {
+        return this._settings.get_string('bounce');
+    }
+
+    get monitor() {
+        return this._monitor;
+    }
+
+    get dockTop() {
+        return this._monitor.y + this._monitor.height - PANEL_HEIGHT - MARGIN_BOTTOM;
+    }
+}
+
+// Vista previa: una tarjeta por ventana con su imagen en vivo (Clutter.Clone del
+// actor de la ventana), icono, título y ✕. Nace del icono con el muelle de OpenDock
+// (rebote según el ajuste), la tarjeta señalada crece (1,035) y las demás se
+// apartan (0,965), y al cerrarse vuelve al icono.
+class WindowPreview {
+    constructor(view, app, iconButton) {
+        this._view = view;
+        this.app = app;
+        this.iconButton = iconButton;
+        this.hovered = false;
+        this.empty = false;
+        this._closing = false;
+        this._fit = 1;
+        this._refreshId = null;
+        this._cards = [];
+        this._hot = null;
+        this._windowIds = [];
+        this._iconDestroyId = iconButton.connect('destroy', () => view.previewEmptied(this));
+
+        const zeta = zetaFor(view.bounce);
+        this._scale = new Spring(380, zeta, 0.6);
+        this._fade = new Spring(420, 1.0, 0);
+        this._scale.setTarget(1);
+        this._fade.setTarget(1);
+        this._runner = new SpringRunner(dt => this._tick(dt), () => this._settled());
+
+        const palette = view.palette;
+        this.actor = new St.BoxLayout({
+            name: 'opendock-preview',
+            reactive: true,
+            track_hover: true,
+            style: `background-color: ${cssRgba(palette.background, 0.92)}; border-radius: 18px; ` +
+                `padding: ${CARD_PAD}px; spacing: ${CARD_GAP}px;`,
+            opacity: 0,
+        });
+        this.actor.connect('notify::hover', () => {
+            this.hovered = this.actor.hover;
+            view.previewHoverChanged();
+        });
+        Main.layoutManager.addTopChrome(this.actor);
+        this._build();
+        this._runner.start();
+    }
+
+    _build() {
+        const windows = this.app.get_windows().filter(w => !w.skip_taskbar);
+        this.actor.destroy_all_children();
+        this._cards = [];
+        this._hot = null;
+        for (const win of windows)
+            this._cards.push(this._buildCard(win));
+        this._watchWindows(windows);
+        this.empty = !this._cards.length;
+        if (this.empty) {
+            this._view.previewEmptied(this);
+            return;
+        }
+        this._place();
+    }
+
+    refresh() {
+        if (!this._closing)
+            this._build();
+    }
+
+    _watchWindows(windows) {
+        this._unwatchWindows();
+        for (const win of windows) {
+            // la ✕ pide cerrar; la tarjeta se va cuando la ventana se cierra de verdad
+            const id = win.connect('unmanaged', () => {
+                if (this._refreshId)
+                    return;
+                this._refreshId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                    this._refreshId = null;
+                    this.refresh();
+                    return GLib.SOURCE_REMOVE;
+                });
+            });
+            this._windowIds.push([win, id]);
+        }
+    }
+
+    _unwatchWindows() {
+        for (const [win, id] of this._windowIds) {
+            try {
+                win.disconnect(id);
+            } catch (e) {
+                // la ventana ya no existe
+            }
+        }
+        this._windowIds = [];
+    }
+
+    _buildCard(win) {
+        const palette = this._view.palette;
+        const card = new St.Button({
+            reactive: true,
+            track_hover: true,
+            can_focus: false,
+            style: 'border-radius: 12px; padding: 6px;',
+        });
+        const box = new St.BoxLayout({vertical: true, style: 'spacing: 6px;'});
+        card.set_child(box);
+
+        const header = new St.BoxLayout({style: 'spacing: 6px;'});
+        header.add_child(this.app.create_icon_texture(16));
+        const title = new St.Label({
+            text: win.get_title() || this.app.get_name(),
+            style: `color: ${palette.text}; font-size: 12px; font-weight: 600;`,
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        title.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        header.add_child(title);
+        const close = new St.Button({
+            label: '✕',
+            reactive: true,
+            track_hover: true,
+            opacity: 0,
+            style: `color: ${palette.text}; font-size: 11px; border-radius: 9px; ` +
+                'width: 18px; height: 18px; padding: 0;',
+        });
+        close.connect('notify::hover', () => close.set_style(
+            `color: ${close.hover ? '#FFFFFF' : palette.text}; font-size: 11px; border-radius: 9px; ` +
+            `width: 18px; height: 18px; padding: 0; background-color: ${close.hover ? '#FF453A' : 'transparent'};`));
+        close.connect('clicked', () => win.delete(global.get_current_time()));
+        header.add_child(close);
+        box.add_child(header);
+
+        // imagen en vivo; las minimizadas no pintan nada: su icono en grande
+        const thumb = new St.Widget({width: THUMB_W, height: THUMB_H});
+        const actor = win.get_compositor_private();
+        if (actor && !win.minimized) {
+            const [w, h] = actor.get_size();
+            const s = Math.min(THUMB_W / Math.max(1, w), THUMB_H / Math.max(1, h));
+            const clone = new Clutter.Clone({source: actor, width: w * s, height: h * s});
+            clone.set_position(Math.round((THUMB_W - w * s) / 2), Math.round((THUMB_H - h * s) / 2));
+            thumb.add_child(clone);
+        } else {
+            const icon = this.app.create_icon_texture(64);
+            icon.set_position((THUMB_W - 64) / 2, (THUMB_H - 64) / 2);
+            thumb.add_child(icon);
+        }
+        box.add_child(thumb);
+
+        const data = {card, close, win, scale: new Spring(420, zetaFor(this._view.bounce), 1)};
+        card.set_pivot_point(0.5, 0.5);
+        card.connect('notify::hover', () => {
+            close.opacity = card.hover ? 255 : 0;
+            card.set_style(`border-radius: 12px; padding: 6px; background-color: ${card.hover ? 'rgba(255,255,255,0.08)' : 'transparent'};`);
+            this._hot = card.hover ? data : (this._hot === data ? null : this._hot);
+            this._retarget();
+        });
+        card.connect('clicked', () => {
+            Main.activateWindow(win);
+            this._view.previewEmptied(this);
+        });
+        card.connect('button-release-event', (_a, event) => {
+            if (event.get_button() !== Clutter.BUTTON_MIDDLE)
+                return Clutter.EVENT_PROPAGATE;
+            win.delete(global.get_current_time());
+            return Clutter.EVENT_STOP;
+        });
+        this.actor.add_child(card);
+        return data;
+    }
+
+    // la señalada crece y las demás se apartan, con el muelle del tema
+    _retarget() {
+        for (const c of this._cards)
+            c.scale.setTarget(this._hot ? (c === this._hot ? 1.035 : 0.965) : 1);
+        if (!this._runner.running)
+            this._runner.start();
+    }
+
+    // encima del icono, dentro de su monitor
+    _place() {
+        const m = this._view.monitor;
+        const [, natW] = this.actor.get_preferred_width(-1);
+        const maxW = m.width - 24;
+        // muchas ventanas: se encogen para caber en el monitor
+        this._fit = natW > maxW ? maxW / natW : 1;
+        const w = natW * this._fit;
+        const [, natH] = this.actor.get_preferred_height(natW);
+        const [ix] = this.iconButton.get_transformed_position();
+        const cx = ix + this.iconButton.width / 2;
+        const x = Math.max(m.x + 12, Math.min(m.x + m.width - 12 - w, Math.round(cx - w / 2)));
+        const y = this._view.dockTop - PREVIEW_LIFT - natH * this._fit;
+        this.actor.set_position(x, y);
+        // nace del icono: el pivote, en el punto de la tarjeta más cercano a él
+        this.actor.set_pivot_point(Math.max(0, Math.min(1, (cx - x) / Math.max(1, w))), 1);
+    }
+
+    close(now) {
+        if (this._closing)
+            return;
+        this._closing = true;
+        if (now || !this.actor) {
+            this._destroy();
+            return;
+        }
+        this.actor.reactive = false;
+        this._scale.setTarget(0.6);
+        this._fade.setTarget(0);
+        this._scale.zeta = 1.0;         // de vuelta al icono, sin rebote
+        if (!this._runner.running)
+            this._runner.start();
+    }
+
+    _tick(dt) {
+        this._scale.step(dt);
+        this._fade.step(dt);
+        let settled = this._scale.isSettled(0.004) && this._fade.isSettled(0.01);
+        if (this.actor) {
+            const s = Math.max(0, this._scale.value);
+            const k = this._fit;
+            this.actor.set_scale(s * k, s * k);
+            this.actor.opacity = Math.round(255 * Math.max(0, Math.min(1, this._fade.value)));
+        }
+        for (const c of this._cards) {
+            c.scale.step(dt);
+            c.card.set_scale(c.scale.value, c.scale.value);
+            if (!c.scale.isSettled())
+                settled = false;
+        }
+        if (this._closing && this._fade.value < 0.03)
+            return true;
+        return settled;
+    }
+
+    _settled() {
+        if (this._closing)
+            this._destroy();
+    }
+
+    _destroy() {
+        this._runner.stop();
+        if (this._refreshId) {
+            GLib.source_remove(this._refreshId);
+            this._refreshId = null;
+        }
+        this._unwatchWindows();
+        if (this._iconDestroyId) {
+            try {
+                this.iconButton.disconnect(this._iconDestroyId);
+            } catch (e) {
+                // el icono ya se destruyó
+            }
+            this._iconDestroyId = null;
+        }
+        if (this.actor) {
+            Main.layoutManager.removeChrome(this.actor);
+            this.actor.destroy();
+            this.actor = null;
+        }
+        this._cards = [];
     }
 }
