@@ -155,12 +155,24 @@ static struct {
     int     W, H;               /* tamaño completo */
     float   w, h, vw, vh, x, vx, fade;
     float   cs[PREV_MAX], csv[PREV_MAX], ca[PREV_MAX];     /* escala de cada tarjeta y su ✕ */
+    float   xs[PREV_MAX], xsv[PREV_MAX];    /* tamaño de la ✕: crece con rebote al acercarse */
+    int     mx, my;                         /* cursor en el contenido (para la cercanía a la ✕) */
     int     ox, oy;             /* origen del contenido en la ventana (fotograma actual) */
     BOOL    closing, animating;
     LARGE_INTEGER last;
 } PV;
 static void PreviewClose(void);
 static BOOL PreviewOpenHere(void) { return PV.hwnd && PV.dock == s_d; }
+#define CLOSE_NEAR  1.28f       /* ✕ con el cursor cerca */
+#define CLOSE_HOT   1.7f        /* ✕ con el cursor encima */
+static void CloseCircle(int i, float *cx, float *cy, float *r)
+{
+    const RECT *x = &PV.close[i];
+    const float r0 = (x->right - x->left) * 0.5f, rs = r0 * PV.xs[i];
+    *r = rs;
+    *cx = x->right - rs;
+    *cy = (x->top + x->bottom) * 0.5f + r0 - rs;     /* el borde de abajo no se mueve */
+}
 static HWINEVENTHOOK s_fgHook, s_winHook, s_moveHook;   /* únicos: se reparten a todos */
 
 static BOOL AnyShellOpen(void)
@@ -1652,7 +1664,7 @@ static void PreviewBuild(const DockItem *it)
         SetRect(&PV.card[i], x, y, x + cardW, y + cardH);
         SetRect(&PV.area[i], x + C, y + C + T, x + C + tw, y + C + T + th);
         SetRect(&PV.close[i], x + C + tw - cs, y + C + (T - cs) / 2, x + C + tw, y + C + (T - cs) / 2 + cs);
-        PV.cs[i] = 1.0f; PV.csv[i] = 0; PV.ca[i] = 0;
+        PV.cs[i] = 1.0f; PV.csv[i] = 0; PV.ca[i] = 0; PV.xs[i] = 1.0f; PV.xsv[i] = 0;
         if (IsIconic(PV.wins[i]) || FAILED(DwmRegisterThumbnail(PV.hwnd, PV.wins[i], &PV.thumb[i]))) { PV.thumb[i] = NULL; continue; }
         SIZE src = { 0, 0 };
         DwmQueryThumbnailSourceSize(PV.thumb[i], &src);
@@ -1753,8 +1765,22 @@ static void PreviewFrame(void)
         const float ct = !PV.closing && i == PV.hot ? 1.0f : 0.0f;          /* su ✕ aparece */
         PV.ca[i] += (ct - PV.ca[i]) * min(1.0f, dt * 18.0f);
         if (fabsf(PV.ca[i] - ct) < 0.01f) PV.ca[i] = ct;
-        if (PV.ca[i] != cb) PV.fullDirty = TRUE;
-        if (PV.cs[i] != b || PV.ca[i] != cb) cards = TRUE;
+        /* la ✕ crece al acercarse y más al ponerse encima, con más rebote que el resto */
+        float xt = 1.0f;
+        if (!PV.closing && i == PV.hot) {
+            if (PV.hotClose) xt = CLOSE_HOT;
+            else {
+                const RECT *x = &PV.close[i];
+                const float dx = PV.mx - (x->left + x->right) * 0.5f, dy = PV.my - (x->top + x->bottom) * 0.5f;
+                const float prox = max(0.0f, min(1.0f, 1.0f - (sqrtf(dx * dx + dy * dy) - DS(10)) / DS(44)));
+                xt = 1.0f + (CLOSE_NEAR - 1.0f) * prox;
+            }
+        }
+        const float xb = PV.xs[i];
+        for (int k = 0; k < 2; ++k) Spring2(&PV.xs[i], &PV.xsv[i], xt, dt * 0.5f, 520.0f, min(PvZeta(), 0.42f));
+        if (fabsf(PV.xs[i] - xt) < 0.002f && fabsf(PV.xsv[i]) < 0.02f) { PV.xs[i] = xt; PV.xsv[i] = 0; }
+        if (PV.ca[i] != cb || PV.xs[i] != xb) PV.fullDirty = TRUE;
+        if (PV.cs[i] != b || PV.ca[i] != cb || PV.xs[i] != xb) cards = TRUE;
     }
 
     const float moved = fabsf(PV.w - fw) + fabsf(PV.h - fh) + fabsf(PV.x - fx) + fabsf(PV.fade - ff) * 50;
@@ -1857,6 +1883,20 @@ static void PreviewHover(void)
 }
 
 /* El contenido a tamaño completo (cambia con el ratón, no con los muelles). */
+static void CloseStroke(Canvas *c, float ax, float ay, float bx, float by, float th, DWORD rgb)
+{
+    const float vx = bx - ax, vy = by - ay, len2 = vx * vx + vy * vy;
+    GdiFlush();
+    for (int y = max(0, (int)(min(ay, by) - th)); y < min(c->h, (int)(max(ay, by) + th) + 1); ++y)
+        for (int x = max(0, (int)(min(ax, bx) - th)); x < min(c->w, (int)(max(ax, bx) + th) + 1); ++x) {
+            const float px = x + 0.5f - ax, py = y + 0.5f - ay;
+            float t = len2 > 0 ? (px * vx + py * vy) / len2 : 0;
+            t = t < 0 ? 0 : t > 1 ? 1 : t;
+            const float dx = px - vx * t, dy = py - vy * t;
+            Gfx_Blend(c, x, y, rgb, Gfx_Cov(sqrtf(dx * dx + dy * dy) - th * 0.5f));
+        }
+}
+
 static void PreviewRenderFull(const DockLook *L)
 {
     if (PV.full.w != PV.W || PV.full.h != PV.H) {
@@ -1887,14 +1927,19 @@ static void PreviewRenderFull(const DockLook *L)
             BlitIcon(c, it, (a->left + a->right) * 0.5f, (a->top + a->bottom) * 0.5f + s * 0.5f, s);
         }
         if (ca > 0.01f) {
-            const RECT *x = &PV.close[i];
-            const float d = (float)(x->right - x->left);
+            float cx, cy, r;
+            CloseCircle(i, &cx, &cy, &r);
             const BOOL on = i == PV.hot && PV.hotClose;
+            /* se enciende en rojo a medida que crece hacia "encima" */
+            const float heat = max(0.0f, min(1.0f, (PV.xs[i] - 1.0f) / (CLOSE_HOT - 1.0f)));
+            const DWORD idle = Gfx_Mix(L->panel, L->bar, 0.18f);
+            const DWORD fill = on ? 0xE5443C : Gfx_Mix(idle, 0xE5443C, heat * 0.55f);
             const DWORD bg = Gfx_Mix(L->panel, L->bar, L->light ? 0.08f : 0.10f);
-            Gfx_FillCircle(c, x->left + d * 0.5f, x->top + d * 0.5f, d * 0.5f,
-                           on ? 0xE5443C : Gfx_Mix(L->panel, L->bar, 0.18f), ca);
-            Gfx_Text(c, PV.glyphs, L"\xE8BB", x->left, x->top, x->right - x->left, x->bottom - x->top,
-                     Gfx_Mix(bg, on ? 0xFFFFFF : L->bar, ca), DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+            Gfx_FillCircle(c, cx, cy, r, fill, ca);
+            const float a = r * 0.36f, th = max(1.4f, r * 0.17f);
+            const DWORD ink = Gfx_Mix(bg, on || heat > 0.6f ? 0xFFFFFF : L->bar, ca);
+            CloseStroke(c, cx - a, cy - a, cx + a, cy + a, th, ink);
+            CloseStroke(c, cx - a, cy + a, cx + a, cy - a, th, ink);
         }
     }
     GdiFlush();
@@ -1960,7 +2005,13 @@ static int PreviewHit(POINT p, BOOL *onClose)
     p.x -= PV.ox;
     p.y -= PV.oy;
     for (int i = 0; i < PV.n; ++i)
-        if (PtInRect(&PV.card[i], p)) { *onClose = PtInRect(&PV.close[i], p); return i; }
+        if (PtInRect(&PV.card[i], p)) {
+            float cx, cy, r;
+            CloseCircle(i, &cx, &cy, &r);
+            const float dx = p.x - cx, dy = p.y - cy;
+            *onClose = dx * dx + dy * dy <= (r + 2.0f) * (r + 2.0f);
+            return i;
+        }
     return -1;
 }
 
@@ -2021,11 +2072,13 @@ static LRESULT PreviewProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
         POINT p = { (short)LOWORD(l), (short)HIWORD(l) };
         BOOL onClose;
         const int hot = PreviewHit(p, &onClose);
+        PV.mx = p.x - PV.ox;
+        PV.my = p.y - PV.oy;
         if (hot != PV.hot || onClose != PV.hotClose) {
             PV.hot = hot; PV.hotClose = onClose;
             PV.fullDirty = TRUE;
             PreviewKick();
-        }
+        } else if (hot >= 0) PreviewKick();     /* acercándose a la ✕: que crezca */
         return 0;
     }
     case WM_MOUSELEAVE:
