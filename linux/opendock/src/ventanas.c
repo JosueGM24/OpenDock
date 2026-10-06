@@ -20,6 +20,9 @@
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
 #endif
+#if HAVE_XCOMPOSITE
+#include <X11/extensions/Xcomposite.h>
+#endif
 
 #define OD_MAX_TITULO 256
 
@@ -43,6 +46,9 @@ static struct {
     GPtrArray *lista;
     guint aviso_pendiente;
     gboolean disponible;
+#if HAVE_X11
+    GHashTable *redirigidas;     /* xid de las ventanas redirigidas para las miniaturas */
+#endif
 #if HAVE_FOREIGN_TOPLEVEL
     struct zwlr_foreign_toplevel_manager_v1 *gestor;
 #endif
@@ -328,6 +334,7 @@ static gboolean al_evento_x(GdkDisplay *display, const XEvent *ev, gpointer dato
     Display *d = ev->xproperty.display;
     Atom a = ev->xproperty.atom;
     if (a == atomo(d, "_NET_CLIENT_LIST") || a == atomo(d, "_NET_ACTIVE_WINDOW") ||
+        a == atomo(d, "_NET_CLIENT_LIST_STACKING") ||
         a == atomo(d, "_NET_WM_NAME") || a == atomo(d, "_NET_WM_STATE") || a == XA_WM_NAME)
         releer_x11();
     return FALSE;   /* que GDK lo siga procesando */
@@ -456,4 +463,146 @@ void od_ventana_cerrar(OdVentana *v)
     if (v->xid) mensaje_cliente(v->xid, "_NET_CLOSE_WINDOW", CurrentTime, 2);
 #endif
     (void)v;
+}
+
+/* ---- pantalla completa y miniaturas ------------------------------------- */
+
+#if HAVE_X11
+static void trampa_x11(gboolean poner)
+{
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    GdkDisplay *gd = gdk_display_get_default();
+    if (poner) gdk_x11_display_error_trap_push(gd);
+    else gdk_x11_display_error_trap_pop_ignored(gd);
+    G_GNUC_END_IGNORE_DEPRECATIONS
+}
+#endif
+
+/* Mira el orden de apilado de arriba abajo: la primera ventana visible que pisa el
+ * monitor decide (si está a pantalla completa, el monitor está tapado). Así, con
+ * dos monitores, un vídeo a pantalla completa en uno lo sigue tapando aunque el
+ * foco esté en el otro. En Wayland el compositor ya pone la pantalla completa por
+ * encima de la capa TOP de layer-shell (sway, Hyprland, KWin...). */
+gboolean od_ventanas_pantalla_completa_en(GdkMonitor *monitor)
+{
+#if HAVE_X11
+    if (g_v.backend != OD_BACKEND_X11 || !g_v.disponible || !monitor) return FALSE;
+    GdkRectangle geo;
+    gdk_monitor_get_geometry(monitor, &geo);
+    const int f = gdk_monitor_get_scale_factor(monitor);   /* GDK mide en píxeles de app */
+    geo.x *= f; geo.y *= f; geo.width *= f; geo.height *= f;
+    Display *d = display_x11();
+    Window raiz = DefaultRootWindow(d);
+    unsigned long n = 0;
+    unsigned long *pila = leer_lista(d, raiz, atomo(d, "_NET_CLIENT_LIST_STACKING"), XA_WINDOW, &n);
+    gboolean tapado = FALSE;
+    trampa_x11(TRUE);
+    for (long i = (long)n - 1; pila && i >= 0; i--) {      /* de arriba abajo */
+        Window w = pila[i];
+        if (tiene_atomo(d, w, "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DOCK") ||
+            tiene_atomo(d, w, "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DESKTOP") ||
+            tiene_atomo(d, w, "_NET_WM_STATE", "_NET_WM_STATE_HIDDEN"))
+            continue;
+        XWindowAttributes at;
+        if (!XGetWindowAttributes(d, w, &at) || at.map_state != IsViewable) continue;
+        int x = 0, y = 0;
+        Window hijo;
+        if (!XTranslateCoordinates(d, w, raiz, 0, 0, &x, &y, &hijo)) continue;
+        if (x >= geo.x + geo.width || y >= geo.y + geo.height ||
+            x + at.width <= geo.x || y + at.height <= geo.y)
+            continue;                                       /* no pisa este monitor */
+        tapado = tiene_atomo(d, w, "_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN");
+        break;
+    }
+    trampa_x11(FALSE);
+    if (pila) XFree(pila);
+    return tapado;
+#else
+    (void)monitor;
+    return FALSE;
+#endif
+}
+
+/* Miniatura de la ventana (X11 con XComposite): la ventana se redirige fuera de
+ * pantalla en modo automático (el servidor la sigue pintando igual) mientras la
+ * vista previa está abierta, y se lee su pixmap reducido. NULL si no se puede
+ * (Wayland, minimizada, sin XComposite o aún sin contenido). */
+GdkTexture *od_ventana_miniatura(OdVentana *v, int max_ancho, int max_alto)
+{
+#if HAVE_X11 && HAVE_XCOMPOSITE
+    if (!v || !v->xid || v->minimizada || g_v.backend != OD_BACKEND_X11) return NULL;
+    Display *d = display_x11();
+    int ev = 0, er = 0;
+    if (!XCompositeQueryExtension(d, &ev, &er)) return NULL;
+    trampa_x11(TRUE);
+    XWindowAttributes at;
+    XImage *img = NULL;
+    if (XGetWindowAttributes(d, v->xid, &at) && at.map_state == IsViewable && at.width > 1 && at.height > 1) {
+        if (!g_v.redirigidas) g_v.redirigidas = g_hash_table_new(NULL, NULL);
+        if (!g_hash_table_contains(g_v.redirigidas, GSIZE_TO_POINTER(v->xid))) {
+            XCompositeRedirectWindow(d, v->xid, CompositeRedirectAutomatic);
+            g_hash_table_add(g_v.redirigidas, GSIZE_TO_POINTER(v->xid));
+        }
+        Pixmap px = XCompositeNameWindowPixmap(d, v->xid);
+        XSync(d, False);
+        if (px) {
+            img = XGetImage(d, px, 0, 0, at.width, at.height, AllPlanes, ZPixmap);
+            XFreePixmap(d, px);
+        }
+    }
+    XSync(d, False);
+    trampa_x11(FALSE);
+    if (!img) return NULL;
+    if (img->bits_per_pixel != 32) { XDestroyImage(img); return NULL; }
+
+    const double k = MIN(1.0, MIN((double)max_ancho / at.width, (double)max_alto / at.height));
+    const int tw = MAX(1, (int)(at.width * k)), th = MAX(1, (int)(at.height * k));
+    guchar *buf = g_malloc((gsize)tw * th * 4);
+    const gboolean con_alfa = at.depth == 32;
+    guint64 suma = 0;
+    /* reducción por promedio de cada bloque (nítida, sin el dentado del vecino más cercano) */
+    for (int y = 0; y < th; y++) {
+        const int y0 = (int)((double)y * at.height / th), y1 = MAX(y0 + 1, (int)((double)(y + 1) * at.height / th));
+        for (int x = 0; x < tw; x++) {
+            const int x0 = (int)((double)x * at.width / tw), x1 = MAX(x0 + 1, (int)((double)(x + 1) * at.width / tw));
+            guint b = 0, g = 0, r = 0, a = 0, cuenta = 0;
+            for (int yy = y0; yy < y1; yy += 1 + (y1 - y0) / 4)
+                for (int xx = x0; xx < x1; xx += 1 + (x1 - x0) / 4) {
+                    const guint32 p = *(guint32 *)(void *)(img->data + (gsize)yy * img->bytes_per_line + (gsize)xx * 4);
+                    b += p & 255; g += (p >> 8) & 255; r += (p >> 16) & 255; a += con_alfa ? p >> 24 : 255;
+                    cuenta++;
+                }
+            guchar *o = buf + ((gsize)y * tw + x) * 4;
+            o[0] = b / cuenta; o[1] = g / cuenta; o[2] = r / cuenta; o[3] = a / cuenta;
+            suma += o[0] + o[1] + o[2];
+        }
+    }
+    XDestroyImage(img);
+    if (suma == 0) { g_free(buf); return NULL; }     /* aún sin pintar fuera de pantalla */
+    GBytes *bytes = g_bytes_new_take(buf, (gsize)tw * th * 4);
+    GdkTexture *t = gdk_memory_texture_new(tw, th, GDK_MEMORY_B8G8R8A8_PREMULTIPLIED, bytes, (gsize)tw * 4);
+    g_bytes_unref(bytes);
+    return t;
+#else
+    (void)v; (void)max_ancho; (void)max_alto;
+    return NULL;
+#endif
+}
+
+/* Se cerró la vista previa: las ventanas vuelven a pintarse como antes. */
+void od_ventanas_soltar_miniaturas(void)
+{
+#if HAVE_X11 && HAVE_XCOMPOSITE
+    if (!g_v.redirigidas || !g_hash_table_size(g_v.redirigidas)) return;
+    Display *d = display_x11();
+    GHashTableIter it;
+    gpointer clave;
+    trampa_x11(TRUE);
+    g_hash_table_iter_init(&it, g_v.redirigidas);
+    while (g_hash_table_iter_next(&it, &clave, NULL))
+        XCompositeUnredirectWindow(d, (Window)GPOINTER_TO_SIZE(clave), CompositeRedirectAutomatic);
+    XSync(d, False);
+    trampa_x11(FALSE);
+    g_hash_table_remove_all(g_v.redirigidas);
+#endif
 }

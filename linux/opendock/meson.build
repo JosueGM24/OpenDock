@@ -34,6 +34,13 @@ if have_x11
   deps += [gdkx11_dep, x11_raw_dep]
 endif
 
+# XComposite: miniaturas de las ventanas en la vista previa del dock (X11). Opcional.
+xcomposite_dep = dependency('xcomposite', required: false)
+have_xcomposite = have_x11 and xcomposite_dep.found()
+if have_xcomposite
+  deps += xcomposite_dep
+endif
+
 # libpulse: volumen. Opcional (PLAN.md lo marca como dependencia opcional).
 pulse_dep = dependency('libpulse', required: false)
 pulse_glib_dep = dependency('libpulse-mainloop-glib', required: false)
@@ -77,6 +84,7 @@ endif
 
 conf.set('HAVE_FOREIGN_TOPLEVEL', have_foreign_toplevel ? 1 : 0)
 conf.set('HAVE_X11', have_x11 ? 1 : 0)
+conf.set('HAVE_XCOMPOSITE', have_xcomposite ? 1 : 0)
 conf.set('HAVE_PULSE', have_pulse ? 1 : 0)
 conf.set('HAVE_CANBERRA', have_canberra ? 1 : 0)
 conf.set_quoted('OPENDOCK_VERSION', meson.project_version())
@@ -130,4 +138,5 @@ summary({
   'libpulse (volumen)': have_pulse,
   'libcanberra (sonidos)': have_canberra,
   'wlr-foreign-toplevel (dock: ventanas)': have_foreign_toplevel,
+  'xcomposite (dock: miniaturas en X11)': have_xcomposite,
 })

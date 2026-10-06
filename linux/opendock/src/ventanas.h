@@ -10,7 +10,7 @@
 #define OPENDOCK_VENTANAS_H
 
 #include "session.h"
-#include <glib.h>
+#include <gtk/gtk.h>
 
 typedef struct OdVentana OdVentana;
 
@@ -36,5 +36,15 @@ int od_ventana_pid(const OdVentana *v);
 void od_ventana_activar(OdVentana *v);
 void od_ventana_minimizar(OdVentana *v);
 void od_ventana_cerrar(OdVentana *v);
+
+/* ¿La ventana de arriba del todo en ese monitor está a pantalla completa? (X11) */
+gboolean od_ventanas_pantalla_completa_en(GdkMonitor *monitor);
+
+/* Miniatura de la ventana como mucho de max_ancho × max_alto (X11 con
+ * XComposite); NULL si no hay (Wayland, minimizada...). Hay que liberarla. */
+GdkTexture *od_ventana_miniatura(OdVentana *v, int max_ancho, int max_alto);
+
+/* Deja de redirigir las ventanas usadas para las miniaturas. */
+void od_ventanas_soltar_miniaturas(void);
 
 #endif
