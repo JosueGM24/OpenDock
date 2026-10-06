@@ -141,9 +141,20 @@ static struct {
     BOOL    hotClose, tracking;
     int     cx, bottom;         /* centro x y borde de abajo, en pantalla */
     DWORD   outSince;           /* desde cuándo el cursor no está ni en ella ni en su icono */
-    Canvas  cv;
+    Canvas  cv;                 /* lo que se presenta (tamaño actual de la ventana) */
+    Canvas  full;               /* el contenido a tamaño completo: se compone escalado */
+    BOOL    fullDirty;
     HFONT   font, glyphs;
     int     fontPx;
+    /* muelles, como el notch: nace de una pastilla sobre el icono, crece con el rebote del
+     * tema y el contenido aparece cuando ya hay sitio; al cerrar vuelve a la pastilla */
+    RECT    tdst[PREV_MAX];     /* destino de cada miniatura en el contenido completo */
+    int     W, H;               /* tamaño completo */
+    float   w, h, vw, vh, x, vx, fade;
+    float   cs[PREV_MAX], csv[PREV_MAX], ca[PREV_MAX];     /* escala de cada tarjeta y su ✕ */
+    int     ox, oy;             /* origen del contenido en la ventana (fotograma actual) */
+    BOOL    closing, animating;
+    LARGE_INTEGER last;
 } PV;
 static void PreviewClose(void);
 static BOOL PreviewOpenHere(void) { return PV.hwnd && PV.dock == s_d; }
@@ -1320,6 +1331,7 @@ static void Activate(int i)
 #define DWMWA_BORDER_COLOR 34
 #endif
 #define PREV_TIMER  1
+#define PREV_ANIM   2      /* fotogramas de sus muelles (solo mientras se mueve) */
 
 static int LiveWins(const DockItem *it)
 {
@@ -1340,7 +1352,39 @@ static void PreviewDropThumbs(void)
         if (PV.thumb[i]) { DwmUnregisterThumbnail(PV.thumb[i]); PV.thumb[i] = NULL; }
 }
 
-/* Coloca las tarjetas de las ventanas vivas de it y ajusta la ventana (con el dock de PV en D). */
+/* ── Muelles de la vista previa (los mismos que el notch) ── */
+static float PvZeta(void)
+{
+    static const float z[3] = { 0.85f, 0.62f, 0.40f };     /* suave · normal · bouncy */
+    return z[max(0, min(2, g_cfg.bounce))];
+}
+static float PvPillW(void) { return min(PV.W * 0.5f, (float)DS(90)); }
+static float PvPillH(void) { return min(PV.H * 0.4f, (float)DS(16)); }
+
+/* Centro x al que va: sobre su icono, sin salirse del monitor (cerrando, el propio icono). */
+static float PvTargetX(void)
+{
+    if (PV.closing) return (float)PV.cx;
+    const int margin = DS(12);
+    const int l = max((int)D.mon.left + margin, min((int)D.mon.right - margin - PV.W, PV.cx - PV.W / 2));
+    return l + PV.W * 0.5f;
+}
+
+/* Arranca los fotogramas (solo mientras algo se mueve; en reposo no corre nada). */
+static void PreviewKick(void)
+{
+    if (!PV.hwnd || PV.animating) return;
+    PV.animating = TRUE;
+    QueryPerformanceCounter(&PV.last);
+    SetTimer(PV.hwnd, PREV_ANIM, 10, NULL);
+}
+
+static void PreviewDestroy(void);
+static void PreviewApply(void);
+
+/* Coloca las tarjetas de las ventanas vivas de it (con el dock de PV en D). La primera vez
+ * nace como una pastilla sobre el icono; si ya estaba abierta, los muelles la llevan al
+ * nuevo tamaño y al nuevo icono. */
 static void PreviewBuild(const DockItem *it)
 {
     PreviewDropThumbs();
@@ -1362,50 +1406,157 @@ static void PreviewBuild(const DockItem *it)
     if (2 * O + PV.n * (tw + 2 * C) + (PV.n - 1) * G > monW)        /* muchas: más pequeñas */
         tw = max(DS(96), (monW - 2 * O - (PV.n - 1) * G) / PV.n - 2 * C);
     const int th = tw * 5 / 8, cardW = tw + 2 * C, cardH = C + T + th + C;
-    const int winW = 2 * O + PV.n * cardW + (PV.n - 1) * G, winH = 2 * O + cardH;
+    PV.W = 2 * O + PV.n * cardW + (PV.n - 1) * G;
+    PV.H = 2 * O + cardH;
 
     for (int i = 0; i < PV.n; ++i) {
         const int x = O + i * (cardW + G), y = O, cs = DS(20);
         SetRect(&PV.card[i], x, y, x + cardW, y + cardH);
         SetRect(&PV.area[i], x + C, y + C + T, x + C + tw, y + C + T + th);
         SetRect(&PV.close[i], x + C + tw - cs, y + C + (T - cs) / 2, x + C + tw, y + C + (T - cs) / 2 + cs);
+        PV.cs[i] = 1.0f; PV.csv[i] = 0; PV.ca[i] = 0;
         if (IsIconic(PV.wins[i]) || FAILED(DwmRegisterThumbnail(PV.hwnd, PV.wins[i], &PV.thumb[i]))) { PV.thumb[i] = NULL; continue; }
         SIZE src = { 0, 0 };
         DwmQueryThumbnailSourceSize(PV.thumb[i], &src);
         if (src.cx <= 0 || src.cy <= 0) { DwmUnregisterThumbnail(PV.thumb[i]); PV.thumb[i] = NULL; continue; }
         const float k = min((float)tw / src.cx, (float)th / src.cy);
         const int dw = max(1, (int)(src.cx * k)), dh = max(1, (int)(src.cy * k));
+        SetRect(&PV.tdst[i], PV.area[i].left + (tw - dw) / 2, PV.area[i].top + (th - dh) / 2,
+                PV.area[i].left + (tw - dw) / 2 + dw, PV.area[i].top + (th - dh) / 2 + dh);
+    }
+    if (PV.hot >= PV.n) PV.hot = -1;
+    PV.fullDirty = TRUE;
+    PV.closing = FALSE;
+    if (!IsWindowVisible(PV.hwnd)) {        /* nace de la pastilla, encima de su icono */
+        PV.w = PvPillW(); PV.h = PvPillH();
+        PV.x = (float)PV.cx;
+        PV.vw = PV.vh = PV.vx = 0;
+        PV.fade = 0;
+        PreviewApply();
+        ShowWindow(PV.hwnd, SW_SHOWNOACTIVATE);
+    }
+    PreviewKick();
+}
+
+/* Lleva el estado animado a la ventana: tamaño y sitio, miniaturas (que siguen la escala
+ * de su tarjeta y aparecen con el contenido) y repintado. */
+static void PreviewApply(void)
+{
+    const int wi = max(1, (int)lroundf(PV.w)), hi = max(1, (int)lroundf(PV.h));
+    PV.ox = (wi - PV.W) / 2;
+    PV.oy = (hi - PV.H) / 2;
+    SetWindowPos(PV.hwnd, HWND_TOPMOST, (int)lroundf(PV.x - PV.w * 0.5f), PV.bottom - hi, wi, hi,
+                 SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    const BYTE op = (BYTE)(255.0f * max(0.0f, min(1.0f, PV.fade)) + 0.5f);
+    for (int i = 0; i < PV.n; ++i) {
+        if (!PV.thumb[i]) continue;
+        const RECT *c = &PV.card[i], *t = &PV.tdst[i];
+        const float k = PV.cs[i], cx = (c->left + c->right) * 0.5f, cy = (c->top + c->bottom) * 0.5f;
         DWM_THUMBNAIL_PROPERTIES tp = { 0 };
         tp.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY;
-        tp.rcDestination.left = PV.area[i].left + (tw - dw) / 2;
-        tp.rcDestination.top = PV.area[i].top + (th - dh) / 2;
-        tp.rcDestination.right = tp.rcDestination.left + dw;
-        tp.rcDestination.bottom = tp.rcDestination.top + dh;
-        tp.opacity = 255;
-        tp.fVisible = TRUE;
+        tp.rcDestination.left   = PV.ox + (int)lroundf(cx + (t->left - cx) * k);
+        tp.rcDestination.top    = PV.oy + (int)lroundf(cy + (t->top - cy) * k);
+        tp.rcDestination.right  = PV.ox + (int)lroundf(cx + (t->right - cx) * k);
+        tp.rcDestination.bottom = PV.oy + (int)lroundf(cy + (t->bottom - cy) * k);
+        tp.opacity = op;
+        tp.fVisible = op > 2;
         tp.fSourceClientAreaOnly = FALSE;
         DwmUpdateThumbnailProperties(PV.thumb[i], &tp);
     }
-
-    int x = PV.cx - winW / 2;
-    x = max((int)D.mon.left + margin, min((int)D.mon.right - margin - winW, x));
-    if (PV.hot >= PV.n) PV.hot = -1;
-    Canvas_Free(&PV.cv);
-    SetWindowPos(PV.hwnd, HWND_TOPMOST, x, PV.bottom - winH, winW, winH, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    InvalidateRect(PV.hwnd, NULL, FALSE);
+    RedrawWindow(PV.hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
 }
 
+/* Un fotograma (con el dock de PV en D). */
+static void PreviewFrame(void)
+{
+    LARGE_INTEGER t, f;
+    QueryPerformanceCounter(&t);
+    QueryPerformanceFrequency(&f);
+    float dt = (float)(t.QuadPart - PV.last.QuadPart) / (float)f.QuadPart;
+    PV.last = t;
+    if (dt > 0.05f) dt = 0.05f;
+
+    const float z = PvZeta(), tx = PvTargetX();
+    const float tw = PV.closing ? PvPillW() : (float)PV.W, th = PV.closing ? PvPillH() : (float)PV.H;
+    const float fw = PV.w, fh = PV.h, fx = PV.x, ff = PV.fade;
+    for (int k = 0; k < 2; ++k) {
+        if (PV.closing) {       /* sin rebote al cerrar: todo llega junto */
+            Spring2(&PV.w, &PV.vw, tw, dt * 0.5f, 300.0f, 1.0f);
+            Spring2(&PV.h, &PV.vh, th, dt * 0.5f, 300.0f, 1.0f);
+            Spring2(&PV.x, &PV.vx, tx, dt * 0.5f, 300.0f, 1.0f);
+        } else {
+            Spring2(&PV.w, &PV.vw, tw, dt * 0.5f, 380.0f, z);
+            Spring2(&PV.h, &PV.vh, th, dt * 0.5f, 420.0f, min(1.0f, z + 0.1f));
+            Spring2(&PV.x, &PV.vx, tx, dt * 0.5f, 320.0f, z);
+        }
+    }
+    if (PV.w < 1.0f) PV.w = 1.0f;
+    if (PV.h < 1.0f) PV.h = 1.0f;
+    if (!PV.closing) {
+        const float tf = PV.h > PV.H * 0.55f ? 1.0f : 0.0f;    /* el contenido, cuando ya hay sitio */
+        PV.fade += (tf - PV.fade) * min(1.0f, dt * (tf > PV.fade ? 16.0f : 26.0f));
+        if (PV.fade > 0.999f) PV.fade = 1.0f;
+    } else {
+        /* contenido y forma van ligados a la altura: nada se apaga de golpe */
+        const float span = max(1.0f, PV.H - th);
+        const float prog = max(0.0f, min(1.0f, (PV.h - th) / span));
+        const float g = max(0.0f, min(1.0f, (prog - 0.25f) / 0.5f));
+        PV.fade = min(PV.fade, g * g * (3 - 2 * g));
+        if (prog < 0.04f) { PreviewDestroy(); return; }
+    }
+
+    BOOL cards = FALSE;
+    for (int i = 0; i < PV.n; ++i) {
+        /* la señalada crece un poco y las demás se apartan, como las tarjetas del notch */
+        const float target = PV.closing || PV.hot < 0 ? 1.0f : i == PV.hot ? 1.035f : 0.965f;
+        const float b = PV.cs[i], cb = PV.ca[i];
+        for (int k = 0; k < 2; ++k) Spring2(&PV.cs[i], &PV.csv[i], target, dt * 0.5f, 420.0f, z);
+        if (fabsf(PV.cs[i] - target) < 0.0008f && fabsf(PV.csv[i]) < 0.01f) { PV.cs[i] = target; PV.csv[i] = 0; }
+        const float ct = !PV.closing && i == PV.hot ? 1.0f : 0.0f;          /* su ✕ aparece */
+        PV.ca[i] += (ct - PV.ca[i]) * min(1.0f, dt * 18.0f);
+        if (fabsf(PV.ca[i] - ct) < 0.01f) PV.ca[i] = ct;
+        if (PV.ca[i] != cb) PV.fullDirty = TRUE;
+        if (PV.cs[i] != b || PV.ca[i] != cb) cards = TRUE;
+    }
+
+    const float moved = fabsf(PV.w - fw) + fabsf(PV.h - fh) + fabsf(PV.x - fx) + fabsf(PV.fade - ff) * 50;
+    const BOOL settled = !PV.closing && !cards && moved < 0.02f
+        && fabsf(PV.vw) < 1.0f && fabsf(PV.vh) < 1.0f && fabsf(PV.vx) < 1.0f
+        && fabsf(PV.w - tw) < 0.5f && fabsf(PV.h - th) < 0.5f && fabsf(PV.x - tx) < 0.5f && PV.fade >= 1.0f;
+    if (settled) {
+        PV.w = tw; PV.h = th; PV.x = tx;
+        PV.vw = PV.vh = PV.vx = 0;
+        KillTimer(PV.hwnd, PREV_ANIM);
+        PV.animating = FALSE;
+    }
+    if (settled || moved > 0.02f || cards || PV.fullDirty) PreviewApply();
+}
+
+/* Cierra con su animación de vuelta a la pastilla (lo inmediato es PreviewDestroy). */
 static void PreviewClose(void)
+{
+    if (!PV.hwnd || PV.closing) return;
+    if (!IsWindowVisible(PV.hwnd)) { PreviewDestroy(); return; }
+    PV.closing = TRUE;
+    PV.hot = PV.pressed = -1;
+    PV.hotClose = FALSE;
+    PreviewKick();
+}
+
+static void PreviewDestroy(void)
 {
     if (!PV.hwnd) return;
     const HWND h = PV.hwnd;
     PV.hwnd = NULL;             /* antes de destruir: WM_DESTROY ya no vuelve a entrar aquí */
     PreviewDropThumbs();
     KillTimer(h, PREV_TIMER);
+    KillTimer(h, PREV_ANIM);
     DestroyWindow(h);
     Canvas_Free(&PV.cv);
+    Canvas_Free(&PV.full);
     PV.dock = NULL;
     PV.n = 0;
+    PV.closing = PV.animating = FALSE;
 }
 
 /* Abre (o cambia a) la vista previa del icono i del dock actual. */
@@ -1413,7 +1564,7 @@ static void PreviewOpen(int i)
 {
     if (i < 0 || i >= D.count || !LiveWins(&D.items[i]) || D.menuOpen) return;
     DockItem *it = &D.items[i];
-    if (PV.hwnd && PV.dock != s_d) PreviewClose();     /* la tenía el dock de otro monitor */
+    if (PV.hwnd && PV.dock != s_d) PreviewDestroy();   /* la tenía el dock de otro monitor */
     if (!PV.hwnd) {
         PV.hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, PREV_CLASS, L"OpenDock Vista previa",
                                   WS_POPUP, 0, 0, 1, 1, NULL, NULL, g_inst, NULL);
@@ -1427,6 +1578,8 @@ static void PreviewOpen(int i)
         DwmSetWindowAttribute(PV.hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
         if (App_HideFromCapture(FALSE)) SetWindowDisplayAffinity(PV.hwnd, WDA_EXCLUDEFROMCAPTURE);
         SetTimer(PV.hwnd, PREV_TIMER, 50, NULL);
+    } else if (!PV.closing && lstrcmpiW(PV.key, ItemKey(it))) {
+        PV.fade = min(PV.fade, 0.3f);       /* otra app: su contenido entra con un fundido */
     }
     PV.dock = s_d;
     lstrcpynW(PV.key, ItemKey(it), MAX_PATH);
@@ -1444,7 +1597,7 @@ static void PreviewOpen(int i)
 }
 
 /* El cursor se movió sobre el dock actual: abrir la vista previa tras un momento, o cambiarla
- * al momento si ya hay una abierta. */
+ * al momento si ya hay una abierta (o volver a abrirla si se estaba cerrando). */
 static void PreviewHover(void)
 {
     const DockItem *it = D.hot >= 0 && D.hot < D.count ? &D.items[D.hot] : NULL;
@@ -1455,62 +1608,115 @@ static void PreviewHover(void)
         return;
     }
     if (PV.hwnd) {
-        if (PV.dock != s_d || lstrcmpiW(PV.key, key)) PreviewOpen(D.hot);
+        if (PV.dock != s_d || PV.closing || lstrcmpiW(PV.key, key)) PreviewOpen(D.hot);
         return;
     }
     if (D.prevArm != D.hot) { D.prevArm = D.hot; SetTimer(D.hwnd, TIMER_DPREV, PREV_DELAY, NULL); }
+}
+
+/* El contenido a tamaño completo (cambia con el ratón, no con los muelles). */
+static void PreviewRenderFull(const DockLook *L)
+{
+    if (PV.full.w != PV.W || PV.full.h != PV.H) {
+        Canvas_Free(&PV.full);
+        if (!Canvas_Init(&PV.full, PV.W, PV.H)) return;
+    }
+    Canvas *c = &PV.full;
+    Canvas_Clear(c, L->panel);
+    const DockItem *it = ItemByKey(PV.key);
+    if (it && D.iconGen != s_iconGen) it = NULL;        /* iconos de una caché ya vaciada */
+    const int T = DS(24), is = DS(16);
+    for (int i = 0; i < PV.n; ++i) {
+        const RECT *r = &PV.card[i], *a = &PV.area[i];
+        const float ca = PV.ca[i];
+        if (ca > 0.01f) Gfx_FillRRect(c, (float)r->left, (float)r->top, (float)(r->right - r->left), (float)(r->bottom - r->top),
+                                      (float)DS(10), Gfx_Mix(L->panel, L->bar, L->light ? 0.08f : 0.10f), ca);
+        /* fondo del hueco de la miniatura: se ve si la ventana no llena su proporción */
+        Gfx_FillRRect(c, (float)a->left, (float)a->top, (float)(a->right - a->left), (float)(a->bottom - a->top),
+                      (float)DS(6), Gfx_Mix(L->panel, L->bar, 0.05f), 1.0f);
+        const int ty = a->top - T;
+        if (it) BlitIcon(c, it, (float)(a->left + is / 2), (float)(ty + (T + is) / 2), (float)is);
+        wchar_t title[128];
+        if (GetWindowTextW(PV.wins[i], title, 128) <= 0) lstrcpynW(title, it ? it->name : L"", 128);
+        const int tx = a->left + (it ? is + DS(6) : 0), tr = ca > 0.01f ? PV.close[i].left - DS(4) : a->right;
+        Gfx_Text(c, PV.font, title, tx, ty, max(0, tr - tx), T, L->bar, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+        if (!PV.thumb[i] && it) {           /* minimizada: su icono en grande */
+            const float s = min(a->right - a->left, a->bottom - a->top) * 0.55f;
+            BlitIcon(c, it, (a->left + a->right) * 0.5f, (a->top + a->bottom) * 0.5f + s * 0.5f, s);
+        }
+        if (ca > 0.01f) {
+            const RECT *x = &PV.close[i];
+            const float d = (float)(x->right - x->left);
+            const BOOL on = i == PV.hot && PV.hotClose;
+            const DWORD bg = Gfx_Mix(L->panel, L->bar, L->light ? 0.08f : 0.10f);
+            Gfx_FillCircle(c, x->left + d * 0.5f, x->top + d * 0.5f, d * 0.5f,
+                           on ? 0xE5443C : Gfx_Mix(L->panel, L->bar, 0.18f), ca);
+            Gfx_Text(c, PV.glyphs, L"\xE8BB", x->left, x->top, x->right - x->left, x->bottom - x->top,
+                     Gfx_Mix(bg, on ? 0xFFFFFF : L->bar, ca), DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        }
+    }
+    GdiFlush();
+    PV.fullDirty = FALSE;
+}
+
+/* Copia la tarjeta r del contenido completo, escalada k alrededor de su centro y mezclada con
+ * el fondo según fade, al lienzo presentado (de wi×hi, con el contenido en ox, oy). */
+static void PreviewBlitCard(const RECT *r, float k, float fade, DWORD bg, int wi, int hi)
+{
+    const Canvas *s = &PV.full;
+    Canvas *d = &PV.cv;
+    const float cx = (r->left + r->right) * 0.5f, cy = (r->top + r->bottom) * 0.5f;
+    const float hw = (r->right - r->left) * 0.5f * k, hh = (r->bottom - r->top) * 0.5f * k;
+    const int x0 = max(0, (int)floorf(PV.ox + cx - hw)), x1 = min(wi, (int)ceilf(PV.ox + cx + hw));
+    const int y0 = max(0, (int)floorf(PV.oy + cy - hh)), y1 = min(hi, (int)ceilf(PV.oy + cy + hh));
+    const float inv = 1.0f / k, maxX = (float)(r->right - 1), maxY = (float)(r->bottom - 1);
+    for (int y = y0; y < y1; ++y) {
+        float sy = cy + (y + 0.5f - PV.oy - cy) * inv - 0.5f;
+        sy = max((float)r->top, min(maxY, sy));
+        const int iy = (int)sy, iy1 = min(iy + 1, r->bottom - 1);
+        const float fy = sy - iy;
+        for (int x = x0; x < x1; ++x) {
+            float sx = cx + (x + 0.5f - PV.ox - cx) * inv - 0.5f;
+            sx = max((float)r->left, min(maxX, sx));
+            const int ix = (int)sx, ix1 = min(ix + 1, r->right - 1);
+            const float fx = sx - ix;
+            const DWORD p = Gfx_Mix(Gfx_Mix(s->px[iy * s->w + ix], s->px[iy * s->w + ix1], fx),
+                                    Gfx_Mix(s->px[iy1 * s->w + ix], s->px[iy1 * s->w + ix1], fx), fy);
+            d->px[y * d->w + x] = fade >= 1.0f ? p & 0xFFFFFF : Gfx_Mix(bg, p & 0xFFFFFF, fade);
+        }
+    }
 }
 
 static void PreviewPaint(HDC dc)
 {
     RECT rc;
     GetClientRect(PV.hwnd, &rc);
-    if (rc.right <= 0 || rc.bottom <= 0) return;
-    if (PV.cv.w != rc.right || PV.cv.h != rc.bottom) {
+    const int wi = rc.right, hi = rc.bottom;
+    if (wi <= 0 || hi <= 0) return;
+    if (PV.cv.w < wi || PV.cv.h < hi) {         /* con margen: el rebote la pasa de su tamaño */
         Canvas_Free(&PV.cv);
-        if (!Canvas_Init(&PV.cv, rc.right, rc.bottom)) return;
+        if (!Canvas_Init(&PV.cv, wi + wi / 5 + 8, hi + hi / 5 + 8)) return;
     }
     DockLook L;
     LoadDockLook(&L);
-    Canvas *c = &PV.cv;
-    Canvas_Clear(c, L.panel);
-    const DockItem *it = ItemByKey(PV.key);
-    if (it && D.iconGen != s_iconGen) it = NULL;        /* iconos de una caché ya vaciada */
-    const int T = DS(24), is = DS(16);
-    for (int i = 0; i < PV.n; ++i) {
-        const RECT *r = &PV.card[i], *a = &PV.area[i];
-        const BOOL hot = i == PV.hot;
-        if (hot) Gfx_FillRRect(c, (float)r->left, (float)r->top, (float)(r->right - r->left), (float)(r->bottom - r->top),
-                               (float)DS(10), Gfx_Mix(L.panel, L.bar, L.light ? 0.08f : 0.10f), 1.0f);
-        /* fondo del hueco de la miniatura: se ve si la ventana no llena su proporción */
-        Gfx_FillRRect(c, (float)a->left, (float)a->top, (float)(a->right - a->left), (float)(a->bottom - a->top),
-                      (float)DS(6), Gfx_Mix(L.panel, L.bar, 0.05f), 1.0f);
-        const int ty = a->top - T;
-        if (it) BlitIcon(c, it, (float)(a->left + is / 2), (float)(ty + (T + is) / 2), (float)is);
-        wchar_t title[128];
-        if (GetWindowTextW(PV.wins[i], title, 128) <= 0) lstrcpynW(title, it ? it->name : L"", 128);
-        const int tx = a->left + (it ? is + DS(6) : 0), tr = hot ? PV.close[i].left - DS(4) : a->right;
-        Gfx_Text(c, PV.font, title, tx, ty, max(0, tr - tx), T, L.bar, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-        if (!PV.thumb[i] && it) {           /* minimizada: su icono en grande */
-            const float s = min(a->right - a->left, a->bottom - a->top) * 0.55f;
-            BlitIcon(c, it, (a->left + a->right) * 0.5f, (a->top + a->bottom) * 0.5f + s * 0.5f, s);
-        }
-        if (hot) {
-            const RECT *x = &PV.close[i];
-            const float d = (float)(x->right - x->left);
-            Gfx_FillCircle(c, x->left + d * 0.5f, x->top + d * 0.5f, d * 0.5f,
-                           PV.hotClose ? 0xE5443C : Gfx_Mix(L.panel, L.bar, 0.18f), 1.0f);
-            Gfx_Text(c, PV.glyphs, L"\xE8BB", x->left, x->top, x->right - x->left, x->bottom - x->top,
-                     PV.hotClose ? 0xFFFFFF : L.bar, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-        }
-    }
+    if (PV.fullDirty || PV.full.w != PV.W || PV.full.h != PV.H) PreviewRenderFull(&L);
     GdiFlush();
-    BitBlt(dc, 0, 0, rc.right, rc.bottom, c->dc, 0, 0, SRCCOPY);
+    Canvas *c = &PV.cv;
+    for (int y = 0; y < hi; ++y) {
+        DWORD *row = &c->px[y * c->w];
+        for (int x = 0; x < wi; ++x) row[x] = L.panel;
+    }
+    if (PV.full.px && PV.fade > 0.003f)
+        for (int i = 0; i < PV.n; ++i) PreviewBlitCard(&PV.card[i], PV.cs[i], PV.fade, L.panel, wi, hi);
+    BitBlt(dc, 0, 0, wi, hi, c->dc, 0, 0, SRCCOPY);
 }
 
 static int PreviewHit(POINT p, BOOL *onClose)
 {
     *onClose = FALSE;
+    if (PV.closing || PV.fade < 0.5f) return -1;
+    p.x -= PV.ox;
+    p.y -= PV.oy;
     for (int i = 0; i < PV.n; ++i)
         if (PtInRect(&PV.card[i], p)) { *onClose = PtInRect(&PV.close[i], p); return i; }
     return -1;
@@ -1519,6 +1725,7 @@ static int PreviewHit(POINT p, BOOL *onClose)
 /* Cada 50 ms con la vista previa abierta (con su dock en D). */
 static void PreviewCheck(void)
 {
+    if (PV.closing) return;
     const DockItem *it = D.hwnd ? ItemByKey(PV.key) : NULL;
     if (!it || D.fullscreen || D.shellOpen || D.menuOpen || D.sink > 0.05f || (GetAsyncKeyState(VK_ESCAPE) & 0x8000)) {
         PreviewClose();
@@ -1532,7 +1739,7 @@ static void PreviewCheck(void)
         if (n >= PREV_MAX || PV.wins[n] != it->wins[k]) same = FALSE;
         ++n;
     }
-    if (!same || min(n, PREV_MAX) != PV.n) { PreviewBuild(it); if (!PV.hwnd) return; }
+    if (!same || min(n, PREV_MAX) != PV.n) { PreviewBuild(it); if (!PV.hwnd || PV.closing) return; }
 
     POINT pt;
     GetCursorPos(&pt);
@@ -1561,6 +1768,7 @@ static LRESULT PreviewProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
     }
     case WM_TIMER:
         if (w == PREV_TIMER) PreviewCheck();
+        else if (w == PREV_ANIM) PreviewFrame();
         return 0;
     case WM_MOUSEMOVE: {
         if (!PV.tracking) {
@@ -1570,12 +1778,16 @@ static LRESULT PreviewProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
         POINT p = { (short)LOWORD(l), (short)HIWORD(l) };
         BOOL onClose;
         const int hot = PreviewHit(p, &onClose);
-        if (hot != PV.hot || onClose != PV.hotClose) { PV.hot = hot; PV.hotClose = onClose; InvalidateRect(h, NULL, FALSE); }
+        if (hot != PV.hot || onClose != PV.hotClose) {
+            PV.hot = hot; PV.hotClose = onClose;
+            PV.fullDirty = TRUE;
+            PreviewKick();
+        }
         return 0;
     }
     case WM_MOUSELEAVE:
         PV.tracking = FALSE;
-        if (PV.hot >= 0) { PV.hot = -1; PV.hotClose = FALSE; InvalidateRect(h, NULL, FALSE); }
+        if (PV.hot >= 0) { PV.hot = -1; PV.hotClose = FALSE; PV.fullDirty = TRUE; PreviewKick(); }
         return 0;
     case WM_LBUTTONDOWN:
     case WM_MBUTTONDOWN: {
@@ -1603,7 +1815,10 @@ static LRESULT PreviewProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     }
     case WM_DESTROY:
-        if (PV.hwnd == h) { PV.hwnd = NULL; PreviewDropThumbs(); Canvas_Free(&PV.cv); PV.dock = NULL; PV.n = 0; }
+        if (PV.hwnd == h) {
+            PV.hwnd = NULL; PreviewDropThumbs(); Canvas_Free(&PV.cv); Canvas_Free(&PV.full);
+            PV.dock = NULL; PV.n = 0; PV.closing = PV.animating = FALSE;
+        }
         return 0;
     }
     return DefWindowProcW(h, m, w, l);
@@ -2180,7 +2395,7 @@ static void DockApplyFullscreen(void)
     const BOOL fs = D.fsSys || D.fsFg;
     if (!D.hwnd || fs == D.fullscreen) return;
     D.fullscreen = fs;
-    if (fs && PreviewOpenHere()) PreviewClose();
+    if (fs && PreviewOpenHere()) PreviewDestroy();
     ShowWindow(D.hwnd, fs ? SW_HIDE : SW_SHOWNOACTIVATE);
     if (!fs) { Rescan(); Kick(); }
 }
@@ -2265,7 +2480,7 @@ static LRESULT DockProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
         const int hit = HitIndex((short)LOWORD(l));
         if (hit >= 0 && hit == D.pressed) {
             const DockItem *it = &D.items[hit];
-            const BOOL open = PreviewOpenHere() && !lstrcmpiW(PV.key, ItemKey(it));
+            const BOOL open = PreviewOpenHere() && !PV.closing && !lstrcmpiW(PV.key, ItemKey(it));
             if (D.prevArm >= 0) { KillTimer(h, TIMER_DPREV); D.prevArm = -1; }
             if (LiveWins(it) >= 2 && !open) {           /* varias ventanas: se elige en la vista previa */
                 PV.suppress[0] = 0;
@@ -2347,7 +2562,7 @@ static LRESULT DockProcFor(HWND h, UINT m, WPARAM w, LPARAM l)
         KillTimer(h, TIMER_DSINK);
         KillTimer(h, TIMER_DPOLL);
         KillTimer(h, TIMER_DPREV);
-        if (PreviewOpenHere()) PreviewClose();
+        if (PreviewOpenHere()) PreviewDestroy();
         if (D.appbar) {
             APPBARDATA abd = { sizeof(abd) };
             abd.hWnd = h;
@@ -2554,7 +2769,7 @@ void Dock_Raise(void)
 void Dock_Destroy(void)
 {
     DestroyDocks();
-    PreviewClose();
+    PreviewDestroy();
     if (PV.font) { DeleteObject(PV.font); PV.font = NULL; }
     if (PV.glyphs) { DeleteObject(PV.glyphs); PV.glyphs = NULL; }
     PV.fontPx = 0;
