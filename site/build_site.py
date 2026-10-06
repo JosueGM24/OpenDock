@@ -7,6 +7,8 @@
 - docs/assets/logo.png, favicon.png, apple-touch-icon.png, og.png
 - docs/assets/sounds/*.wav   los sonidos de la demo (de sounds/, a 24 kHz)
 - docs/gracias.html          destino de los formularios sin JavaScript
+- docs/privacidad.html       política de privacidad (la pide SignPath Foundation)
+- docs/firma.html            política de firma de código (la pide SignPath Foundation)
 - docs/install.sh            el instalador de Linux (curl -fsSL .../install.sh | sh), de linux/install.sh
 Se publica en Netlify (Netlify Forms) conectando el repo; ver netlify.toml.
 Las imágenes se generan con Pillow; sin Pillow, o en Netlify (sin las fuentes Segoe), se usan
@@ -170,6 +172,81 @@ gracias = f'''<!doctype html>
 </html>
 '''
 open(os.path.join(out, 'gracias.html'), 'w', encoding='utf-8', newline='\n').write(gracias)
+
+def doc_page(name, title, body):
+    """Página de texto (privacidad, firma) con el aspecto del sitio."""
+    html = f'''<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title} — OpenDock</title>
+<link rel="canonical" href="{SITE}{name}">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+{fonts}
+<link rel="stylesheet" href="{CSS_URL}">
+<style>
+.doc {{ max-width: 760px; margin: 0 auto; padding-block: 56px 72px; display: grid; gap: 14px; }}
+.doc h1 {{ font: 700 clamp(30px, 5vw, 44px)/1.1 var(--display); letter-spacing: -.02em; margin: 18px 0 6px; }}
+.doc h2 {{ font: 700 20px/1.3 var(--display); margin: 22px 0 0; }}
+.doc p, .doc li {{ color: #C9CED8; font-size: 16px; line-height: 1.6; }}
+.doc p {{ margin: 0; }}
+.doc ul {{ margin: 0; padding-left: 20px; display: grid; gap: 6px; }}
+.doc a {{ color: var(--ink); }}
+.doc .meta {{ color: var(--mute); font-size: 13px; }}
+.doc blockquote {{ margin: 0; padding: 14px 18px; border-left: 3px solid #3A414D; background: #0E1116; border-radius: 0 12px 12px 0; color: var(--ink); }}
+</style>
+</head>
+<body>
+<main class="wrap doc">
+  <a href="./" style="display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);font-weight:700"><img src="assets/logo.png" alt="" width="32" height="32">OpenDock</a>
+{body.rstrip()}
+  <p class="meta">Última actualización: 6 de octubre de 2026 · <a href="./">Volver a OpenDock</a></p>
+</main>
+</body>
+</html>
+'''
+    open(os.path.join(out, name), 'w', encoding='utf-8', newline='\n').write(html)
+
+doc_page('privacidad.html', 'Privacidad', f'''
+  <h1>Política de privacidad</h1>
+  <p>OpenDock es software libre que se ejecuta solo en tu equipo. Esta página explica qué datos trata el programa y qué datos trata este sitio web.</p>
+  <h2>El programa (Windows y Linux)</h2>
+  <ul>
+    <li><b>No recoge ni envía datos.</b> OpenDock no abre ninguna conexión de red: no tiene cuenta, ni telemetría, ni estadísticas de uso, ni actualizaciones automáticas.</li>
+    <li><b>Notificaciones.</b> Para mostrarlas en el notch, en Windows lee en solo lectura la base local de notificaciones de Windows, y en Linux las recibe como servidor de notificaciones del escritorio. No se copian ni se suben a ningún sitio.</li>
+    <li><b>Ajustes.</b> Se guardan en tu equipo: en Windows en el registro de tu usuario (HKCU), en Linux en <code>~/.config/opendock</code>. Al desinstalar puedes borrarlos.</li>
+    <li>Puedes comprobar todo lo anterior en el <a href="{REPO}">código fuente</a>.</li>
+  </ul>
+  <h2>Este sitio web</h2>
+  <ul>
+    <li><b>Alojamiento.</b> El sitio se sirve desde Netlify, que como cualquier servidor web procesa tu dirección IP para entregarte las páginas (ver la <a href="https://www.netlify.com/privacy/" rel="noopener">privacidad de Netlify</a>).</li>
+    <li><b>Lista de versiones.</b> Tu navegador pide a la API pública de GitHub la lista de versiones, así que GitHub ve esa petición (ver la <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement" rel="noopener">privacidad de GitHub</a>). Las descargas también vienen de GitHub.</li>
+    <li><b>Formularios.</b> Si reportas un error o sugieres una función, lo que escribes (y tu nombre, correo o imagen si los añades, todos opcionales) se guarda en Netlify Forms y solo se usa para revisar tu mensaje y responderte. Pide que lo borre escribiendo por el mismo formulario.</li>
+    <li>El sitio no usa cookies de seguimiento, ni analítica, ni publicidad.</li>
+  </ul>
+  <h2>Contacto</h2>
+  <p>Daniel Godínez, mantenedor de OpenDock: usa el formulario de la <a href="./#opinion">página principal</a> o abre un tema en <a href="{REPO}/issues">GitHub</a>.</p>
+''')
+
+doc_page('firma.html', 'Política de firma de código', f'''
+  <h1>Política de firma de código</h1>
+  <blockquote>Free code signing provided by <a href="https://about.signpath.io/" rel="noopener">SignPath.io</a>, certificate by <a href="https://signpath.org/" rel="noopener">SignPath Foundation</a>.</blockquote>
+  <p class="meta">Solicitud en trámite: hasta que SignPath Foundation la apruebe, las versiones se publican sin firmar y con su SHA-256.</p>
+  <h2>Qué se firma</h2>
+  <ul>
+    <li>Solo <code>OpenDock.exe</code>, el programa para Windows de cada versión publicada en <a href="{REPO}/releases">GitHub Releases</a>.</li>
+    <li>Se compila en GitHub Actions (<a href="{REPO}/blob/main/.github/workflows/release.yml">release.yml</a>) a partir de una etiqueta <code>v*</code> de este repositorio, con MSVC y protecciones comprobadas en cada compilación. Nada compilado en un equipo personal se firma.</li>
+    <li>Cada versión publica también la huella SHA-256 del archivo.</li>
+  </ul>
+  <h2>Equipo</h2>
+  <ul>
+    <li><b>Autores y revisores:</b> <a href="{REPO}/graphs/contributors">colaboradores del repositorio</a>.</li>
+    <li><b>Aprobación de cada firma:</b> <a href="https://github.com/JosueGM24">Daniel Godínez (JosueGM24)</a>, mantenedor.</li>
+  </ul>
+  <h2>Privacidad</h2>
+  <p>This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. Ver la <a href="privacidad.html">política de privacidad</a>.</p>
+''')
 nj = os.path.join(out, '.nojekyll')
 if os.path.exists(nj): os.remove(nj)
 total = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(out) for f in fs)

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Política de firma de código — OpenDock</title>
+<link rel="canonical" href="https://open-dock.netlify.app/firma.html">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/site.css?v=8bc5d6012a">
+<style>
+.doc { max-width: 760px; margin: 0 auto; padding-block: 56px 72px; display: grid; gap: 14px; }
+.doc h1 { font: 700 clamp(30px, 5vw, 44px)/1.1 var(--display); letter-spacing: -.02em; margin: 18px 0 6px; }
+.doc h2 { font: 700 20px/1.3 var(--display); margin: 22px 0 0; }
+.doc p, .doc li { color: #C9CED8; font-size: 16px; line-height: 1.6; }
+.doc p { margin: 0; }
+.doc ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.doc a { color: var(--ink); }
+.doc .meta { color: var(--mute); font-size: 13px; }
+.doc blockquote { margin: 0; padding: 14px 18px; border-left: 3px solid #3A414D; background: #0E1116; border-radius: 0 12px 12px 0; color: var(--ink); }
+</style>
+</head>
+<body>
+<main class="wrap doc">
+  <a href="./" style="display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);font-weight:700"><img src="assets/logo.png" alt="" width="32" height="32">OpenDock</a>
+
+  <h1>Política de firma de código</h1>
+  <blockquote>Free code signing provided by <a href="https://about.signpath.io/" rel="noopener">SignPath.io</a>, certificate by <a href="https://signpath.org/" rel="noopener">SignPath Foundation</a>.</blockquote>
+  <p class="meta">Solicitud en trámite: hasta que SignPath Foundation la apruebe, las versiones se publican sin firmar y con su SHA-256.</p>
+  <h2>Qué se firma</h2>
+  <ul>
+    <li>Solo <code>OpenDock.exe</code>, el programa para Windows de cada versión publicada en <a href="https://github.com/JosueGM24/OpenDock/releases">GitHub Releases</a>.</li>
+    <li>Se compila en GitHub Actions (<a href="https://github.com/JosueGM24/OpenDock/blob/main/.github/workflows/release.yml">release.yml</a>) a partir de una etiqueta <code>v*</code> de este repositorio, con MSVC y protecciones comprobadas en cada compilación. Nada compilado en un equipo personal se firma.</li>
+    <li>Cada versión publica también la huella SHA-256 del archivo.</li>
+  </ul>
+  <h2>Equipo</h2>
+  <ul>
+    <li><b>Autores y revisores:</b> <a href="https://github.com/JosueGM24/OpenDock/graphs/contributors">colaboradores del repositorio</a>.</li>
+    <li><b>Aprobación de cada firma:</b> <a href="https://github.com/JosueGM24">Daniel Godínez (JosueGM24)</a>, mantenedor.</li>
+  </ul>
+  <h2>Privacidad</h2>
+  <p>This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. Ver la <a href="privacidad.html">política de privacidad</a>.</p>
+  <p class="meta">Última actualización: 6 de octubre de 2026 · <a href="./">Volver a OpenDock</a></p>
+</main>
+</body>
+</html>
