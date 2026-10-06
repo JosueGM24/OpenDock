@@ -1456,8 +1456,11 @@ static void PeekShow(HWND target)
     if (!PK.hwnd) {
         PK.mon = mi.rcMonitor;
         if (!PeekSnapshot()) { PeekHide(); return; }
+        /* 1 px menos de alto (abajo, bajo el dock): una ventana sin marco que cubre el monitor
+         * entero es "pantalla completa" para Windows, que entonces aparta la barra y el dock, y
+         * con ellos la vista previa y el propio vistazo */
         PK.hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, PEEK_CLASS, L"OpenDock Vistazo", WS_POPUP,
-                                  PK.mon.left, PK.mon.top, PK.mon.right - PK.mon.left, PK.mon.bottom - PK.mon.top,
+                                  PK.mon.left, PK.mon.top, PK.mon.right - PK.mon.left, PK.mon.bottom - PK.mon.top - 1,
                                   NULL, NULL, g_inst, NULL);
         if (!PK.hwnd) { PeekHide(); return; }
         const DWORD square = 1;     /* DWMWCP_DONOTROUND: cubre el monitor entero */
