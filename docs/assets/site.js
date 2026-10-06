@@ -744,6 +744,14 @@
   const ua = navigator.userAgent;
   const onLinux = /Linux/i.test(ua + ' ' + (navigator.userAgentData ? navigator.userAgentData.platform : '') + ' ' + (navigator.platform || '')) && !/Android|CrOS/.test(ua);
   showOs(onLinux ? 1 : 0);
+  // #linux (menú, aviso del hero o un enlace compartido): la pestaña de Linux, a la vista
+  const goLinux = smooth => { showOs(1); document.getElementById('instalar').scrollIntoView({ behavior: smooth && !reduce ? 'smooth' : 'auto', block: 'start' }); };
+  document.addEventListener('click', e => {
+    const a = e.target.closest('a[href="#linux"]'); if (!a) return;
+    e.preventDefault(); history.replaceState(null, '', '#linux'); goLinux(true);
+  });
+  if (location.hash === '#linux') requestAnimationFrame(() => goLinux(false));
+  if (onLinux) { const al = document.getElementById('alsoLinux'); if (al) al.hidden = true; }
   if (onLinux) {
     const hero = document.querySelector('.hero .btn-primary');
     if (hero && hero.firstChild) { hero.href = '#instalar'; hero.firstChild.textContent = 'Instalar en Linux '; }
