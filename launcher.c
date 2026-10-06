@@ -2006,7 +2006,7 @@ void Launcher_Toggle(void)
 /* ───────────────────────── Tecla Windows ───────────────────────── */
 static HANDLE s_hookThread;
 static DWORD  s_hookTid;
-static BOOL   s_winDown, s_winOther, s_winSkip;
+static BOOL   s_winDown, s_winOther, s_winSkip, s_winEaten;   /* eaten: nos quedamos un atajo (Win+N) */
 
 /* ¿La ventana de delante es de un proceso elevado? Entonces no se intercepta: la entrada
  * que reinyectamos no le llegaría (UIPI) y la tecla Windows se quedaría pulsada. */
@@ -2042,10 +2042,10 @@ static LRESULT CALLBACK KbProc(int code, WPARAM w, LPARAM l)
             const BOOL down = w == WM_KEYDOWN || w == WM_SYSKEYDOWN;
             if (k->vkCode == VK_LWIN || k->vkCode == VK_RWIN) {
                 if (down) {
-                    if (!s_winDown) { s_winDown = TRUE; s_winOther = FALSE; s_winSkip = ForegroundElevated(); }
+                    if (!s_winDown) { s_winDown = TRUE; s_winOther = s_winEaten = FALSE; s_winSkip = ForegroundElevated(); }
                 } else if (s_winDown) {
                     s_winDown = FALSE;
-                    if (!s_winOther && !s_winSkip) {
+                    if ((!s_winOther || s_winEaten) && !s_winSkip) {
                         /* sola: Windows no debe ver un "Win soltada" sin nada en medio */
                         INPUT in[3];
                         ZeroMemory(in, sizeof(in));
@@ -2055,11 +2055,16 @@ static LRESULT CALLBACK KbProc(int code, WPARAM w, LPARAM l)
                         in[2].ki.wVk = (WORD)k->vkCode; in[2].ki.wScan = (WORD)k->scanCode;
                         in[2].ki.dwFlags = KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY;
                         if (SendInput(3, in, sizeof(INPUT)) == 3) {
-                            PostMessageW(g_ctrl, WM_LAUNCHER, 0, 0);
+                            if (!s_winEaten) PostMessageW(g_ctrl, WM_LAUNCHER, 0, 0);
                             return 1;
                         }
                     }
                 }
+            } else if (s_winDown && k->vkCode == 'N' && !s_winSkip) {
+                /* Win+N: nuestro centro de notificaciones (el de Windows no debe abrirse) */
+                if (down && !s_winEaten) PostMessageW(g_ctrl, WM_LAUNCHER, 1, 0);
+                if (down) s_winOther = s_winEaten = TRUE;
+                return 1;
             } else if (down && s_winDown) s_winOther = TRUE;
         }
     }

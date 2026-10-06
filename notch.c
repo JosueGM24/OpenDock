@@ -1877,6 +1877,12 @@ void Notch_EdgeHover(POINT pt)
     Enter(M_MINI);
 }
 
+void Notch_ToggleCenter(void)
+{
+    if (N.hwnd && N.mode == M_CENTER && !N.closing) Close();
+    else Notch_OpenCenter();
+}
+
 void Notch_OpenCenter(void)
 {
     if (!EnsureWindow()) return;

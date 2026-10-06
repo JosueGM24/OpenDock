@@ -23,7 +23,7 @@
 #define WM_SHOTFILE     (WM_APP + 4)   /* hay una captura guardada pendiente (sin parámetros) */
 #define WM_WNCHANGED    (WM_APP + 5)   /* cambió la base de notificaciones de Windows */
 #define WM_BARCHANGED   (WM_APP + 6)   /* la barra superior apareció/desapareció: recolocar esquinas */
-#define WM_LAUNCHER     (WM_APP + 7)   /* tecla Windows sola: abrir o cerrar el buscador */
+#define WM_LAUNCHER     (WM_APP + 7)   /* tecla Windows sola: abrir o cerrar el buscador (w = 1: Win+N, el centro) */
 #define WM_POPFRAME     (WM_APP + 80)  /* fotograma de la animación de una ventana emergente */
 #define WM_TRAYCHANGED  (WM_APP + 81)  /* cambió algún icono de la bandeja de Windows */
 
@@ -209,6 +209,7 @@ BOOL Notch_ShowWin(const struct WinNote *n);
 void Notch_EdgeHover(POINT pt);
 BOOL Notch_InEdgeZone(POINT pt, const RECT *mon, UINT dpi);
 void Notch_OpenCenter(void);
+void Notch_ToggleCenter(void);     /* Win+N: abre el centro de notificaciones, o lo cierra */
 void Notch_NotesChanged(void);
 void Notch_StyleChanged(void);
 void Notch_Raise(void);

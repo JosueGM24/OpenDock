@@ -938,7 +938,8 @@ static LRESULT CALLBACK CtrlProc(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
 
     case WM_LAUNCHER:
-        Launcher_Toggle();
+        if (w == 1) Notch_ToggleCenter();       /* Win+N, como en Windows 11 */
+        else Launcher_Toggle();
         return 0;
 
     case WM_WNCHANGED:         /* la base se escribe en ráfagas: agrupar */
