@@ -40,11 +40,12 @@
 #define SINK_DELAY    450
 #define TIMER_DPOLL   8      /* ocultar dock: dónde está el cursor (barato: 20 veces por segundo) */
 #define TIMER_DPREV   9      /* vista previa: el cursor lleva un momento sobre una app abierta */
-#define PREV_DELAY    400
+#define PREV_DELAY    250
 #define PREV_CLASS    L"OpenDock.DockPreview"
 #define PREV_MAX      8
 #define PEEK_CLASS    L"OpenDock.DockPeek"
-#define PEEK_DELAY    350    /* cursor quieto en una tarjeta: esa ventana, en su sitio */
+#define PEEK_DELAY    150    /* cursor quieto en una tarjeta: esa ventana, en su sitio */
+#define PEEK_FRESH    2500   /* la foto preparada al abrir la vista previa vale este rato */
 #define STATUS_MS     10000  /* repaso de seguridad: lo normal llega por avisos */
 #define MAX_ITEMS     48
 #define ICON_GAP      12
@@ -1366,28 +1367,40 @@ static float PvZeta(void)
  * el monitor de esa ventana, por debajo del dock y de la vista previa, con una foto de la
  * pantalla tomada justo antes que se oscurece y se desenfoca poco a poco, y encima la
  * miniatura DWM de la ventana a su tamaño real y en su sitio (entra con el muelle del tema).
+ * La foto se prepara en cuanto la vista previa termina de abrirse, para que el vistazo
+ * salga al momento (con monitores grandes tomarla y desenfocarla lleva su rato).
  * Solo existe mientras se mira: al soltar la tarjeta se libera todo. */
 static struct {
     HWND    hwnd, target, arm;
     HANDLE  thumb;
     RECT    mon;                /* monitor que cubre (pantalla) */
     Canvas  cur, dim;           /* lo presentado · la foto oscurecida y desenfocada */
+    RECT    snapMon;            /* foto preparada de antemano: de qué monitor y cuándo */
+    DWORD   snapAt;
     float   t, ta, s, sv;       /* fondo 0→1 · miniatura 0→1 · escala de la miniatura */
     DWORD   armAt, outAt;
     BOOL    animating;
     LARGE_INTEGER last;
 } PK;
 
+/* La foto, fuera (al cerrar la vista previa, o porque ya se usó). */
+static void PeekDrop(void)
+{
+    PK.snapAt = 0;
+    Canvas_Free(&PK.cur);
+    Canvas_Free(&PK.dim);
+}
+
 static void PeekHide(void)
 {
     PK.arm = NULL;
     PK.outAt = 0;
     if (PK.thumb) { DwmUnregisterThumbnail(PK.thumb); PK.thumb = NULL; }
+    const BOOL shown = PK.hwnd != NULL;
     if (PK.hwnd) { const HWND h = PK.hwnd; PK.hwnd = NULL; KillTimer(h, 1); DestroyWindow(h); }
     PK.target = NULL;
     PK.animating = FALSE;
-    Canvas_Free(&PK.cur);
-    Canvas_Free(&PK.dim);
+    if (shown) PeekDrop();      /* se fue oscureciendo: ya no es la pantalla tal cual */
 }
 
 static void PeekThumb(void)
@@ -1415,17 +1428,17 @@ static void PeekKick(void)
 
 /* La foto del monitor: tal cual en cur (así entra sin saltos) y, aparte, a 1/4, desenfocada,
  * desaturada y oscura, vuelta a su tamaño en dim. */
-static BOOL PeekSnapshot(void)
+static BOOL PeekSnapshot(const RECT *mon)
 {
-    const int w = PK.mon.right - PK.mon.left, h = PK.mon.bottom - PK.mon.top;
+    const int w = mon->right - mon->left, h = mon->bottom - mon->top;
     if (w <= 0 || h <= 0 || !Canvas_Init(&PK.cur, w, h) || !Canvas_Init(&PK.dim, w, h)) return FALSE;
     HDC screen = GetDC(NULL);
-    BitBlt(PK.cur.dc, 0, 0, w, h, screen, PK.mon.left, PK.mon.top, SRCCOPY);
+    BitBlt(PK.cur.dc, 0, 0, w, h, screen, mon->left, mon->top, SRCCOPY);
     ReleaseDC(NULL, screen);
     Canvas sm = { 0 };
     const int sw = max(1, w / 4), sh = max(1, h / 4);
     if (!Canvas_Init(&sm, sw, sh)) return FALSE;
-    SetStretchBltMode(sm.dc, HALFTONE);
+    SetStretchBltMode(sm.dc, COLORONCOLOR);     /* rápida: el desenfoque de después la suaviza */
     SetBrushOrgEx(sm.dc, 0, 0, NULL);
     StretchBlt(sm.dc, 0, 0, sw, sh, PK.cur.dc, 0, 0, w, h, SRCCOPY);
     GdiFlush();
@@ -1442,7 +1455,19 @@ static BOOL PeekSnapshot(void)
     StretchBlt(PK.dim.dc, 0, 0, w, h, sm.dc, 0, 0, sw, sh, SRCCOPY);
     GdiFlush();
     Canvas_Free(&sm);
+    PK.snapMon = *mon;
+    PK.snapAt = GetTickCount() | 1;
     return TRUE;
+}
+
+/* La vista previa acaba de abrirse en el monitor mon: foto lista para el vistazo. */
+static void PeekPrepare(const RECT *mon)
+{
+    if (PK.hwnd || (PK.snapAt && EqualRect(&PK.snapMon, mon) && GetTickCount() - PK.snapAt < PEEK_FRESH)) return;
+    Canvas_Free(&PK.cur);
+    Canvas_Free(&PK.dim);
+    PK.snapAt = 0;
+    if (!PeekSnapshot(mon)) { Canvas_Free(&PK.cur); Canvas_Free(&PK.dim); PK.snapAt = 0; }
 }
 
 /* Vistazo a target (con la vista previa y su dock en D). */
@@ -1455,7 +1480,14 @@ static void PeekShow(HWND target)
     if (PK.hwnd && !EqualRect(&PK.mon, &mi.rcMonitor)) PeekHide();     /* en otro monitor: otra foto */
     if (!PK.hwnd) {
         PK.mon = mi.rcMonitor;
-        if (!PeekSnapshot()) { PeekHide(); return; }
+        /* la foto preparada al abrir la vista previa, si es de este monitor y reciente */
+        const BOOL ready = PK.snapAt && PK.cur.px && PK.dim.px && EqualRect(&PK.snapMon, &PK.mon)
+                           && GetTickCount() - PK.snapAt < PEEK_FRESH;
+        if (!ready) {
+            Canvas_Free(&PK.cur);
+            Canvas_Free(&PK.dim);
+            if (!PeekSnapshot(&PK.mon)) { PeekHide(); return; }
+        }
         /* 1 px menos de alto (abajo, bajo el dock): una ventana sin marco que cubre el monitor
          * entero es "pantalla completa" para Windows, que entonces aparta la barra y el dock, y
          * con ellos la vista previa y el propio vistazo */
@@ -1736,6 +1768,7 @@ static void PreviewFrame(void)
         PV.animating = FALSE;
     }
     if (settled || moved > 0.02f || cards || PV.fullDirty) PreviewApply();
+    if (settled) PeekPrepare(&D.mon);       /* ya quieta: la foto para un vistazo inmediato */
 }
 
 /* Cierra con su animación de vuelta a la pastilla (lo inmediato es PreviewDestroy). */
@@ -1754,6 +1787,7 @@ static void PreviewDestroy(void)
 {
     if (!PV.hwnd) return;
     PeekHide();
+    PeekDrop();
     const HWND h = PV.hwnd;
     PV.hwnd = NULL;             /* antes de destruir: WM_DESTROY ya no vuelve a entrar aquí */
     PreviewDropThumbs();
