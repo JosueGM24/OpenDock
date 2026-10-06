@@ -163,15 +163,17 @@ static struct {
 } PV;
 static void PreviewClose(void);
 static BOOL PreviewOpenHere(void) { return PV.hwnd && PV.dock == s_d; }
-#define CLOSE_NEAR  1.28f       /* ✕ con el cursor cerca */
-#define CLOSE_HOT   1.7f        /* ✕ con el cursor encima */
+#define PREV_TITLE  32          /* alto de la fila del título de cada tarjeta (lógico) */
+#define CLOSE_NEAR  1.15f       /* ✕ con el cursor cerca */
+#define CLOSE_HOT   1.4f        /* ✕ con el cursor encima: llena la fila del título sin salirse */
+/* La ✕ crece desde su centro: r es la mitad de su lado. */
 static void CloseCircle(int i, float *cx, float *cy, float *r)
 {
     const RECT *x = &PV.close[i];
-    const float r0 = (x->right - x->left) * 0.5f, rs = r0 * PV.xs[i];
-    *r = rs;
-    *cx = x->right - rs;
-    *cy = (x->top + x->bottom) * 0.5f + r0 - rs;     /* el borde de abajo no se mueve */
+    /* el rebote puede pasarse un poco de CLOSE_HOT: tope para no llegar a la miniatura */
+    *r = (x->right - x->left) * 0.5f * min(PV.xs[i], CLOSE_HOT * 1.07f);
+    *cx = (x->left + x->right) * 0.5f;
+    *cy = (x->top + x->bottom) * 0.5f;
 }
 static HWINEVENTHOOK s_fgHook, s_winHook, s_moveHook;   /* únicos: se reparten a todos */
 
@@ -1650,7 +1652,7 @@ static void PreviewBuild(const DockItem *it)
         PV.font = Gfx_Font(Gfx_UiFace(), DS(12), FW_SEMIBOLD, CLEARTYPE_QUALITY);
         PV.glyphs = Gfx_Font(Gfx_IconFace(), DS(9), FW_NORMAL, CLEARTYPE_QUALITY);
     }
-    const int O = DS(8), C = DS(8), T = DS(24), G = DS(6), margin = DS(12);
+    const int O = DS(8), C = DS(8), T = DS(PREV_TITLE), G = DS(6), margin = DS(12);
     const int monW = D.mon.right - D.mon.left - 2 * margin;
     int tw = DS(200);
     if (2 * O + PV.n * (tw + 2 * C) + (PV.n - 1) * G > monW)        /* muchas: más pequeñas */
@@ -1663,7 +1665,8 @@ static void PreviewBuild(const DockItem *it)
         const int x = O + i * (cardW + G), y = O, cs = DS(20);
         SetRect(&PV.card[i], x, y, x + cardW, y + cardH);
         SetRect(&PV.area[i], x + C, y + C + T, x + C + tw, y + C + T + th);
-        SetRect(&PV.close[i], x + C + tw - cs, y + C + (T - cs) / 2, x + C + tw, y + C + (T - cs) / 2 + cs);
+        const int ccx = x + C + tw - (int)(cs * CLOSE_HOT * 0.5f), ccy = y + C + T / 2;
+        SetRect(&PV.close[i], ccx - cs / 2, ccy - cs / 2, ccx - cs / 2 + cs, ccy - cs / 2 + cs);
         PV.cs[i] = 1.0f; PV.csv[i] = 0; PV.ca[i] = 0; PV.xs[i] = 1.0f; PV.xsv[i] = 0;
         if (IsIconic(PV.wins[i]) || FAILED(DwmRegisterThumbnail(PV.hwnd, PV.wins[i], &PV.thumb[i]))) { PV.thumb[i] = NULL; continue; }
         SIZE src = { 0, 0 };
@@ -1907,7 +1910,7 @@ static void PreviewRenderFull(const DockLook *L)
     Canvas_Clear(c, L->panel);
     const DockItem *it = ItemByKey(PV.key);
     if (it && D.iconGen != s_iconGen) it = NULL;        /* iconos de una caché ya vaciada */
-    const int T = DS(24), is = DS(16);
+    const int T = DS(PREV_TITLE), is = DS(16);
     for (int i = 0; i < PV.n; ++i) {
         const RECT *r = &PV.card[i], *a = &PV.area[i];
         const float ca = PV.ca[i];
@@ -1935,7 +1938,10 @@ static void PreviewRenderFull(const DockLook *L)
             const DWORD idle = Gfx_Mix(L->panel, L->bar, 0.18f);
             const DWORD fill = on ? 0xE5443C : Gfx_Mix(idle, 0xE5443C, heat * 0.55f);
             const DWORD bg = Gfx_Mix(L->panel, L->bar, L->light ? 0.08f : 0.10f);
-            Gfx_FillCircle(c, cx, cy, r, fill, ca);
+            /* en reposo, círculo; al crecer se vuelve un cuadrado de esquinas redondeadas */
+            const float grow = max(0.0f, min(1.0f, (PV.xs[i] - 1.0f) / (CLOSE_NEAR - 1.0f)));
+            const float corner = r * (1.0f - 0.5f * grow);         /* r (círculo) → r/2 */
+            Gfx_FillRRect(c, cx - r, cy - r, 2 * r, 2 * r, corner, fill, ca);
             const float a = r * 0.36f, th = max(1.4f, r * 0.17f);
             const DWORD ink = Gfx_Mix(bg, on || heat > 0.6f ? 0xFFFFFF : L->bar, ca);
             CloseStroke(c, cx - a, cy - a, cx + a, cy + a, th, ink);
@@ -2008,8 +2014,7 @@ static int PreviewHit(POINT p, BOOL *onClose)
         if (PtInRect(&PV.card[i], p)) {
             float cx, cy, r;
             CloseCircle(i, &cx, &cy, &r);
-            const float dx = p.x - cx, dy = p.y - cy;
-            *onClose = dx * dx + dy * dy <= (r + 2.0f) * (r + 2.0f);
+            *onClose = fabsf(p.x - cx) <= r + 2.0f && fabsf(p.y - cy) <= r + 2.0f;
             return i;
         }
     return -1;
