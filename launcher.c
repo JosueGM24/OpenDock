@@ -1281,8 +1281,10 @@ static void Kick(void)
     Pop_Hold(&L.pop, TRUE);
 }
 
+static void Backdrop_Step(void);
 static BOOL Advance(void)
 {
+    Backdrop_Step();
     LARGE_INTEGER t, f;
     QueryPerformanceCounter(&t);
     QueryPerformanceFrequency(&f);
@@ -1825,6 +1827,24 @@ static void TakeFocus(HWND h)
 #define BD_CLASS L"OpenDock.SearchBackdrop"
 static struct { HWND hwnd; Canvas sm; float a, target; DWORD last; } BD;
 
+/* Un paso del fundido. Lo da cada fotograma del buscador (mientras anima, la cola nunca
+ * queda vacía y WM_TIMER no llegaría) y, si no, el temporizador del propio fondo. */
+static void Backdrop_Step(void)
+{
+    if (!BD.hwnd || BD.a == BD.target) return;
+    const DWORD now = GetTickCount();
+    const float dt = min(0.05f, (now - BD.last) / 1000.0f);
+    if (dt <= 0.0f) return;
+    BD.last = now;
+    BD.a += (BD.target - BD.a) * min(1.0f, dt * (BD.target > BD.a ? 13.0f : 18.0f));
+    if (fabsf(BD.a - BD.target) < 0.01f) BD.a = BD.target;
+    SetLayeredWindowAttributes(BD.hwnd, 0, (BYTE)(255.0f * BD.a + 0.5f), LWA_ALPHA);
+    if (BD.a == BD.target) {
+        KillTimer(BD.hwnd, 1);
+        if (BD.target == 0) DestroyWindow(BD.hwnd);
+    }
+}
+
 static LRESULT CALLBACK BackdropProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
@@ -1843,19 +1863,9 @@ static LRESULT CALLBACK BackdropProc(HWND h, UINT m, WPARAM w, LPARAM l)
         EndPaint(h, &ps);
         return 0;
     }
-    case WM_TIMER: {
-        const DWORD now = GetTickCount();
-        const float dt = min(0.05f, (now - BD.last) / 1000.0f);
-        BD.last = now;
-        BD.a += (BD.target - BD.a) * min(1.0f, dt * (BD.target > BD.a ? 13.0f : 18.0f));
-        if (fabsf(BD.a - BD.target) < 0.01f) BD.a = BD.target;
-        SetLayeredWindowAttributes(h, 0, (BYTE)(255.0f * BD.a + 0.5f), LWA_ALPHA);
-        if (BD.a == BD.target) {
-            KillTimer(h, 1);
-            if (BD.target == 0) DestroyWindow(h);
-        }
+    case WM_TIMER:
+        Backdrop_Step();
         return 0;
-    }
     case WM_DESTROY:
         if (h == BD.hwnd) BD.hwnd = NULL;
         Canvas_Free(&BD.sm);
@@ -2019,11 +2029,16 @@ static BOOL ForegroundElevated(void)
     return elevated;
 }
 
+/* Marca de lo que reinyecta OpenDock: así se distingue de lo que llega de un escritorio
+ * remoto, que también es "inyectado" (Chrome Remote Desktop teclea con SendInput). */
+#define OD_INJECTED ((ULONG_PTR)0x0D0C4B45)
+
 static LRESULT CALLBACK KbProc(int code, WPARAM w, LPARAM l)
 {
     if (code == HC_ACTION) {
         const KBDLLHOOKSTRUCT *k = (const KBDLLHOOKSTRUCT *)l;
-        if (!(k->flags & LLKHF_INJECTED)) {
+        /* lo inyectado no cuenta (otras apps, lo nuestro), salvo en una sesión remota */
+        if (!(k->flags & LLKHF_INJECTED) || (App_RemoteView() && k->dwExtraInfo != OD_INJECTED)) {
             const BOOL down = w == WM_KEYDOWN || w == WM_SYSKEYDOWN;
             if (k->vkCode == VK_LWIN || k->vkCode == VK_RWIN) {
                 if (down) {
@@ -2034,7 +2049,7 @@ static LRESULT CALLBACK KbProc(int code, WPARAM w, LPARAM l)
                         /* sola: Windows no debe ver un "Win soltada" sin nada en medio */
                         INPUT in[3];
                         ZeroMemory(in, sizeof(in));
-                        for (int i = 0; i < 3; ++i) in[i].type = INPUT_KEYBOARD;
+                        for (int i = 0; i < 3; ++i) { in[i].type = INPUT_KEYBOARD; in[i].ki.dwExtraInfo = OD_INJECTED; }
                         in[0].ki.wVk = VK_MASK;
                         in[1].ki.wVk = VK_MASK; in[1].ki.dwFlags = KEYEVENTF_KEYUP;
                         in[2].ki.wVk = (WORD)k->vkCode; in[2].ki.wScan = (WORD)k->scanCode;
