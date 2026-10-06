@@ -61,7 +61,13 @@ dock y el sonido de notificación (los mismos 13 sonidos que la versión de Wind
 - **Dock**: favoritos + aplicaciones abiertas (`AppFavorites` / `Shell.AppSystem`),
   lupa gaussiana al pasar el cursor, rebote de 3 saltos al abrir, indicador de apps en
   ejecución y ocultación automática con reserva de espacio de trabajo
-  (`Main.layoutManager.addChrome(..., {affectsStruts: true})`).
+  (`Main.layoutManager.addChrome(..., {affectsStruts: true})`). Hay un dock en cada
+  monitor, con las mismas apps y su propia lupa y ocultación, y cada uno se aparta solo
+  cuando su monitor tiene una ventana a pantalla completa. Con el cursor 400 ms sobre
+  una app abierta (o al pulsar una con varias ventanas) sale la vista previa de sus
+  ventanas: imagen en vivo (`Clutter.Clone` del actor de la ventana), título y ✕;
+  clic para ir a esa ventana y clic central para cerrarla. Nace del icono con el muelle
+  de OpenDock y la tarjeta señalada crece como en el centro de notificaciones.
 - **Barra superior**: 28 px de alto, color del material y reloj con el formato
   "Jue 2 oct  14:05". El Centro de Control de GNOME (Quick Settings) se mantiene tal
   cual; solo se restylea.
@@ -70,6 +76,9 @@ dock y el sonido de notificación (los mismos 13 sonidos que la versión de Wind
 
 ## Límites conocidos
 
+- La barra superior es el panel de GNOME restyleado, y GNOME solo lo pone en el monitor
+  principal: en los demás monitores hay dock, pero no barra (la versión de Windows y la
+  nativa de Linux sí ponen una en cada monitor).
 - GNOME Shell no permite clientes `layer-shell`; todo lo anterior se hace con la API
   pública (y alguna privada, como la señal `notification-added` de
   `MessageTray.Source`) de GNOME Shell. Un cambio grande en el shell entre versiones
