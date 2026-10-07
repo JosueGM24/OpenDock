@@ -30,7 +30,8 @@
   <p>OpenDock es software libre que se ejecuta solo en tu equipo. Esta página explica qué datos trata el programa y qué datos trata este sitio web.</p>
   <h2>El programa (Windows y Linux)</h2>
   <ul>
-    <li><b>No recoge ni envía datos.</b> OpenDock no abre ninguna conexión de red: no tiene cuenta, ni telemetría, ni estadísticas de uso, ni actualizaciones automáticas.</li>
+    <li><b>No recoge ni envía datos.</b> OpenDock no tiene cuenta, ni telemetría, ni estadísticas de uso.</li>
+    <li><b>Actualizaciones (Windows), solo si las activas.</b> Con "Buscar actualizaciones" encendido (lo propone al instalar y se cambia en Configuración), una vez al día pide a la API pública de GitHub cuál es la última versión, identificándose solo como <code>OpenDock/&lt;versión&gt;</code>; también lo hace si eliges "Buscar actualizaciones" en el menú de la bandeja. Al pulsar "Actualizar" descarga el .exe de esa versión desde GitHub y comprueba su SHA-256 antes de usarlo. GitHub ve esas peticiones como las de cualquier navegador (ver su política más abajo). Sin activarlo, OpenDock no se conecta a nada.</li>
     <li><b>Notificaciones.</b> Para mostrarlas en el notch, en Windows lee en solo lectura la base local de notificaciones de Windows, y en Linux las recibe como servidor de notificaciones del escritorio. No se copian ni se suben a ningún sitio.</li>
     <li><b>Ajustes.</b> Se guardan en tu equipo: en Windows en el registro de tu usuario (HKCU), en Linux en <code>~/.config/opendock</code>. Al desinstalar puedes borrarlos.</li>
     <li>Puedes comprobar todo lo anterior en el <a href="https://github.com/JosueGM24/OpenDock">código fuente</a>.</li>
@@ -44,7 +45,7 @@
   </ul>
   <h2>Contacto</h2>
   <p>Daniel Godínez, mantenedor de OpenDock: usa el formulario de la <a href="./#opinion">página principal</a> o abre un tema en <a href="https://github.com/JosueGM24/OpenDock/issues">GitHub</a>.</p>
-  <p class="meta">Última actualización: 6 de octubre de 2026 · <a href="./">Volver a OpenDock</a></p>
+  <p class="meta">Última actualización: 7 de octubre de 2026 · <a href="./">Volver a OpenDock</a></p>
 </main>
 </body>
 </html>

@@ -88,7 +88,7 @@ if IMAGES:
     big = font(['segoeuib.ttf', 'arialbd.ttf'], 92); mid = font(['segoeui.ttf', 'arial.ttf'], 36)
     d.text((90, 300), 'OpenDock', font=big, fill=(238, 241, 246))
     d.text((90, 420), 'Notch, barra superior y dock para Windows y Linux.', font=mid, fill=(170, 177, 190))
-    d.text((90, 470), 'Código abierto · sin red · menos de 15 MB de memoria', font=mid, fill=(120, 128, 142))
+    d.text((90, 470), 'Código abierto · sin telemetría · menos de 15 MB de memoria', font=mid, fill=(120, 128, 142))
     og.save(os.path.join(assets, 'og.png'), optimize=True)
 else:
     for f in ('logo.png', 'favicon.png', 'apple-touch-icon.png', 'og.png'):
@@ -107,7 +107,7 @@ body = body.replace('<span class="meta">Hecho en C, sin frameworks.</span>',
 assert '__LOGO__' not in body and DOWNLOAD in body
 
 fonts = page[page.index('<link rel="preconnect"'):page.index('<style>')].strip()
-desc = 'OpenDock pone tus notificaciones en un notch y añade una barra superior con centro de control y un dock a Windows 10 y 11 y a Linux. Código abierto, sin red, menos de 15 MB de memoria.'
+desc = 'OpenDock pone tus notificaciones en un notch y añade una barra superior con centro de control y un dock a Windows 10 y 11 y a Linux. Código abierto, sin telemetría, menos de 15 MB de memoria.'
 html = f'''<!doctype html>
 <html lang="es">
 <head>
@@ -201,7 +201,7 @@ def doc_page(name, title, body):
 <main class="wrap doc">
   <a href="./" style="display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);font-weight:700"><img src="assets/logo.png" alt="" width="32" height="32">OpenDock</a>
 {body.rstrip()}
-  <p class="meta">Última actualización: 6 de octubre de 2026 · <a href="./">Volver a OpenDock</a></p>
+  <p class="meta">Última actualización: 7 de octubre de 2026 · <a href="./">Volver a OpenDock</a></p>
 </main>
 </body>
 </html>
@@ -213,7 +213,8 @@ doc_page('privacidad.html', 'Privacidad', f'''
   <p>OpenDock es software libre que se ejecuta solo en tu equipo. Esta página explica qué datos trata el programa y qué datos trata este sitio web.</p>
   <h2>El programa (Windows y Linux)</h2>
   <ul>
-    <li><b>No recoge ni envía datos.</b> OpenDock no abre ninguna conexión de red: no tiene cuenta, ni telemetría, ni estadísticas de uso, ni actualizaciones automáticas.</li>
+    <li><b>No recoge ni envía datos.</b> OpenDock no tiene cuenta, ni telemetría, ni estadísticas de uso.</li>
+    <li><b>Actualizaciones (Windows), solo si las activas.</b> Con "Buscar actualizaciones" encendido (lo propone al instalar y se cambia en Configuración), una vez al día pide a la API pública de GitHub cuál es la última versión, identificándose solo como <code>OpenDock/&lt;versión&gt;</code>; también lo hace si eliges "Buscar actualizaciones" en el menú de la bandeja. Al pulsar "Actualizar" descarga el .exe de esa versión desde GitHub y comprueba su SHA-256 antes de usarlo. GitHub ve esas peticiones como las de cualquier navegador (ver su política más abajo). Sin activarlo, OpenDock no se conecta a nada.</li>
     <li><b>Notificaciones.</b> Para mostrarlas en el notch, en Windows lee en solo lectura la base local de notificaciones de Windows, y en Linux las recibe como servidor de notificaciones del escritorio. No se copian ni se suben a ningún sitio.</li>
     <li><b>Ajustes.</b> Se guardan en tu equipo: en Windows en el registro de tu usuario (HKCU), en Linux en <code>~/.config/opendock</code>. Al desinstalar puedes borrarlos.</li>
     <li>Puedes comprobar todo lo anterior en el <a href="{REPO}">código fuente</a>.</li>

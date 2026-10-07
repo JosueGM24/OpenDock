@@ -119,7 +119,11 @@ en autoocultar y se ocultan sus ventanas) y vuelve tal cual al quitarlo, al sali
 desinstalar. Se oculta solo a pantalla completa.
 
 ## Seguridad
-- **Sin red, sin telemetría, sin admin** (`asInvoker`). Todo vive en `HKCU`.
+- **Sin telemetría, sin admin** (`asInvoker`). Todo vive en `HKCU`. La única conexión es la de
+  **buscar actualizaciones**, y solo si lo activas (lo propone al instalar; se cambia en
+  Configuración) o lo pides desde la bandeja: una consulta diaria a la API pública de GitHub y, al
+  pulsar "Actualizar", la descarga del .exe de la versión, que se comprueba con su SHA-256 (y su
+  firma, cuando la tenga) antes de reemplazar el actual. No se envía nada tuyo.
 - **Mitigaciones de proceso** al arrancar: DLLs solo desde System32 (anti DLL-hijacking
   desde Descargas), bloqueo de imágenes remotas/baja integridad, sin puntos de extensión
   heredados (AppInit), sin código dinámico, solo fuentes del sistema, solo binarios

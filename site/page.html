@@ -560,7 +560,7 @@ header.top { animation: rise .6s cubic-bezier(.2, .9, .25, 1) both; }
   <section class="hero">
     <h1><span class="ln">Tu Windows,</span><br><span class="ln soft">con notch, barra y</span> <span class="ln">dock.</span></h1>
     <div class="hero-copy">
-      <p class="lede">OpenDock pone tus notificaciones en un notch, añade una barra superior con centro de control y un dock con tus apps. Todo se mueve con rebote, gasta menos memoria que una pestaña del navegador, no se conecta a internet y su código es abierto. Para Windows 10 y 11, y para Linux.</p>
+      <p class="lede">OpenDock pone tus notificaciones en un notch, añade una barra superior con centro de control y un dock con tus apps. Todo se mueve con rebote, gasta menos memoria que una pestaña del navegador, no te rastrea (solo busca actualizaciones si lo activas) y su código es abierto. Para Windows 10 y 11, y para Linux.</p>
       <div class="cta-row">
         <a class="btn btn-primary" href="#instalar">Instalar OpenDock <span class="arr">↓</span></a>
         <a class="btn btn-ghost" href="#codigo">Ver el código</a>
@@ -749,7 +749,7 @@ build.bat</pre>
     <h2>Lee tus avisos sin sacarlos del equipo</h2>
     <dl class="facts">
       <div class="fact"><dt>Notificaciones</dt><dd>Se leen en solo lectura de la base local de Windows. No se copian, no se suben, no se guardan aparte.</dd></div>
-      <div class="fact"><dt>Red</dt><dd>OpenDock no abre ninguna conexión. No hay cuenta, ni actualizaciones automáticas, ni telemetría. Puedes comprobarlo en el código.</dd></div>
+      <div class="fact"><dt>Red</dt><dd>No hay cuenta ni telemetría. La única conexión es buscar actualizaciones en GitHub, y solo si lo activas: te avisa y se actualiza al pulsar, tras comprobar el SHA-256. Puedes comprobarlo en el código.</dd></div>
       <div class="fact"><dt>Permisos</dt><dd>Se instala en tu usuario, sin administrador. Todo su registro vive en HKCU.</dd></div>
       <div class="fact"><dt>Proceso</dt><dd>Arranca con mitigaciones: DLL solo desde System32, sin código dinámico, ASLR y DEP.</dd></div>
       <div class="fact"><dt>Desinstalar</dt><dd>Desde Configuración → Aplicaciones. Devuelve la barra de tareas y el reloj de Windows tal como estaban.</dd></div>
