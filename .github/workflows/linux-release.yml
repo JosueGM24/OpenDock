@@ -26,10 +26,11 @@ jobs:
     name: Extensión de GNOME (.zip)
     timeout-minutes: 25
     runs-on: ubuntu-latest
+    container: debian:trixie    # el apt del runner de Ubuntu se ha colgado dos veces
     steps:
-      - uses: actions/checkout@v4
       - name: Herramientas
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglib2.0-bin zip
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git libglib2.0-bin zip
+      - uses: actions/checkout@v4
       - name: Empaquetar
         run: bash linux/gnome-extension/build.sh "$PWD/out"
       - uses: actions/upload-artifact@v4
