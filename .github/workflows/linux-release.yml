@@ -270,10 +270,56 @@ jobs:
           name: linux-gnome-rpm
           path: opendock-gnome.rpm
 
+  gnome-arch:
+    name: GNOME (paquete de Arch y Manjaro)
+    timeout-minutes: 25
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Paquetes
+        run: pacman -Syu --noconfirm --needed base-devel git glib2
+      - uses: actions/checkout@v4
+      - name: Versión
+        run: |
+          v=$(sed -n "s/^  version: '\(.*\)',$/\1/p" linux/opendock/meson.build)
+          [ -n "$TAG" ] && v="${TAG#v}"
+          echo "VER=$v" >> "$GITHUB_ENV"
+      - name: Construir el paquete
+        run: |
+          sh linux/gnome-package/stage.sh /tmp/stage
+          useradd -m constructor
+          install -d -o constructor /tmp/pkg
+          # Arch pone los ayudantes en /usr/lib, no en /usr/libexec
+          mkdir -p /tmp/stage/usr/lib/opendock-gnome
+          mv /tmp/stage/usr/libexec/opendock-gnome-enable /tmp/stage/usr/lib/opendock-gnome/
+          rmdir /tmp/stage/usr/libexec
+          sed -i 's|/usr/libexec/opendock-gnome-enable|/usr/lib/opendock-gnome/opendock-gnome-enable|' /tmp/stage/etc/xdg/autostart/opendock-gnome-enable.desktop
+          cat > /tmp/pkg/PKGBUILD <<EOF
+          pkgname=opendock-gnome
+          pkgver=${VER//-/_}
+          pkgrel=1
+          pkgdesc="OpenDock para GNOME: notch, dock y esquinas redondeadas (se activa solo al entrar)"
+          arch=('any')
+          url="https://open-dock.netlify.app/"
+          license=('MIT')
+          depends=('gnome-shell')
+          conflicts=('gnome-shell-extension-opendock')
+          backup=('etc/xdg/autostart/opendock-gnome-enable.desktop')
+          package() { cp -a /tmp/stage/. "\$pkgdir"/; }
+          EOF
+          sed -i 's/^          //' /tmp/pkg/PKGBUILD
+          chown -R constructor /tmp/pkg /tmp/stage
+          cd /tmp/pkg && runuser -u constructor -- makepkg -f -d --noconfirm   # -d: solo se empaqueta, no hace falta GNOME aquí
+          cp /tmp/pkg/opendock-gnome-*-any.pkg.tar.zst "$GITHUB_WORKSPACE/opendock-gnome-any.pkg.tar.zst"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-gnome-arch
+          path: opendock-gnome-any.pkg.tar.zst
+
   publicar:
     name: Subir a la versión
     timeout-minutes: 25
-    needs: [extension, deb, rpm, arch, gnome-deb, gnome-rpm]
+    needs: [extension, deb, rpm, arch, gnome-deb, gnome-rpm, gnome-arch]
     if: inputs.tag != '' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

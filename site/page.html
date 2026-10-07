@@ -321,6 +321,9 @@ pre.cmd .c { color: var(--mute); }
 .linalt { font-size: 13px !important; color: #8E95A3 !important; }
 .linalt button { background: none; border: 0; padding: 0; font: inherit; color: #C9CED8; text-decoration: underline; cursor: pointer; }
 .linalt a { color: #C9CED8; }
+.linalt button[aria-pressed="true"] { color: var(--ink); font-weight: 700; text-decoration: none; }
+.lininst.pick .linalt { font-size: 14px !important; color: #C9CED8 !important; }
+.lininst.pick .linalt button { padding: 6px 12px; border: 1px solid #2A303B; border-radius: 999px; text-decoration: none; margin: 4px 2px 0; }
 .oneline .lead { margin: 0; font-size: 17px; color: #C9CED8; max-width: 62ch; }
 .oneline .lead b { color: var(--ink); }
 .cmdline.big { padding: 14px 14px 14px 20px; border-radius: 14px; }
@@ -781,11 +784,11 @@ build.bat</pre>
     </div>
     <div class="ospanel" role="tabpanel" id="panelLin" aria-labelledby="tabLin" hidden>
       <div class="lininst">
-        <a class="btn btn-primary linbtn" id="linBtn" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.deb" data-deb="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.deb" data-rpm="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.rpm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>Instalar</a>
+        <a class="btn btn-primary linbtn" id="linBtn" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.deb" data-deb="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.deb" data-rpm="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.rpm" data-arch="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome-any.pkg.tar.zst"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>Instalar</a>
         <div class="lininfo">
           <b id="linFor">Para Ubuntu y Debian con GNOME</b>
-          <span>Se abre en el Centro de software: pulsa <b>Instalar</b>, cierra sesión y vuelve a entrar. OpenDock se activa solo.</span>
-          <span class="linalt">¿Otro sistema? <button type="button" data-lin="deb">Ubuntu o Debian</button> · <button type="button" data-lin="rpm">Fedora u openSUSE</button> · <a href="#linuxcmd">KDE, Hyprland, XFCE y otros</a></span>
+          <span id="linHow">Se abre en el Centro de software: pulsa <b>Instalar</b>, cierra sesión y vuelve a entrar. OpenDock se activa solo.</span>
+          <span class="linalt" id="linAlt">¿Otro sistema? <button type="button" data-lin="deb">Ubuntu o Debian</button> · <button type="button" data-lin="rpm">Fedora u openSUSE</button> · <button type="button" data-lin="arch">Arch o Manjaro</button> · <a href="#linuxcmd">KDE, Hyprland, XFCE y otros</a></span>
         </div>
       </div>
       <div class="oneline" id="linuxcmd">
@@ -795,7 +798,7 @@ build.bat</pre>
       </div>
       <p class="or">O descarga el paquete nativo para otros escritorios y ábrelo con doble clic:</p>
       <div class="pkgs">
-        <article class="pkg"><b>GNOME</b><span>Extensión · GNOME 45 a 50 · también <a href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.deb">.deb</a> y <a href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.rpm">.rpm</a></span><a class="dl" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock@josuegm24.github.io.shell-extension.zip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>.zip</a><small>gnome-extensions install --force *.zip</small></article>
+        <article class="pkg"><b>GNOME</b><span>Extensión · GNOME 45 a 50 · también <a href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.deb">.deb</a>, <a href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.rpm">.rpm</a> y <a href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome-any.pkg.tar.zst">Arch</a></span><a class="dl" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock@josuegm24.github.io.shell-extension.zip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>.zip</a><small>gnome-extensions install --force *.zip</small></article>
         <article class="pkg"><b>Ubuntu y Debian</b><span>.deb · Ubuntu 24.10+, Debian 13</span><a class="dl" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-linux-amd64.deb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>.deb</a><small>Se abre en el Centro de aplicaciones</small></article>
         <article class="pkg"><b>Fedora y openSUSE</b><span>.rpm · x86_64</span><a class="dl" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-linux-x86_64.rpm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>.rpm</a><small>Se abre en Software o Discover</small></article>
         <article class="pkg"><b>Arch y Manjaro</b><span>pkg.tar.zst · x86_64</span><a class="dl" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-linux-x86_64.pkg.tar.zst"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>Arch</a><small>sudo pacman -U opendock-*.pkg.tar.zst</small></article>
@@ -1654,13 +1657,34 @@ build.bat</pre>
   if (onLinux) { const al = document.getElementById('alsoLinux'); if (al) al.hidden = true; }
   // Linux: el paquete de GNOME para la distribución que se adivina por el navegador (Fedora y
   // openSUSE lo dicen en su Firefox; si no, el .deb de Ubuntu y Debian, lo más común)
-  const linBtn = document.getElementById('linBtn'), linFor = document.getElementById('linFor');
+  // (si el navegador no lo dice, como en Manjaro o con Chrome, se pide elegir: un .deb en
+  // Arch no hace nada)
+  const linBtn = document.getElementById('linBtn'), linFor = document.getElementById('linFor'), linHow = document.getElementById('linHow');
+  const LIN = {
+    deb:  ['Para Ubuntu y Debian con GNOME', 'Se abre en el Centro de software: pulsa <b>Instalar</b>, cierra sesión y vuelve a entrar. OpenDock se activa solo.'],
+    rpm:  ['Para Fedora y openSUSE con GNOME', 'Se abre en Software: pulsa <b>Instalar</b>, cierra sesión y vuelve a entrar. OpenDock se activa solo.'],
+    arch: ['Para Arch y Manjaro con GNOME', 'Ábrelo con Pamac (Añadir/quitar software) o en una terminal: <code>sudo pacman -U opendock-gnome-any.pkg.tar.zst</code>. Cierra sesión y vuelve a entrar: OpenDock se activa solo.'],
+  };
   const setLin = kind => {
     if (!linBtn) return;
+    const box = linBtn.closest('.lininst');
+    document.querySelectorAll('[data-lin]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.lin === kind)));
+    if (!kind) {                    /* sin saber el sistema: el botón pide elegir */
+      box.classList.add('pick');
+      linBtn.removeAttribute('href');
+      linBtn.lastChild.textContent = 'Elige tu sistema';
+      linFor.textContent = '¿Qué sistema usas?';
+      linHow.innerHTML = 'Elige abajo y el botón descargará el paquete que toca.';
+      return;
+    }
+    box.classList.remove('pick');
     linBtn.href = linBtn.dataset[kind];
-    linFor.textContent = kind === 'rpm' ? 'Para Fedora y openSUSE con GNOME' : 'Para Ubuntu y Debian con GNOME';
+    linBtn.lastChild.textContent = 'Instalar';
+    linFor.textContent = LIN[kind][0];
+    linHow.innerHTML = LIN[kind][1];
   };
-  setLin(/Fedora|SUSE/i.test(ua) ? 'rpm' : 'deb');
+  setLin(/Ubuntu|Debian|Mint|Pop!?_?OS/i.test(ua) ? 'deb' : /Fedora|SUSE/i.test(ua) ? 'rpm' : /Manjaro|Arch|Endeavour/i.test(ua) ? 'arch' : null);
+  if (linBtn) linBtn.addEventListener('click', e => { if (!linBtn.getAttribute('href')) { e.preventDefault(); document.getElementById('linAlt').querySelector('button').focus(); } });
   document.querySelectorAll('[data-lin]').forEach(b => b.addEventListener('click', () => setLin(b.dataset.lin)));
   if (onLinux) {
     const hero = document.querySelector('.hero .btn-primary');

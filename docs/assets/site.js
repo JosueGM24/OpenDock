@@ -754,13 +754,34 @@
   if (onLinux) { const al = document.getElementById('alsoLinux'); if (al) al.hidden = true; }
   // Linux: el paquete de GNOME para la distribución que se adivina por el navegador (Fedora y
   // openSUSE lo dicen en su Firefox; si no, el .deb de Ubuntu y Debian, lo más común)
-  const linBtn = document.getElementById('linBtn'), linFor = document.getElementById('linFor');
+  // (si el navegador no lo dice, como en Manjaro o con Chrome, se pide elegir: un .deb en
+  // Arch no hace nada)
+  const linBtn = document.getElementById('linBtn'), linFor = document.getElementById('linFor'), linHow = document.getElementById('linHow');
+  const LIN = {
+    deb:  ['Para Ubuntu y Debian con GNOME', 'Se abre en el Centro de software: pulsa <b>Instalar</b>, cierra sesión y vuelve a entrar. OpenDock se activa solo.'],
+    rpm:  ['Para Fedora y openSUSE con GNOME', 'Se abre en Software: pulsa <b>Instalar</b>, cierra sesión y vuelve a entrar. OpenDock se activa solo.'],
+    arch: ['Para Arch y Manjaro con GNOME', 'Ábrelo con Pamac (Añadir/quitar software) o en una terminal: <code>sudo pacman -U opendock-gnome-any.pkg.tar.zst</code>. Cierra sesión y vuelve a entrar: OpenDock se activa solo.'],
+  };
   const setLin = kind => {
     if (!linBtn) return;
+    const box = linBtn.closest('.lininst');
+    document.querySelectorAll('[data-lin]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.lin === kind)));
+    if (!kind) {                    /* sin saber el sistema: el botón pide elegir */
+      box.classList.add('pick');
+      linBtn.removeAttribute('href');
+      linBtn.lastChild.textContent = 'Elige tu sistema';
+      linFor.textContent = '¿Qué sistema usas?';
+      linHow.innerHTML = 'Elige abajo y el botón descargará el paquete que toca.';
+      return;
+    }
+    box.classList.remove('pick');
     linBtn.href = linBtn.dataset[kind];
-    linFor.textContent = kind === 'rpm' ? 'Para Fedora y openSUSE con GNOME' : 'Para Ubuntu y Debian con GNOME';
+    linBtn.lastChild.textContent = 'Instalar';
+    linFor.textContent = LIN[kind][0];
+    linHow.innerHTML = LIN[kind][1];
   };
-  setLin(/Fedora|SUSE/i.test(ua) ? 'rpm' : 'deb');
+  setLin(/Ubuntu|Debian|Mint|Pop!?_?OS/i.test(ua) ? 'deb' : /Fedora|SUSE/i.test(ua) ? 'rpm' : /Manjaro|Arch|Endeavour/i.test(ua) ? 'arch' : null);
+  if (linBtn) linBtn.addEventListener('click', e => { if (!linBtn.getAttribute('href')) { e.preventDefault(); document.getElementById('linAlt').querySelector('button').focus(); } });
   document.querySelectorAll('[data-lin]').forEach(b => b.addEventListener('click', () => setLin(b.dataset.lin)));
   if (onLinux) {
     const hero = document.querySelector('.hero .btn-primary');

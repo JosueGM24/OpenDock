@@ -320,6 +320,9 @@ pre.cmd .c { color: var(--mute); }
 .linalt { font-size: 13px !important; color: #8E95A3 !important; }
 .linalt button { background: none; border: 0; padding: 0; font: inherit; color: #C9CED8; text-decoration: underline; cursor: pointer; }
 .linalt a { color: #C9CED8; }
+.linalt button[aria-pressed="true"] { color: var(--ink); font-weight: 700; text-decoration: none; }
+.lininst.pick .linalt { font-size: 14px !important; color: #C9CED8 !important; }
+.lininst.pick .linalt button { padding: 6px 12px; border: 1px solid #2A303B; border-radius: 999px; text-decoration: none; margin: 4px 2px 0; }
 .oneline .lead { margin: 0; font-size: 17px; color: #C9CED8; max-width: 62ch; }
 .oneline .lead b { color: var(--ink); }
 .cmdline.big { padding: 14px 14px 14px 20px; border-radius: 14px; }
