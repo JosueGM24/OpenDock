@@ -311,6 +311,15 @@ pre.cmd .c { color: var(--mute); }
 .ospanel { display: grid; gap: 28px; min-width: 0; }
 .ospanel > *, .oneline > * { min-width: 0; }
 .oneline { display: grid; gap: 14px; }
+.lininst { display: flex; flex-wrap: wrap; gap: 18px 24px; align-items: center; padding: 22px; border-radius: 20px; background: #0E1116; border: 1px solid #1E232C; }
+.linbtn { font-size: 17px; padding: 15px 28px; }
+.linbtn svg { width: 18px; height: 18px; }
+.lininfo { display: grid; gap: 4px; min-width: 0; flex: 1 1 320px; }
+.lininfo b { color: var(--ink); }
+.lininfo span { color: #B3B9C5; font-size: 14px; }
+.linalt { font-size: 13px !important; color: #8E95A3 !important; }
+.linalt button { background: none; border: 0; padding: 0; font: inherit; color: #C9CED8; text-decoration: underline; cursor: pointer; }
+.linalt a { color: #C9CED8; }
 .oneline .lead { margin: 0; font-size: 17px; color: #C9CED8; max-width: 62ch; }
 .oneline .lead b { color: var(--ink); }
 .cmdline.big { padding: 14px 14px 14px 20px; border-radius: 14px; }

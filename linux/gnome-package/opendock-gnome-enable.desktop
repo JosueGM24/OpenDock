@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpenDock (activar en GNOME)
+Comment=Activa la extensión de OpenDock la primera vez que entras en GNOME
+Exec=/usr/libexec/opendock-gnome-enable
+NoDisplay=true
+OnlyShowIn=GNOME;
+X-GNOME-Autostart-Phase=Applications
+X-GNOME-Autostart-enabled=true

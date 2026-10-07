@@ -312,6 +312,15 @@ pre.cmd .c { color: var(--mute); }
 .ospanel { display: grid; gap: 28px; min-width: 0; }
 .ospanel > *, .oneline > * { min-width: 0; }
 .oneline { display: grid; gap: 14px; }
+.lininst { display: flex; flex-wrap: wrap; gap: 18px 24px; align-items: center; padding: 22px; border-radius: 20px; background: #0E1116; border: 1px solid #1E232C; }
+.linbtn { font-size: 17px; padding: 15px 28px; }
+.linbtn svg { width: 18px; height: 18px; }
+.lininfo { display: grid; gap: 4px; min-width: 0; flex: 1 1 320px; }
+.lininfo b { color: var(--ink); }
+.lininfo span { color: #B3B9C5; font-size: 14px; }
+.linalt { font-size: 13px !important; color: #8E95A3 !important; }
+.linalt button { background: none; border: 0; padding: 0; font: inherit; color: #C9CED8; text-decoration: underline; cursor: pointer; }
+.linalt a { color: #C9CED8; }
 .oneline .lead { margin: 0; font-size: 17px; color: #C9CED8; max-width: 62ch; }
 .oneline .lead b { color: var(--ink); }
 .cmdline.big { padding: 14px 14px 14px 20px; border-radius: 14px; }
@@ -771,14 +780,22 @@ build.bat</pre>
       </div>
     </div>
     <div class="ospanel" role="tabpanel" id="panelLin" aria-labelledby="tabLin" hidden>
-      <div class="oneline">
+      <div class="lininst">
+        <a class="btn btn-primary linbtn" id="linBtn" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.deb" data-deb="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.deb" data-rpm="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.rpm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>Instalar</a>
+        <div class="lininfo">
+          <b id="linFor">Para Ubuntu y Debian con GNOME</b>
+          <span>Se abre en el Centro de software: pulsa <b>Instalar</b>, cierra sesión y vuelve a entrar. OpenDock se activa solo.</span>
+          <span class="linalt">¿Otro sistema? <button type="button" data-lin="deb">Ubuntu o Debian</button> · <button type="button" data-lin="rpm">Fedora u openSUSE</button> · <a href="#linuxcmd">KDE, Hyprland, XFCE y otros</a></span>
+        </div>
+      </div>
+      <div class="oneline" id="linuxcmd">
         <p class="lead"><b>Un solo comando.</b> Pégalo en una terminal y listo: reconoce tu escritorio y tu distribución, descarga lo que toca y comprueba su SHA-256 antes de instalar.</p>
         <div class="cmdline big"><code>curl -fsSL https://open-dock.netlify.app/install.sh | sh</code><button class="copy" type="button" data-copy="curl -fsSL https://open-dock.netlify.app/install.sh | sh" aria-label="Copiar el comando"><svg class="c1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><svg class="c2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></div>
         <p class="fine">En GNOME instala la extensión solo para tu usuario, sin sudo. En KDE Plasma, Hyprland, Sway, labwc, COSMIC, XFCE, MATE, Cinnamon o i3 instala el paquete de tu distribución. Para quitarlo, añade <code>-s -- --desinstalar</code> después de <code>sh</code>. <a href="install.sh">Lee el script antes</a>.</p>
       </div>
-      <p class="or">O descarga el paquete y ábrelo con doble clic:</p>
+      <p class="or">O descarga el paquete nativo para otros escritorios y ábrelo con doble clic:</p>
       <div class="pkgs">
-        <article class="pkg"><b>GNOME</b><span>Extensión · GNOME 45 a 50</span><a class="dl" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock@josuegm24.github.io.shell-extension.zip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>.zip</a><small>gnome-extensions install --force *.zip</small></article>
+        <article class="pkg"><b>GNOME</b><span>Extensión · GNOME 45 a 50 · también <a href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.deb">.deb</a> y <a href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-gnome.rpm">.rpm</a></span><a class="dl" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock@josuegm24.github.io.shell-extension.zip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>.zip</a><small>gnome-extensions install --force *.zip</small></article>
         <article class="pkg"><b>Ubuntu y Debian</b><span>.deb · Ubuntu 24.10+, Debian 13</span><a class="dl" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-linux-amd64.deb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>.deb</a><small>Se abre en el Centro de aplicaciones</small></article>
         <article class="pkg"><b>Fedora y openSUSE</b><span>.rpm · x86_64</span><a class="dl" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-linux-x86_64.rpm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>.rpm</a><small>Se abre en Software o Discover</small></article>
         <article class="pkg"><b>Arch y Manjaro</b><span>pkg.tar.zst · x86_64</span><a class="dl" href="https://github.com/JosueGM24/OpenDock/releases/latest/download/opendock-linux-x86_64.pkg.tar.zst"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>Arch</a><small>sudo pacman -U opendock-*.pkg.tar.zst</small></article>
@@ -831,7 +848,7 @@ build.bat</pre>
       </div>
       <div class="fcard" role="tabpanel" id="panelBug" aria-labelledby="tabBug">
         <form name="reportar-error" method="POST" action="/gracias.html" enctype="multipart/form-data" data-netlify="true" netlify-honeypot="bot-field" novalidate>
-          <input type="hidden" name="form-name" value="reportar-error"><input type="hidden" name="version" value="OpenDock 2.2.1">
+          <input type="hidden" name="form-name" value="reportar-error"><input type="hidden" name="version" value="OpenDock 2.2.2">
           <p class="hp"><label>No llenes esto: <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
           <div class="fgrid">
             <div class="field"><label for="bName">Nombre <small>(opcional)</small></label><input id="bName" name="nombre" autocomplete="name"></div>
@@ -852,7 +869,7 @@ build.bat</pre>
       </div>
       <div class="fcard" role="tabpanel" id="panelIdea" aria-labelledby="tabIdea" hidden>
         <form name="sugerir-funcion" method="POST" action="/gracias.html" enctype="multipart/form-data" data-netlify="true" netlify-honeypot="bot-field" novalidate>
-          <input type="hidden" name="form-name" value="sugerir-funcion"><input type="hidden" name="version" value="OpenDock 2.2.1">
+          <input type="hidden" name="form-name" value="sugerir-funcion"><input type="hidden" name="version" value="OpenDock 2.2.2">
           <p class="hp"><label>No llenes esto: <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
           <div class="fgrid">
             <div class="field"><label for="iName">Nombre <small>(opcional)</small></label><input id="iName" name="nombre" autocomplete="name"></div>
@@ -1635,6 +1652,16 @@ build.bat</pre>
   });
   if (location.hash === '#linux') requestAnimationFrame(() => goLinux(false));
   if (onLinux) { const al = document.getElementById('alsoLinux'); if (al) al.hidden = true; }
+  // Linux: el paquete de GNOME para la distribución que se adivina por el navegador (Fedora y
+  // openSUSE lo dicen en su Firefox; si no, el .deb de Ubuntu y Debian, lo más común)
+  const linBtn = document.getElementById('linBtn'), linFor = document.getElementById('linFor');
+  const setLin = kind => {
+    if (!linBtn) return;
+    linBtn.href = linBtn.dataset[kind];
+    linFor.textContent = kind === 'rpm' ? 'Para Fedora y openSUSE con GNOME' : 'Para Ubuntu y Debian con GNOME';
+  };
+  setLin(/Fedora|SUSE/i.test(ua) ? 'rpm' : 'deb');
+  document.querySelectorAll('[data-lin]').forEach(b => b.addEventListener('click', () => setLin(b.dataset.lin)));
   if (onLinux) {
     const hero = document.querySelector('.hero .btn-primary');
     if (hero && hero.firstChild) { hero.href = '#instalar'; hero.firstChild.textContent = 'Instalar en Linux '; }

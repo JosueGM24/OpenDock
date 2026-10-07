@@ -181,9 +181,92 @@ jobs:
           name: linux-arch
           path: opendock-linux-x86_64.pkg.tar.zst
 
+  gnome-deb:
+    name: GNOME (.deb para Ubuntu y Debian)
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Paquetes
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git libglib2.0-bin dpkg-dev
+      - uses: actions/checkout@v4
+      - name: Versión
+        run: |
+          v=$(sed -n "s/^  version: '\(.*\)',$/\1/p" linux/opendock/meson.build)
+          [ -n "$TAG" ] && v="${TAG#v}"
+          echo "VER=$v" >> "$GITHUB_ENV"
+      - name: Construir el .deb
+        run: |
+          sh linux/gnome-package/stage.sh pkg
+          mkdir -p pkg/DEBIAN
+          cat > pkg/DEBIAN/control <<EOF
+          Package: opendock-gnome
+          Version: ${VER}
+          Architecture: all
+          Maintainer: OpenDock <noreply@github.com>
+          Depends: gnome-shell (>= 45)
+          Section: gnome
+          Priority: optional
+          Homepage: https://open-dock.netlify.app/
+          Description: OpenDock para GNOME: notch, dock y esquinas redondeadas
+           La extensión de GNOME Shell de OpenDock, para todo el sistema. Se activa sola
+           la próxima vez que entras en GNOME (cierra sesión y vuelve a entrar).
+          EOF
+          echo /etc/xdg/autostart/opendock-gnome-enable.desktop > pkg/DEBIAN/conffiles
+          dpkg-deb --build --root-owner-group pkg opendock-gnome.deb
+          dpkg-deb --info opendock-gnome.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-gnome-deb
+          path: opendock-gnome.deb
+
+  gnome-rpm:
+    name: GNOME (.rpm para Fedora y openSUSE)
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Paquetes
+        run: dnf install -y git glib2 rpm-build
+      - uses: actions/checkout@v4
+      - name: Versión
+        run: |
+          v=$(sed -n "s/^  version: '\(.*\)',$/\1/p" linux/opendock/meson.build)
+          [ -n "$TAG" ] && v="${TAG#v}"
+          echo "VER=$v" >> "$GITHUB_ENV"
+      - name: Construir el .rpm
+        run: |
+          sh linux/gnome-package/stage.sh "$PWD/stage"
+          cat > opendock-gnome.spec <<'EOF'
+          Name:      opendock-gnome
+          Version:   %{ver}
+          Release:   1
+          Summary:   OpenDock para GNOME: notch, dock y esquinas redondeadas
+          License:   MIT
+          URL:       https://open-dock.netlify.app/
+          BuildArch: noarch
+          Requires:  gnome-shell >= 45
+          %description
+          La extensión de GNOME Shell de OpenDock, para todo el sistema. Se activa sola
+          la próxima vez que entras en GNOME (cierra sesión y vuelve a entrar).
+          %install
+          cp -a %{stage}/. %{buildroot}/
+          %files
+          /usr/share/gnome-shell/extensions/opendock@josuegm24.github.io
+          /usr/libexec/opendock-gnome-enable
+          %config(noreplace) /etc/xdg/autostart/opendock-gnome-enable.desktop
+          /usr/share/doc/opendock-gnome
+          EOF
+          sed -i 's/^          //' opendock-gnome.spec
+          rpmbuild -bb opendock-gnome.spec --define "ver ${VER//-/_}" --define "stage $PWD/stage" --define "_rpmdir $PWD/rpms"
+          cp rpms/noarch/opendock-gnome-*.rpm opendock-gnome.rpm
+          rpm -qpR opendock-gnome.rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-gnome-rpm
+          path: opendock-gnome.rpm
+
   publicar:
     name: Subir a la versión
-    needs: [extension, deb, rpm, arch]
+    needs: [extension, deb, rpm, arch, gnome-deb, gnome-rpm]
     if: inputs.tag != '' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

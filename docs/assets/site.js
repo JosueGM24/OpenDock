@@ -752,6 +752,16 @@
   });
   if (location.hash === '#linux') requestAnimationFrame(() => goLinux(false));
   if (onLinux) { const al = document.getElementById('alsoLinux'); if (al) al.hidden = true; }
+  // Linux: el paquete de GNOME para la distribución que se adivina por el navegador (Fedora y
+  // openSUSE lo dicen en su Firefox; si no, el .deb de Ubuntu y Debian, lo más común)
+  const linBtn = document.getElementById('linBtn'), linFor = document.getElementById('linFor');
+  const setLin = kind => {
+    if (!linBtn) return;
+    linBtn.href = linBtn.dataset[kind];
+    linFor.textContent = kind === 'rpm' ? 'Para Fedora y openSUSE con GNOME' : 'Para Ubuntu y Debian con GNOME';
+  };
+  setLin(/Fedora|SUSE/i.test(ua) ? 'rpm' : 'deb');
+  document.querySelectorAll('[data-lin]').forEach(b => b.addEventListener('click', () => setLin(b.dataset.lin)));
   if (onLinux) {
     const hero = document.querySelector('.hero .btn-primary');
     if (hero && hero.firstChild) { hero.href = '#instalar'; hero.firstChild.textContent = 'Instalar en Linux '; }

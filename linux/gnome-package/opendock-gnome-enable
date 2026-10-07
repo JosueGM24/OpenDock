@@ -1,0 +1,29 @@
+#!/bin/sh
+# Activa la extensión de OpenDock la primera vez que se entra en GNOME tras instalar el
+# paquete opendock-gnome (la extensión queda instalada para todo el sistema, pero GNOME
+# solo carga las que cada usuario tiene activadas). Solo una vez por usuario: si luego la
+# desactivas en Extensiones, no se vuelve a activar.
+UUID=opendock@josuegm24.github.io
+mark="${XDG_CONFIG_HOME:-$HOME/.config}/opendock/gnome-activada"
+[ -e "$mark" ] && exit 0
+command -v gsettings >/dev/null 2>&1 || exit 0
+
+gsettings set org.gnome.shell disable-user-extensions false 2>/dev/null || true
+if command -v gnome-extensions >/dev/null 2>&1 && gnome-extensions enable "$UUID" 2>/dev/null; then
+    :
+else
+    act=$(gsettings get org.gnome.shell enabled-extensions 2>/dev/null || echo "@as []")
+    case "$act" in
+        *"'$UUID'"*) ;;
+        *"[]"*) gsettings set org.gnome.shell enabled-extensions "['$UUID']" ;;
+        *) gsettings set org.gnome.shell enabled-extensions "$(printf '%s' "$act" | sed "s/]\$/, '$UUID']/")" ;;
+    esac
+fi
+# El dock de Ubuntu (o Dash to Dock) y el de OpenDock a la vez serían dos docks: se apaga
+# el otro (se puede volver a encender en la app Extensiones).
+if command -v gnome-extensions >/dev/null 2>&1; then
+    for other in ubuntu-dock@ubuntu.com dash-to-dock@micxgx.gmail.com; do
+        gnome-extensions disable "$other" 2>/dev/null || true
+    done
+fi
+mkdir -p "$(dirname "$mark")" && : > "$mark"
