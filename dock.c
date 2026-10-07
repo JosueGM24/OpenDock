@@ -1179,12 +1179,16 @@ present:;
     /* con Inicio abierto el dock baja y se desvanece para no chocar con el menú */
     const float e = D.slide * D.slide * (3 - 2 * D.slide);
     POINT dst = { D.mon.left, D.mon.bottom - WinH() + D.sinkPx + (int)(e * (WinH() - D.panelY + DS(6))) }, src = { 0, 0 };
-    SIZE sz = { f->w, f->h };
+    /* lo que baja de su monitor no se presenta: con otro monitor debajo, el dock que se
+     * esconde asomaría en él en lugar de desaparecer */
+    SIZE sz = { f->w, max(1, min(f->h, (int)(D.mon.bottom - dst.y))) };
     BLENDFUNCTION bf = { AC_SRC_OVER, 0, (BYTE)(255 * (1 - e) + 0.5f), AC_SRC_ALPHA };
     /* a DWM solo se le manda lo que cambió (lo de ahora y lo del fotograma anterior) */
     RECT upd = dirty;
     if (D.dirtyPrev.right > D.dirtyPrev.left) UnionRect(&upd, &upd, &D.dirtyPrev);
     D.dirtyPrev = dirty;
+    if (upd.bottom > sz.cy) upd.bottom = sz.cy;
+    if (upd.top >= upd.bottom) { upd.top = 0; upd.bottom = sz.cy; }
     HDC screen = GetDC(NULL);
     UPDATELAYEREDWINDOWINFO ui = { sizeof(ui) };
     ui.hdcDst = screen; ui.pptDst = &dst; ui.psize = &sz; ui.hdcSrc = f->dc; ui.pptSrc = &src;
