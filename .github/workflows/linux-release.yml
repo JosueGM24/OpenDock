@@ -24,6 +24,7 @@ env:
 jobs:
   extension:
     name: Extensión de GNOME (.zip)
+    timeout-minutes: 25
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +39,7 @@ jobs:
 
   deb:
     name: Paquete .deb
+    timeout-minutes: 25
     runs-on: ubuntu-latest
     container: debian:trixie
     steps:
@@ -93,6 +95,7 @@ jobs:
 
   rpm:
     name: Paquete .rpm
+    timeout-minutes: 25
     runs-on: ubuntu-latest
     container: fedora:latest
     steps:
@@ -153,6 +156,7 @@ jobs:
 
   arch:
     name: Paquete de Arch
+    timeout-minutes: 25
     runs-on: ubuntu-latest
     container: archlinux:latest
     steps:
@@ -183,6 +187,7 @@ jobs:
 
   gnome-deb:
     name: GNOME (.deb para Ubuntu y Debian)
+    timeout-minutes: 25
     runs-on: ubuntu-latest
     container: debian:trixie
     steps:
@@ -221,6 +226,7 @@ jobs:
 
   gnome-rpm:
     name: GNOME (.rpm para Fedora y openSUSE)
+    timeout-minutes: 25
     runs-on: ubuntu-latest
     container: fedora:latest
     steps:
@@ -266,6 +272,7 @@ jobs:
 
   publicar:
     name: Subir a la versión
+    timeout-minutes: 25
     needs: [extension, deb, rpm, arch, gnome-deb, gnome-rpm]
     if: inputs.tag != '' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
