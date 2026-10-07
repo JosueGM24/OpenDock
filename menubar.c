@@ -119,6 +119,7 @@ static struct {
     wchar_t ssid[64];
     float   volume;
     BOOL    muted;
+    float   lastVol;            /* el último volumen audible: al quitar el silencio se vuelve a él */
     IAudioEndpointVolume *ep;
     HANDLE  wlan;
 } S;
@@ -381,6 +382,7 @@ static void ReadVolume(void)
     IAudioEndpointVolume_GetMute(S.ep, &m);
     S.volume = v;
     S.muted = m;
+    if (v > 0.01f) S.lastVol = v;
 }
 
 static void SetVolume(float v)
@@ -388,6 +390,7 @@ static void SetVolume(float v)
     if (!OpenVolume()) return;
     v = max(0.0f, min(1.0f, v));
     if (v < 0.01f) v = 0;       /* al fondo: silencio de verdad, como en el móvil */
+    else S.lastVol = v;
     IAudioEndpointVolume_SetMasterVolumeLevelScalar(S.ep, v, NULL);
     if (S.muted != (v == 0)) IAudioEndpointVolume_SetMute(S.ep, v == 0, NULL);
     S.volume = v;
@@ -405,6 +408,8 @@ BOOL Bar_SystemSilent(void)
 static void ToggleMute(void)
 {
     if (!OpenVolume()) return;
+    /* quitar el silencio con el volumen a cero no se oiría: vuelve el último volumen */
+    if ((S.muted || S.volume < 0.01f) && S.volume < 0.01f) { SetVolume(S.lastVol > 0.01f ? S.lastVol : 0.3f); return; }
     S.muted = !S.muted;
     IAudioEndpointVolume_SetMute(S.ep, S.muted, NULL);
 }
@@ -1264,7 +1269,7 @@ static void DrawSliderRow(Canvas *c, RECT r, int k)
     const BarLook *L = &B.look;
     const float v = max(0.0f, min(1.0f, C.fill[k]));
     const float real = k ? (S.muted ? 0.0f : max(0.0f, S.volume)) : C.brightness / 100.0f;
-    LPCWSTR glyph = k ? (S.muted ? L"\xE74F" : L"\xE767") : L"\xE706";
+    LPCWSTR glyph = k ? (S.muted || S.volume < 0.01f ? L"\xE74F" : L"\xE767") : L"\xE706";
     wchar_t val[16];
     wsprintfW(val, L"%d %%", (int)(max(0.0f, min(1.0f, real)) * 100.0f + 0.5f));
     Gfx_Text(c, C.fTitle, k ? L"Sonido" : L"Pantalla", r.left, r.top, r.right - r.left, CS(18), L->fg, DT_SINGLELINE | DT_VCENTER);
@@ -1272,7 +1277,7 @@ static void DrawSliderRow(Canvas *c, RECT r, int k)
     const float x = (float)r.left, y = (float)(r.top + CS(22)), w = (float)(r.right - r.left), h = (float)CS(26);
     const DWORD fillc = L->light ? 0x1C1C1E : 0xFFFFFF, inkc = L->light ? 0xFFFFFF : 0x1C1C1E;
     Gfx_FillRRect(c, x, y, w, h, h * 0.5f, L->light ? 0xE5E5EA : 0x3A3A3C, 1.0f);
-    Gfx_FillRRect(c, x, y, max(h, w * v), h, h * 0.5f, fillc, 1.0f);
+    Gfx_FillRRect(c, x, y, max(h, w * v), h, h * 0.5f, fillc, k ? max(0.0f, 1.0f - C.mu) : 1.0f);   /* silenciado: el blanco se va */
     /* silenciado: un círculo rojo crece con rebote bajo el altavoz */
     if (k && C.mu > 0.01f)
         Gfx_FillCircle(c, x + CS(4) + h * 0.5f, y + h * 0.5f, h * 0.5f * C.mu, 0xFF453A, min(1.0f, C.mu * 1.4f));
