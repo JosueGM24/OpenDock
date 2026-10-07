@@ -14,7 +14,7 @@
 
 #define APP_NAME        L"OpenDock"
 #ifndef APP_VERSION             /* (las pruebas del actualizador lo cambian al compilar) */
-#define APP_VERSION     L"2.2.2"
+#define APP_VERSION     L"2.3.0"
 #endif
 #define APP_PUBLISHER   L"OpenDock"
 #define REG_KEY         L"Software\\OpenDock"
