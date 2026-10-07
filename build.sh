@@ -10,6 +10,6 @@ ${P}gcc -O2 -s -static -municode -mwindows \
   -Wall -Wextra -Wno-missing-field-initializers \
   -fstack-protector-strong \
   -Wl,--dynamicbase,--nxcompat,--high-entropy-va \
-  corner_radius.c gfx.c panel.c notch.c install.c winnotif.c menubar.c dock.c pop.c tray.c launcher.c menu.c lazy.c app.res -o OpenDock.exe \
+  corner_radius.c gfx.c panel.c notch.c install.c winnotif.c menubar.c dock.c pop.c tray.c launcher.c menu.c update.c lazy.c app.res -o OpenDock.exe \
   -lshell32 -ladvapi32 -lgdi32 -luser32 -lole32 -luuid -lsqlite3 -lmsimg32 -loleaut32 -lwbemuuid
 echo "OK -> OpenDock.exe"

@@ -40,6 +40,8 @@
 #define IDM_SETTINGS    104
 #define IDM_MENUBAR     105
 #define IDM_DOCK        106
+#define IDM_UPDATE      107
+#define IDM_CHECKUPD    108
 #define IDM_RADIUS_BASE 200
 
 #define TIMER_TOPMOST   1
@@ -74,6 +76,7 @@ static UINT      g_wmTaskbarCreated;
 static HWINEVENTHOOK g_fgHook, g_locHook;
 static BOOL      g_noSave;                  /* tras desinstalar: no volver a crear la clave */
 static wchar_t   g_relaunch[MAX_PATH];
+static wchar_t   g_relaunchArgs[48] = L"--installed";   /* con qué se relanza (instalar o actualizar) */
 static CRITICAL_SECTION g_shotLock;         /* g_shotPending: la deja ShotWatcher, la recoge WM_SHOTFILE */
 static wchar_t   g_shotPending[MAX_PATH];      /* tras instalar: arrancar la copia instalada */
 static DWORD     g_clipSeq;                 /* último cambio de portapapeles revisado */
@@ -152,7 +155,7 @@ int TToRadius(float t)
 }
 
 /* ───────────────────────── Registro ───────────────────────── */
-static DWORD RegReadDword(LPCWSTR name, DWORD def)
+DWORD RegReadDword(LPCWSTR name, DWORD def)
 {
     DWORD v = 0, sz = sizeof(v);
     if (RegGetValueW(HKEY_CURRENT_USER, REG_KEY, name, RRF_RT_REG_DWORD, NULL, &v, &sz) == ERROR_SUCCESS)
@@ -160,7 +163,7 @@ static DWORD RegReadDword(LPCWSTR name, DWORD def)
     return def;
 }
 
-static void RegWriteDword(LPCWSTR name, DWORD v)
+void RegWriteDword(LPCWSTR name, DWORD v)
 {
     HKEY k;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &k, NULL) == ERROR_SUCCESS) {
@@ -199,6 +202,7 @@ void Cfg_Save(void)
     RegWriteDword(L"NotchSiteIcons", (DWORD)g_cfg.siteIcons);
     RegWriteDword(L"NotchSoundVol", (DWORD)g_cfg.soundVol);
     RegWriteDword(L"Launcher", (DWORD)g_cfg.launcher);
+    if (g_cfg.autoUpdate >= 0) RegWriteDword(L"AutoUpdate", (DWORD)g_cfg.autoUpdate);   /* sin elegir: no se escribe */
     RegWriteDword(L"NotchX", (DWORD)g_cfg.notchX);
     RegWriteDword(L"NotchY", (DWORD)g_cfg.notchY);
 }
@@ -241,6 +245,10 @@ static void LoadConfig(void)
     g_cfg.dockWinFull  = RegReadDword(L"DockWindowsFull", 1) != 0;
     g_cfg.siteIcons    = RegReadDword(L"NotchSiteIcons", 1) != 0;
     g_cfg.launcher     = RegReadDword(L"Launcher", 1) != 0;
+    {   /* solo se activa con un gesto del usuario: sin valor, no se busca */
+        const DWORD au = RegReadDword(L"AutoUpdate", 0xFFFFFFFF);
+        g_cfg.autoUpdate = au == 0xFFFFFFFF ? -1 : au != 0;
+    }
     {   /* antes eran cuatro niveles; ahora 0..100 */
         static const int kOld[4] = { 25, 55, 80, 100 };
         const DWORD v = RegReadDword(L"NotchSoundVol", 0xFFFF);
@@ -555,6 +563,11 @@ static void ShowTrayMenu(HWND hwnd)
     AppendMenuW(menu, MF_STRING | (g_cfg.hideCapture ? MF_CHECKED : 0), IDM_CAPTURE, L"Ocultar en capturas de pantalla");
     AppendMenuW(menu, MF_STRING | (Inst_IsStartup() ? MF_CHECKED : 0), IDM_STARTUP, L"Iniciar con Windows");
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    if (Upd_Available()) {
+        wsprintfW(buf, L"Actualizar a %s", Upd_Available());
+        AppendMenuW(menu, MF_STRING, IDM_UPDATE, buf);
+    } else AppendMenuW(menu, MF_STRING, IDM_CHECKUPD, L"Buscar actualizaciones");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(menu, MF_STRING, IDM_EXIT, L"Salir");
 
     POINT pt;
@@ -836,9 +849,33 @@ static DWORD WINAPI ShotWatcher(LPVOID unused)
     return 0;
 }
 
+void App_SetAutoUpdate(BOOL on)
+{
+    g_cfg.autoUpdate = on ? 1 : 0;
+    Cfg_Save();
+    Upd_Schedule();
+    Panel_Refresh();
+}
+
+BOOL App_AutoUpdateShown(void)
+{
+    return g_cfg.autoUpdate == 1 || (g_cfg.autoUpdate < 0 && !Inst_IsRunningInstalled());
+}
+
+/* Sale limpio (barra de tareas, reloj, esquinas…) y, al final de wWinMain, arranca exe. */
+void App_Relaunch(LPCWSTR exe, LPCWSTR args)
+{
+    lstrcpynW(g_relaunch, exe, MAX_PATH);
+    lstrcpynW(g_relaunchArgs, args, 48);
+    App_Quit();
+}
+
 void App_Install(void)
 {
     wchar_t exe[MAX_PATH];
+    /* el panel enseña "Buscar actualizaciones" encendido junto a "Instalar": instalar con él
+     * así es elegirlo (apagarlo antes de instalar lo deja apagado) */
+    if (g_cfg.autoUpdate < 0) { g_cfg.autoUpdate = 1; Cfg_Save(); Upd_Schedule(); }
     if (!Inst_Install(exe)) {
         Notch_Show(NI_WARN, L"No se pudo instalar", L"Revisa permisos de la carpeta", -1, TRUE);
         return;
@@ -911,9 +948,15 @@ static LRESULT CALLBACK CtrlProc(HWND h, UINT m, WPARAM w, LPARAM l)
         case IDM_CAPTURE:  App_SetHideCapture(!g_cfg.hideCapture); break;
         case IDM_STARTUP:  Inst_SetStartup(!Inst_IsStartup(), NULL); Panel_Refresh(); break;
         case IDM_EXIT:     App_Quit(); break;
+        case IDM_UPDATE:   Upd_Apply(); break;
+        case IDM_CHECKUPD: Upd_Check(TRUE); break;     /* pedido por el usuario: avisa también si está al día */
         }
         return 0;
     }
+
+    case WM_UPDATE:
+        Upd_OnMessage(w, l);
+        return 0;
 
     case WM_HOTKEY:
         switch (w) {
@@ -975,6 +1018,7 @@ static LRESULT CALLBACK CtrlProc(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
 
     case WM_TIMER:
+        if (Upd_Timer(w)) return 0;
         if (w == TIMER_REBUILD) { KillTimer(h, TIMER_REBUILD); RebuildCorners(); Bar_Reposition(); Dock_Reposition(); }
         else if (w == TIMER_TOPMOST) RaiseCorners();
         else if (w == TIMER_FSCHECK) { KillTimer(h, TIMER_FSCHECK); CheckFullscreen(); }
@@ -1138,7 +1182,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
 
     BOOL wantExit = FALSE, wantSettings = FALSE, wantUninstall = FALSE, afterInstall = FALSE;
     int  cliRadius = 0;
-    DWORD cleanupPid = 0;
+    DWORD cleanupPid = 0, afterUpdate = 0;
+    wchar_t updTest[MAX_PATH] = L"";
     int  argc = 0;
     LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     for (int i = 1; argv && i < argc; ++i) {
@@ -1148,10 +1193,14 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
         else if (!lstrcmpiW(argv[i], L"--installed")) afterInstall = TRUE;
         else if (!lstrcmpiW(argv[i], L"--radius") && i + 1 < argc)  cliRadius = _wtoi(argv[++i]);
         else if (!lstrcmpiW(argv[i], L"--cleanup") && i + 1 < argc) cleanupPid = (DWORD)_wtoi(argv[++i]);
+        else if (!lstrcmpiW(argv[i], L"--after-update") && i + 1 < argc) afterUpdate = (DWORD)_wtoi(argv[++i]);
+        else if (!lstrcmpiW(argv[i], L"--check-update-test") && i + 1 < argc) lstrcpynW(updTest, argv[++i], MAX_PATH);
     }
     if (argv) LocalFree(argv);
 
     if (cleanupPid) return Inst_Cleanup(cleanupPid);
+    if (updTest[0]) return Upd_SelfTest(updTest);      /* prueba del actualizador, sin interfaz */
+    if (afterUpdate) Upd_WaitFor(afterUpdate);          /* la versión anterior aún está saliendo */
 
     InitDpi();
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
@@ -1251,7 +1300,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
     const BOOL firstRun = RegReadDword(L"Welcomed", 0) == 0;
     if (firstRun) RegWriteDword(L"Welcomed", 1);
 
-    if (afterInstall)
+    Upd_Startup(afterUpdate);
+    if (afterUpdate) { }    /* Upd_Startup ya avisó "Actualizado a …" */
+    else if (afterInstall)
         Notch_Show(NI_CHECK, L"Instalada", L"Se inicia con Windows", -1, TRUE);
     else if (!hotkeysOk)
         Notch_Show(NI_WARN, L"Atajos ocupados", L"Otra app usa Ctrl+Alt+R/RePág", -1, FALSE);
@@ -1263,8 +1314,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
     if (mutex) { ReleaseMutex(mutex); CloseHandle(mutex); }
 
     if (g_relaunch[0]) {
-        wchar_t cmd[MAX_PATH + 16];
-        wsprintfW(cmd, L"\"%s\" --installed", g_relaunch);
+        wchar_t cmd[MAX_PATH + 64];
+        wsprintfW(cmd, L"\"%s\" %s", g_relaunch, g_relaunchArgs);
         STARTUPINFOW si = { sizeof(si) };
         PROCESS_INFORMATION pi;
         if (CreateProcessW(g_relaunch, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {

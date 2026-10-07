@@ -83,6 +83,8 @@ static struct {
     POINT   downPt;
     int     downTx, downTop, downHit;
     wchar_t openPath[MAX_PATH];
+    UINT    actMsg;             /* aviso con acción: al pulsarlo, este mensaje al controlador */
+    WPARAM  actW;
     LARGE_INTEGER last, freq;
 
     int     winX, winY, winW, winH, cox, coy;
@@ -1598,7 +1600,8 @@ static void Click(int hit)
 {
     switch (N.mode) {
     case M_PEEK:
-        if (N.openPath[0])                       { OpenPath(); Close(); }
+        if (N.actMsg)                            { if (g_ctrl) PostMessageW(g_ctrl, N.actMsg, N.actW, 0); N.actMsg = 0; Close(); }
+        else if (N.openPath[0])                  { OpenPath(); Close(); }
         else if (N.isCapture)                    Close();
         else if (N.peek.isNote || g_cfg.mirror)  Notch_OpenCenter();
         else                                     { Close(); if (g_ctrl) Panel_Show(); }
@@ -1779,6 +1782,7 @@ BOOL Notch_Show(int icon, LPCWSTR title, LPCWSTR detail, int level, BOOL force)
     lstrcpynW(N.peek.detail, detail ? detail : L"", 256);
     N.isCapture = FALSE;
     N.openPath[0] = 0;
+    N.actMsg = 0;
     StartPeek(HOLD_MS);
     return TRUE;
 }
@@ -1807,6 +1811,7 @@ BOOL Notch_ShowCapture(const BITMAPINFO *bi, const void *bits, LPCWSTR title, LP
     }
     N.isCapture = TRUE;
     N.openPath[0] = 0;
+    N.actMsg = 0;
     StartPeek(HOLD_SHOT);
     return TRUE;
 }
@@ -1836,6 +1841,7 @@ BOOL Notch_ShowWin(const WinNote *n)
     lstrcpynW(N.peek.detail, n->body, 256);
     N.isCapture = FALSE;
     N.openPath[0] = 0;
+    N.actMsg = 0;
     if (g_cfg.hideBanners) {        /* ofuscada: nada del contenido, solo la campanita */
         N.peek.isBell = TRUE;
         N.peek.title[0] = N.peek.detail[0] = 0;
@@ -1878,6 +1884,17 @@ void Notch_EdgeHover(POINT pt)
     Enter(M_MINI);
 }
 
+/* Aviso que hace algo al pulsarlo (p. ej. "Pulsa para actualizar"): dura más que uno normal. */
+BOOL Notch_ShowAction(int icon, LPCWSTR title, LPCWSTR detail, UINT msg, WPARAM w)
+{
+    if (!Notch_Show(icon, title, detail, -1, TRUE)) return FALSE;
+    N.actMsg = msg;
+    N.actW = w;
+    N.hold = HOLD_NOTE * 2;
+    N.hideAt = GetTickCount() + N.hold;
+    return TRUE;
+}
+
 void Notch_ToggleCenter(void)
 {
     if (N.hwnd && N.mode == M_CENTER && !N.closing) Close();
@@ -1891,6 +1908,7 @@ void Notch_OpenCenter(void)
     Canvas_Free(&N.thumb);
     N.isCapture = FALSE;
     N.openPath[0] = 0;
+    N.actMsg = 0;
     Wn_Refresh(FALSE);
     N.unread = 0;
     Enter(M_CENTER);

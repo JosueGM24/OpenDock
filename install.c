@@ -226,6 +226,13 @@ BOOL Inst_MigrateLegacy(void)
     return TRUE;
 }
 
+/* Tras actualizar la copia instalada: su versión en Configuración → Aplicaciones. */
+void Inst_UpdateInfo(void)
+{
+    wchar_t dir[MAX_PATH], exe[MAX_PATH];
+    if (Inst_IsRunningInstalled() && InstallDir(dir) && InstalledExe(exe)) WriteUninstallInfo(exe, dir);
+}
+
 /* ───────────────────────── Instalar / desinstalar ───────────────────────── */
 BOOL Inst_Install(wchar_t *outExe)
 {

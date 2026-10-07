@@ -13,7 +13,9 @@
 #include <windows.h>
 
 #define APP_NAME        L"OpenDock"
+#ifndef APP_VERSION             /* (las pruebas del actualizador lo cambian al compilar) */
 #define APP_VERSION     L"2.2.2"
+#endif
 #define APP_PUBLISHER   L"OpenDock"
 #define REG_KEY         L"Software\\OpenDock"
 
@@ -24,6 +26,8 @@
 #define WM_WNCHANGED    (WM_APP + 5)   /* cambió la base de notificaciones de Windows */
 #define WM_BARCHANGED   (WM_APP + 6)   /* la barra superior apareció/desapareció: recolocar esquinas */
 #define WM_LAUNCHER     (WM_APP + 7)   /* tecla Windows sola: abrir o cerrar el buscador (w = 1: Win+N, el centro) */
+#define WM_UPDATE       (WM_APP + 8)   /* actualizador: w = UPD_* (l = datos del hilo, si los hay) */
+enum { UPD_CHECKED = 1, UPD_APPLY, UPD_READY, UPD_FAILED };
 #define WM_POPFRAME     (WM_APP + 80)  /* fotograma de la animación de una ventana emergente */
 #define WM_TRAYCHANGED  (WM_APP + 81)  /* cambió algún icono de la bandeja de Windows */
 
@@ -64,6 +68,7 @@ typedef struct {
     BOOL siteIcons;     /* avisos del navegador: el icono del sitio (si lo trae) en vez de su inicial */
     int  soundVol;      /* volumen del sonido de notificación, 0..100 */
     BOOL launcher;      /* la tecla Windows abre el buscador propio en vez del Inicio */
+    int  autoUpdate;    /* buscar actualizaciones a diario: 1 sí · 0 no · -1 sin elegir aún (no se busca) */
 } Config;
 
 enum { MAT_OLED, MAT_GLASS, MAT_SYSTEM };
@@ -93,6 +98,22 @@ void  App_SetDock(BOOL on, BOOL notify);
 void  App_Install(void);
 void  App_Uninstall(void);
 void  App_Quit(void);
+void  App_Relaunch(LPCWSTR exe, LPCWSTR args);   /* salir limpio y arrancar exe con args */
+void  App_SetAutoUpdate(BOOL on);
+BOOL  App_AutoUpdateShown(void);                 /* lo que enseña el interruptor (sin elegir: sí antes de instalar) */
+DWORD RegReadDword(LPCWSTR name, DWORD def);
+void  RegWriteDword(LPCWSTR name, DWORD v);
+
+/* ── update.c: actualizaciones desde GitHub Releases (solo si el usuario las activó o las pide) ── */
+void    Upd_Check(BOOL interactive);
+void    Upd_Apply(void);
+LPCWSTR Upd_Available(void);
+void    Upd_OnMessage(WPARAM w, LPARAM l);
+void    Upd_Schedule(void);
+BOOL    Upd_Timer(UINT_PTR id);
+void    Upd_Startup(DWORD afterPid);
+void    Upd_WaitFor(DWORD pid);
+int     Upd_SelfTest(LPCWSTR logPath);
 
 /* ── gfx.c: lienzo BGRA + primitivas antialiasadas (SDF) ── */
 typedef struct {
@@ -209,6 +230,7 @@ BOOL Notch_ShowWin(const struct WinNote *n);
 void Notch_EdgeHover(POINT pt);
 BOOL Notch_InEdgeZone(POINT pt, const RECT *mon, UINT dpi);
 void Notch_OpenCenter(void);
+BOOL Notch_ShowAction(int icon, LPCWSTR title, LPCWSTR detail, UINT msg, WPARAM w);   /* aviso que al pulsarlo manda msg al controlador */
 void Notch_ToggleCenter(void);     /* Win+N: abre el centro de notificaciones, o lo cierra */
 void Notch_NotesChanged(void);
 void Notch_StyleChanged(void);
@@ -323,3 +345,4 @@ void Inst_RemoveFiles(void);
 int  Inst_Cleanup(DWORD waitPid);
 BOOL Inst_IsStartup(void);
 void Inst_SetStartup(BOOL on, LPCWSTR exe);
+void Inst_UpdateInfo(void);      /* tras actualizar: la versión en Configuración → Aplicaciones */

@@ -41,6 +41,10 @@ static FARPROC Resolve(LPCWSTR dll, LPCSTR name)
         ((void (WINAPI *) params)(void *)real_) args;                                \
     }
 
+/* Para las cabeceras de mingw que no declaran dllimport (bcrypt, wintrust): la función con
+ * su nombre, que resuelve la real la primera vez. */
+#define LAZYF(dll, ret, name, fail, params, args)                                    ret WINAPI name params                                                           {                                                                                    static FARPROC real_;                                                            if (!real_) real_ = Resolve(dll, #name);                                         if (!real_) return fail;                                                         return ((ret (WINAPI *) params)(void *)real_) args;                          }
+
 #define NA ERROR_PROC_NOT_FOUND
 
 /* version.dll */
@@ -82,3 +86,19 @@ LAZY(L"wlanapi.dll", DWORD, WlanGetAvailableNetworkList, NA, (HANDLE h, const GU
 LAZY(L"wlanapi.dll", DWORD, WlanConnect, NA, (HANDLE h, const GUID *g, const void *p, PVOID r), (h, g, p, r))
 LAZY(L"wlanapi.dll", DWORD, WlanScan, NA, (HANDLE h, const GUID *g, const void *s, const void *ie, PVOID r), (h, g, s, ie, r))
 LAZY(L"wlanapi.dll", DWORD, WlanRegisterNotification, NA, (HANDLE h, DWORD src, BOOL ign, PVOID cb, PVOID ctx, PVOID r, PDWORD prev), (h, src, ign, cb, ctx, r, prev))
+
+/* winhttp.dll, bcrypt.dll, wintrust.dll (actualizador: solo si el usuario lo activa o lo pide) */
+LAZY(L"winhttp.dll", HANDLE, WinHttpOpen, NULL, (LPCWSTR a, DWORD t, LPCWSTR p, LPCWSTR b, DWORD f), (a, t, p, b, f))
+LAZY(L"winhttp.dll", HANDLE, WinHttpConnect, NULL, (HANDLE s, LPCWSTR h, WORD p, DWORD r), (s, h, p, r))
+LAZY(L"winhttp.dll", HANDLE, WinHttpOpenRequest, NULL, (HANDLE c, LPCWSTR v, LPCWSTR o, LPCWSTR ver, LPCWSTR ref, LPCWSTR *acc, DWORD f), (c, v, o, ver, ref, acc, f))
+LAZY(L"winhttp.dll", BOOL, WinHttpSendRequest, FALSE, (HANDLE r, LPCWSTR h, DWORD hl, LPVOID o, DWORD ol, DWORD tl, DWORD_PTR ctx), (r, h, hl, o, ol, tl, ctx))
+LAZY(L"winhttp.dll", BOOL, WinHttpReceiveResponse, FALSE, (HANDLE r, LPVOID x), (r, x))
+LAZY(L"winhttp.dll", BOOL, WinHttpQueryHeaders, FALSE, (HANDLE r, DWORD l, LPCWSTR n, LPVOID b, LPDWORD bl, LPDWORD i), (r, l, n, b, bl, i))
+LAZY(L"winhttp.dll", BOOL, WinHttpReadData, FALSE, (HANDLE r, LPVOID b, DWORD n, LPDWORD got), (r, b, n, got))
+LAZY(L"winhttp.dll", BOOL, WinHttpCloseHandle, FALSE, (HANDLE h), (h))
+LAZY(L"winhttp.dll", BOOL, WinHttpSetTimeouts, FALSE, (HANDLE h, int a, int b, int c, int d), (h, a, b, c, d))
+LAZY(L"winhttp.dll", BOOL, WinHttpCrackUrl, FALSE, (LPCWSTR u, DWORD l, DWORD f, LPVOID c), (u, l, f, c))
+LAZYF(L"bcrypt.dll", LONG, BCryptOpenAlgorithmProvider, (LONG)0xC0000001, (PVOID *a, LPCWSTR id, LPCWSTR impl, ULONG f), (a, id, impl, f))
+LAZYF(L"bcrypt.dll", LONG, BCryptCloseAlgorithmProvider, (LONG)0xC0000001, (PVOID a, ULONG f), (a, f))
+LAZYF(L"bcrypt.dll", LONG, BCryptHash, (LONG)0xC0000001, (PVOID a, PUCHAR s, ULONG sl, PUCHAR in, ULONG il, PUCHAR out, ULONG ol), (a, s, sl, in, il, out, ol))
+LAZYF(L"wintrust.dll", LONG, WinVerifyTrust, (LONG)0x800B0001, (HWND h, GUID *a, LPVOID d), (h, a, d))
