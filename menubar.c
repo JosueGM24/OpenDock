@@ -387,10 +387,19 @@ static void SetVolume(float v)
 {
     if (!OpenVolume()) return;
     v = max(0.0f, min(1.0f, v));
+    if (v < 0.01f) v = 0;       /* al fondo: silencio de verdad, como en el móvil */
     IAudioEndpointVolume_SetMasterVolumeLevelScalar(S.ep, v, NULL);
-    if (S.muted && v > 0) IAudioEndpointVolume_SetMute(S.ep, FALSE, NULL);
+    if (S.muted != (v == 0)) IAudioEndpointVolume_SetMute(S.ep, v == 0, NULL);
     S.volume = v;
-    if (v > 0) S.muted = FALSE;
+    S.muted = v == 0;
+}
+
+/* ¿El sistema está en silencio (o a cero)? Entonces tampoco suenan los avisos del notch,
+ * aunque tengan su propio volumen. */
+BOOL Bar_SystemSilent(void)
+{
+    ReadVolume();
+    return S.volume >= 0 && (S.muted || S.volume < 0.01f);
 }
 
 static void ToggleMute(void)
@@ -1027,6 +1036,7 @@ static struct {
     int    hot, press;
     float  hs[CH_COUNT], hsv[CH_COUNT];
     float  is[2], isv[2];       /* 0 pantalla · 1 sonido */
+    float  mu, muv;             /* círculo rojo de "silenciado" sobre el altavoz (0..1, con rebote) */
     float  fill[2], fillv[2];
     Canvas el, ico;             /* lienzos de paso para componer escalado */
     /* subpágina abierta cuando section == 1: 1 ajustes · 2 Wi-Fi · 3 Bluetooth */
@@ -1263,6 +1273,9 @@ static void DrawSliderRow(Canvas *c, RECT r, int k)
     const DWORD fillc = L->light ? 0x1C1C1E : 0xFFFFFF, inkc = L->light ? 0xFFFFFF : 0x1C1C1E;
     Gfx_FillRRect(c, x, y, w, h, h * 0.5f, L->light ? 0xE5E5EA : 0x3A3A3C, 1.0f);
     Gfx_FillRRect(c, x, y, max(h, w * v), h, h * 0.5f, fillc, 1.0f);
+    /* silenciado: un círculo rojo crece con rebote bajo el altavoz */
+    if (k && C.mu > 0.01f)
+        Gfx_FillCircle(c, x + CS(4) + h * 0.5f, y + h * 0.5f, h * 0.5f * C.mu, 0xFF453A, min(1.0f, C.mu * 1.4f));
     /* icono con su escala animada: solo su trazo (máscara), sin cuadro de fondo */
     const int ib = (int)h;
     if (C.ico.w != ib || C.ico.h != ib) { Canvas_Free(&C.ico); Canvas_Init(&C.ico, ib, ib); }
@@ -1285,8 +1298,10 @@ static void DrawSliderRow(Canvas *c, RECT r, int k)
                     const float wq = ((q & 1) ? fx : 1 - fx) * ((q >> 1) ? fy : 1 - fy);
                     a += ((C.ico.px[qy * ib + qx] >> 8) & 255) / 255.0f * wq;
                 }
-                /* sobre el relleno, color de tinta; fuera de él (relleno corto), el del texto */
-                if (a > 0.004f) Gfx_Blend(c, px, py, px + 0.5f < x + max(h, w * v) ? inkc : L->fg, min(1.0f, a));
+                /* sobre el relleno, color de tinta; fuera de él (relleno corto), el del texto;
+                 * sobre el círculo rojo de silenciado, blanco */
+                const DWORD base = px + 0.5f < x + max(h, w * v) ? inkc : L->fg;
+                if (a > 0.004f) Gfx_Blend(c, px, py, k ? Gfx_Mix(base, 0xFFFFFF, max(0.0f, min(1.0f, C.mu))) : base, min(1.0f, a));
             }
     }
 }
@@ -1795,6 +1810,13 @@ static BOOL CCAdvance(void)
         if (fabsf(C.fill[k] - real) < 0.0005f && fabsf(C.fillv[k]) < 0.005f) { C.fill[k] = real; C.fillv[k] = 0; }
         if (fabsf(C.is[k] - 1.0f) < 0.0008f && fabsf(C.isv[k]) < 0.01f) { C.is[k] = 1.0f; C.isv[k] = 0; }
         if (fabsf(C.fill[k] - f0) > 0.00005f || fabsf(C.is[k] - i0) > 0.00005f) moving = TRUE;
+    }
+    {   /* silenciado: el círculo rojo entra con rebote y se va encogiendo */
+        const float mt = S.volume >= 0 && (S.muted || S.volume < 0.01f) ? 1.0f : 0.0f, m0 = C.mu;
+        for (int j = 0; j < 2; ++j) CCSpring(&C.mu, &C.muv, mt, dt * 0.5f, mt > C.mu ? 360.0f : 520.0f, mt > 0 ? min(z, 0.45f) : 1.0f);
+        if (fabsf(C.mu - mt) < 0.002f && fabsf(C.muv) < 0.02f) { C.mu = mt; C.muv = 0; }
+        if (C.mu < 0) C.mu = 0;
+        if (fabsf(C.mu - m0) > 0.00005f) moving = TRUE;
     }
     const BOOL done = !moving && fabsf(C.secT - tT) < 0.002f && fabsf(C.secV) < 0.02f && fabsf(C.hcur - tH) < 0.4f && fabsf(C.hv) < 2.0f;
     if (done) {

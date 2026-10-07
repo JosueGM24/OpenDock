@@ -1112,6 +1112,7 @@ void Notch_PlaySound(void)
     const float gain = powf(max(0, min(100, g_cfg.soundVol)) / 100.0f, 1.2f);   /* 0..100, curva de oído */
     const int i = g_cfg.sound;
     if (i <= 0 || i >= SOUND_COUNT) return;
+    if (Bar_SystemSilent()) return;                  /* el sistema en silencio manda sobre el volumen propio */
     if (!s_built[i]) s_built[i] = i == 1 ? LoadWindowsSound(&s_size[i]) : MaterialSound(i - 2, &s_size[i]);
     PlaySoundW(NULL, NULL, 0);                       /* el anterior se corta antes de reutilizar el búfer */
     if (!s_built[i]) {                               /* Windows sin .wav legible: su alias, a su volumen */

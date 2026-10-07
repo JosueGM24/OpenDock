@@ -272,6 +272,7 @@ void Bar_ApplyClock(BOOL hide);
 void Bar_Reposition(void);
 void Bar_ForegroundChanged(void);
 int  Bar_HeightOn(const RECT *mon);
+BOOL Bar_SystemSilent(void);         /* sistema en silencio o a cero: los avisos tampoco suenan */
 BOOL App_Covered(HWND h);
 BOOL App_ShellOpen(LPCWSTR target);         /* abre algo con %WINDIR%\\explorer.exe "target" (validado) */
 BOOL App_ShellSelect(LPCWSTR path);        /* explorer /select,"path": abre su carpeta con él marcado */
