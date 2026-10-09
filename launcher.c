@@ -2090,24 +2090,26 @@ static LRESULT CALLBACK KbProc(int code, WPARAM w, LPARAM l)
         if (!(k->flags & LLKHF_INJECTED) || (App_RemoteView() && k->dwExtraInfo != OD_INJECTED)) {
             const BOOL down = w == WM_KEYDOWN || w == WM_SYSKEYDOWN;
             if (k->vkCode == VK_LWIN || k->vkCode == VK_RWIN) {
+                /* La tecla Windows siempre llega tal cual, al bajar y al subir: si se tragara y
+                 * se reinyectara, cualquier fallo de la reinyección la dejaría pulsada para el
+                 * sistema (y Ctrl, N... harían atajos de Windows). Para que Inicio no se abra
+                 * basta una tecla sin asignar justo después de bajarla: Windows ya no la ve sola. */
                 if (down) {
-                    if (!s_winDown) { s_winDown = TRUE; s_winOther = s_winEaten = FALSE; s_winSkip = ForegroundElevated(); }
-                } else if (s_winDown) {
-                    s_winDown = FALSE;
-                    if ((!s_winOther || s_winEaten) && !s_winSkip) {
-                        /* sola: Windows no debe ver un "Win soltada" sin nada en medio */
-                        INPUT in[3];
-                        ZeroMemory(in, sizeof(in));
-                        for (int i = 0; i < 3; ++i) { in[i].type = INPUT_KEYBOARD; in[i].ki.dwExtraInfo = OD_INJECTED; }
-                        in[0].ki.wVk = VK_MASK;
-                        in[1].ki.wVk = VK_MASK; in[1].ki.dwFlags = KEYEVENTF_KEYUP;
-                        in[2].ki.wVk = (WORD)k->vkCode; in[2].ki.wScan = (WORD)k->scanCode;
-                        in[2].ki.dwFlags = KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY;
-                        if (SendInput(3, in, sizeof(INPUT)) == 3) {
-                            if (!s_winEaten) PostMessageW(g_ctrl, WM_LAUNCHER, 0, 0);
-                            return 1;
+                    if (!s_winDown) {
+                        s_winDown = TRUE;
+                        s_winOther = s_winEaten = FALSE;
+                        s_winSkip = ForegroundElevated();
+                        if (!s_winSkip) {
+                            INPUT in[2];
+                            ZeroMemory(in, sizeof(in));
+                            for (int i = 0; i < 2; ++i) { in[i].type = INPUT_KEYBOARD; in[i].ki.wVk = VK_MASK; in[i].ki.dwExtraInfo = OD_INJECTED; }
+                            in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+                            SendInput(2, in, sizeof(INPUT));
                         }
                     }
+                } else if (s_winDown) {
+                    s_winDown = FALSE;
+                    if (!s_winOther && !s_winSkip) PostMessageW(g_ctrl, WM_LAUNCHER, 0, 0);
                 }
             } else if (s_winDown && k->vkCode == 'N' && !s_winSkip) {
                 /* Win+N: nuestro centro de notificaciones (el de Windows no debe abrirse) */
