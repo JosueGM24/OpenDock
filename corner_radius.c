@@ -486,10 +486,37 @@ BOOL App_Covered(HWND h)
     return FALSE;
 }
 
+/* Huella de los monitores (posición, tamaño y cuál es el principal). */
+static BOOL CALLBACK MonSigProc(HMONITOR mon, HDC hdc, LPRECT lprc, LPARAM lp)
+{
+    (void)hdc; (void)lprc;
+    MONITORINFO mi = { sizeof(mi) };
+    if (GetMonitorInfoW(mon, &mi)) {
+        DWORD *h = (DWORD *)lp;
+        const LONG v[5] = { mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom,
+                            (LONG)(mi.dwFlags & MONITORINFOF_PRIMARY) };
+        for (int i = 0; i < 5; ++i) *h = (*h ^ (DWORD)v[i]) * 16777619u;
+    }
+    return TRUE;
+}
+
+/* Al desconectar un monitor, Windows no siempre avisa cuando ya terminó de recolocarlo
+ * todo: si la barra y el dock se rehicieron a medias, quedaban dos en el mismo monitor.
+ * Si la huella cambió desde la última vez, se rehace todo. */
+static void CheckMonitors(void)
+{
+    static DWORD last;
+    DWORD sig = 2166136261u;
+    EnumDisplayMonitors(NULL, NULL, MonSigProc, (LPARAM)&sig);
+    if (last && sig != last && !g_noSave) SetTimer(g_ctrl, TIMER_REBUILD, 400, NULL);
+    last = sig;
+}
+
 static void RaiseCorners(void)
 {
     static int tick;
     if (!(++tick & 1)) CheckRemote();
+    CheckMonitors();
     CheckFullscreen();
     Bar_Raise();
     Dock_Raise();

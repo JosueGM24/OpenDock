@@ -2998,7 +2998,11 @@ static void SyncSecondaries(void)
         if (!D.hwnd) continue;
         int j = 0;
         while (j < ml.n && (have[j] || !EqualRect(&ml.r[j], &D.mon))) ++j;
-        if (j < ml.n) { have[j] = TRUE; PlaceDock(); }
+        RECT wr, both;
+        /* también se quita si su ventana acabó sobre el monitor del principal (Windows la
+         * mueve ahí al desconectar el suyo): serían dos docks y dos vistas previas */
+        const BOOL onPrimary = PRIMARY->hwnd && GetWindowRect(D.hwnd, &wr) && IntersectRect(&both, &wr, &PRIMARY->mon);
+        if (j < ml.n && !onPrimary) { have[j] = TRUE; PlaceDock(); }
         else DestroyWindow(D.hwnd);
     }
     s_d = o;
