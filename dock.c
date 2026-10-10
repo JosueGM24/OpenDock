@@ -1871,6 +1871,19 @@ static void PreviewOpen(int i)
     PreviewBuild(it);
 }
 
+/* El paso entre la vista previa y su icono (con el dock en D): el hueco de en medio es
+ * transparente y el cursor sale del dock al cruzarlo; ahí la vista previa no se cierra ni
+ * cambia a la app vecina. */
+static BOOL InPreviewBridge(POINT pt)
+{
+    RECT wr;
+    if (!PV.hwnd || PV.dock != s_d || !GetWindowRect(PV.hwnd, &wr)) return FALSE;
+    const int winTop = D.mon.bottom - WinH() + D.sinkPx;
+    const RECT br = { wr.left, wr.bottom - 1, wr.right,
+                      winTop + (int)(PanelBottom() - DS(DOCK_PADY) - (float)Base()) };
+    return PtInRect(&br, pt);
+}
+
 /* El cursor se movió sobre el dock actual: abrir la vista previa tras un momento, o cambiarla
  * al momento si ya hay una abierta (o volver a abrirla si se estaba cerrando). */
 static void PreviewHover(void)
@@ -1883,6 +1896,9 @@ static void PreviewHover(void)
         return;
     }
     if (PV.hwnd) {
+        POINT pt;
+        GetCursorPos(&pt);
+        if (!PV.closing && InPreviewBridge(pt)) return;     /* de camino a la vista previa */
         if (PV.dock != s_d || PV.closing || lstrcmpiW(PV.key, key)) PreviewOpen(D.hot);
         return;
     }
@@ -2048,7 +2064,7 @@ static void PreviewCheck(void)
     RECT wr;
     GetWindowRect(PV.hwnd, &wr);
     const BOOL inside = PtInRect(&wr, pt);
-    const BOOL onIcon = D.inside && D.hot >= 0 && D.hot < D.count && &D.items[D.hot] == it;
+    const BOOL onIcon = (D.inside && D.hot >= 0 && D.hot < D.count && &D.items[D.hot] == it) || InPreviewBridge(pt);
     if (!inside && ((GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) | GetAsyncKeyState(VK_MBUTTON)) & 0x8000)
         && WindowFromPoint(pt) != D.hwnd) { PreviewClose(); return; }      /* clic en otra parte */
     if (inside || onIcon) PV.outSince = 0;
