@@ -1641,12 +1641,27 @@ static void PreviewApply(void);
 /* Coloca las tarjetas de las ventanas vivas de it (con el dock de PV en D). La primera vez
  * nace como una pastilla sobre el icono; si ya estaba abierta, los muelles la llevan al
  * nuevo tamaño y al nuevo icono. */
+/* Las ventanas vivas de it en un orden fijo (el de los segmentos de su pastilla), no en
+ * orden z: si no, las tarjetas cambiarían de sitio cada vez que se enfoca una. */
+static int StableWins(const DockItem *it, HWND *out, int max)
+{
+    int n = 0;
+    for (int k = 0; k < it->nwin; ++k) {
+        const HWND w = it->wins[k];
+        if (!IsWindow(w)) continue;
+        int j = n++;
+        for (; j > 0 && (ULONG_PTR)out[j - 1] > (ULONG_PTR)w; --j) out[j] = out[j - 1];
+        out[j] = w;
+    }
+    return min(n, max);
+}
+
 static void PreviewBuild(const DockItem *it)
 {
     PreviewDropThumbs();
-    PV.n = 0;
-    for (int k = 0; k < it->nwin && PV.n < PREV_MAX; ++k)
-        if (IsWindow(it->wins[k])) PV.wins[PV.n++] = it->wins[k];
+    HWND all[8];
+    PV.n = StableWins(it, all, PREV_MAX);
+    for (int k = 0; k < PV.n; ++k) PV.wins[k] = all[k];
     if (!PV.n) { PreviewClose(); return; }
 
     if (PV.fontPx != DS(12) || !PV.font) {
@@ -2050,14 +2065,11 @@ static void PreviewCheck(void)
         return;
     }
     /* cambiaron sus ventanas (se abrió o cerró alguna): se rehace */
-    int n = 0;
-    BOOL same = TRUE;
-    for (int k = 0; k < it->nwin; ++k) {
-        if (!IsWindow(it->wins[k])) continue;
-        if (n >= PREV_MAX || PV.wins[n] != it->wins[k]) same = FALSE;
-        ++n;
-    }
-    if (!same || min(n, PREV_MAX) != PV.n) { PreviewBuild(it); if (!PV.hwnd || PV.closing) return; }
+    HWND all[8];
+    const int n = StableWins(it, all, PREV_MAX);
+    BOOL same = n == PV.n;
+    for (int k = 0; k < n && same; ++k) same = PV.wins[k] == all[k];
+    if (!same) { PreviewBuild(it); if (!PV.hwnd || PV.closing) return; }
 
     POINT pt;
     GetCursorPos(&pt);
