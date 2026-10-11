@@ -2082,6 +2082,19 @@ static BOOL ForegroundElevated(void)
  * remoto, que también es "inyectado" (Chrome Remote Desktop teclea con SendInput). */
 #define OD_INJECTED ((ULONG_PTR)0x0D0C4B45)
 
+#define WM_KB_MASK (WM_APP + 1)
+static BOOL s_maskDue;          /* la tecla sin asignar aún no se mandó en esta pulsación */
+
+static void SendMask(void)
+{
+    s_maskDue = FALSE;
+    INPUT in[2];
+    ZeroMemory(in, sizeof(in));
+    for (int i = 0; i < 2; ++i) { in[i].type = INPUT_KEYBOARD; in[i].ki.wVk = VK_MASK; in[i].ki.dwExtraInfo = OD_INJECTED; }
+    in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(2, in, sizeof(INPUT));
+}
+
 static LRESULT CALLBACK KbProc(int code, WPARAM w, LPARAM l)
 {
     if (code == HC_ACTION) {
@@ -2093,22 +2106,20 @@ static LRESULT CALLBACK KbProc(int code, WPARAM w, LPARAM l)
                 /* La tecla Windows siempre llega tal cual, al bajar y al subir: si se tragara y
                  * se reinyectara, cualquier fallo de la reinyección la dejaría pulsada para el
                  * sistema (y Ctrl, N... harían atajos de Windows). Para que Inicio no se abra
-                 * basta una tecla sin asignar justo después de bajarla: Windows ya no la ve sola. */
+                 * basta una tecla sin asignar entre bajarla y soltarla: Windows ya no la ve sola.
+                 * Se manda al salir del gancho (WM_KB_MASK): mandada dentro, Windows la colocaba
+                 * antes que la propia tecla Windows y no servía de nada. */
                 if (down) {
                     if (!s_winDown) {
                         s_winDown = TRUE;
                         s_winOther = s_winEaten = FALSE;
                         s_winSkip = ForegroundElevated();
-                        if (!s_winSkip) {
-                            INPUT in[2];
-                            ZeroMemory(in, sizeof(in));
-                            for (int i = 0; i < 2; ++i) { in[i].type = INPUT_KEYBOARD; in[i].ki.wVk = VK_MASK; in[i].ki.dwExtraInfo = OD_INJECTED; }
-                            in[1].ki.dwFlags = KEYEVENTF_KEYUP;
-                            SendInput(2, in, sizeof(INPUT));
-                        }
+                        s_maskDue = !s_winSkip;
+                        if (s_maskDue) PostThreadMessageW(GetCurrentThreadId(), WM_KB_MASK, 0, 0);
                     }
                 } else if (s_winDown) {
                     s_winDown = FALSE;
+                    if (s_maskDue) SendMask();      /* soltada antes de llegar el aviso: va justo antes */
                     if (!s_winOther && !s_winSkip) PostMessageW(g_ctrl, WM_LAUNCHER, 0, 0);
                 }
             } else if (s_winDown && k->vkCode == 'N' && !s_winSkip) {
@@ -2128,7 +2139,8 @@ static DWORD WINAPI HookThread(LPVOID u)
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
     HHOOK hk = SetWindowsHookExW(WH_KEYBOARD_LL, KbProc, g_inst, 0);
     MSG m;
-    while (GetMessageW(&m, NULL, 0, 0) > 0) { }
+    while (GetMessageW(&m, NULL, 0, 0) > 0)
+        if (m.message == WM_KB_MASK && s_maskDue && s_winDown) SendMask();
     if (hk) UnhookWindowsHookEx(hk);
     return 0;
 }
