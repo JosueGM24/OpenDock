@@ -516,7 +516,6 @@ static HANDLE           s_iconEvt, s_iconThread;
 static int              s_iconQ[ICON_CAP], s_iconQn;
 static volatile HWND    s_iconHwnd;     /* la ventana abierta, para avisarla */
 #define WM_LN_ICON (WM_APP + 91)
-#define WM_LN_BACKDROP (WM_APP + 92)   /* el buscador ya está a la vista: ahora su fondo */
 
 static DWORD *BitmapBits(HBITMAP bmp, int *ow, int *oh)
 {
@@ -1113,10 +1112,6 @@ static void EnablePrivilege(LPCWSTR name)
 }
 
 static void Close(void);
-static void Backdrop_Close(void);
-static void Backdrop_Open(HMONITOR hm, HWND above);
-typedef struct { HWND notify; RECT r; int blur; Canvas full; } BdJob;     /* imagen del fondo, hecha en otro hilo */
-static void Backdrop_Show(BdJob *j, HWND above);
 static void FootAction(int i)
 {
     AllowSetForegroundWindow(ASFW_ANY);
@@ -1285,10 +1280,8 @@ static void Kick(void)
     Pop_Hold(&L.pop, TRUE);
 }
 
-static void Backdrop_Step(void);
 static BOOL Advance(void)
 {
-    Backdrop_Step();
     LARGE_INTEGER t, f;
     QueryPerformanceCounter(&t);
     QueryPerformanceFrequency(&f);
@@ -1358,7 +1351,6 @@ static void Rebuild_UI(void)
 static void Close(void)
 {
     if (L.hwnd) Pop_Close(&L.pop);
-    Backdrop_Close();
 }
 
 static void UrlEncode(const WCHAR *s, WCHAR *out, int cap)
@@ -1679,13 +1671,6 @@ static LRESULT CALLBACK LnProc(HWND h, UINT m, WPARAM w, LPARAM l)
             if (!moving) { L.anim = FALSE; Pop_Hold(&L.pop, FALSE); }
         } else if (L.cv.px) Pop_Present(&L.pop, &L.cv);
         return 0;
-    case WM_LN_BACKDROP: {
-        BdJob *j = (BdJob *)l;
-        if (!j) { if (!L.pop.closing) Backdrop_Open(MonitorFromWindow(h, MONITOR_DEFAULTTOPRIMARY), h); return 0; }
-        if (!L.pop.closing) Backdrop_Show(j, h);      /* llegó la imagen del otro hilo */
-        else { Canvas_Free(&j->full); HeapFree(GetProcessHeap(), 0, j); }
-        return 0;
-    }
     case WM_LN_ICON: {                              /* llegaron iconos: un repintado por ráfaga */
         MSG more;
         while (PeekMessageW(&more, h, WM_LN_ICON, WM_LN_ICON, PM_REMOVE)) { }
@@ -1802,12 +1787,6 @@ static LRESULT CALLBACK LnProc(HWND h, UINT m, WPARAM w, LPARAM l)
         FreeFonts();
         L.hwnd = NULL;
         L.closedAt = GetTickCount();
-        Backdrop_Close();
-        {   /* una imagen del fondo que llegó tarde: se libera */
-            MSG m2;
-            while (PeekMessageW(&m2, h, WM_LN_BACKDROP, WM_LN_BACKDROP, PM_REMOVE))
-                if (m2.lParam) { BdJob *j = (BdJob *)m2.lParam; Canvas_Free(&j->full); HeapFree(GetProcessHeap(), 0, j); }
-        }
         return 0;
     }
     return DefWindowProcW(h, m, w, l);
@@ -1833,136 +1812,6 @@ static void TakeFocus(HWND h)
         SetFocus(h);
         AttachThreadInput(me, ft, FALSE);
     }
-}
-
-/* ── Fondo del buscador ──
- * Como el vistazo del dock: la pantalla, tomada justo antes de abrir, desenfocada y
- * oscurecida, entra con un fundido por debajo del buscador y se va al cerrarlo. Los clics
- * la atraviesan (hacen perder el foco al buscador, que se cierra). 1 px menos de alto: una
- * ventana sin marco que cubre el monitor entero es "pantalla completa" para Windows. */
-#define BD_CLASS L"OpenDock.SearchBackdrop"
-static struct { HWND hwnd; Canvas sm, full; float a, target; DWORD last; } BD;
-
-/* Un paso del fundido. Lo da cada fotograma del buscador (mientras anima, la cola nunca
- * queda vacía y WM_TIMER no llegaría) y, si no, el temporizador del propio fondo. */
-static void Backdrop_Step(void)
-{
-    if (!BD.hwnd || BD.a == BD.target) return;
-    const DWORD now = GetTickCount();
-    const float dt = min(0.05f, (now - BD.last) / 1000.0f);
-    if (dt <= 0.0f) return;
-    BD.last = now;
-    BD.a += (BD.target - BD.a) * min(1.0f, dt * (BD.target > BD.a ? 13.0f : 18.0f));
-    if (fabsf(BD.a - BD.target) < 0.01f) BD.a = BD.target;
-    SetLayeredWindowAttributes(BD.hwnd, 0, (BYTE)(255.0f * BD.a + 0.5f), LWA_ALPHA);
-    if (BD.a == BD.target) {
-        KillTimer(BD.hwnd, 1);
-        if (BD.target == 0) DestroyWindow(BD.hwnd);
-    }
-}
-
-static LRESULT CALLBACK BackdropProc(HWND h, UINT m, WPARAM w, LPARAM l)
-{
-    switch (m) {
-    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
-    case WM_ERASEBKGND:    return 1;
-    case WM_PAINT: {
-        PAINTSTRUCT ps;
-        HDC dc = BeginPaint(h, &ps);
-        if (BD.full.dc) BitBlt(dc, 0, 0, BD.full.w, BD.full.h, BD.full.dc, 0, 0, SRCCOPY);
-        EndPaint(h, &ps);
-        return 0;
-    }
-    case WM_TIMER:
-        Backdrop_Step();
-        return 0;
-    case WM_DESTROY:
-        if (h == BD.hwnd) BD.hwnd = NULL;
-        Canvas_Free(&BD.sm);
-        Canvas_Free(&BD.full);
-        return 0;
-    }
-    return DefWindowProcW(h, m, w, l);
-}
-
-/* La imagen del fondo se prepara en otro hilo (captura, desenfoque y escalado llevan su
- * rato en monitores grandes): la interfaz no se para ni un fotograma. Al terminar se avisa
- * al buscador con WM_LN_BACKDROP y la imagen en lParam. */
-static DWORD WINAPI BackdropWork(LPVOID p)
-{
-    BdJob *j = (BdJob *)p;
-    const RECT r = j->r;
-    const int w = r.right - r.left, h = r.bottom - r.top, sw = max(1, w / 4), sh = max(1, h / 4);
-    Canvas sm = { 0 };
-    BOOL ok = Canvas_Init(&sm, sw, sh);
-    if (ok) {
-        HDC screen = GetDC(NULL);
-        SetStretchBltMode(sm.dc, COLORONCOLOR);      /* rápida: el desenfoque la suaviza */
-        StretchBlt(sm.dc, 0, 0, sw, sh, screen, r.left, r.top, w, h, SRCCOPY);
-        ReleaseDC(NULL, screen);
-        GdiFlush();
-        for (int i = 0; i < 2; ++i) Gfx_BoxBlur(sm.px, sw, sh, j->blur);
-        for (int i = 0; i < sw * sh; ++i) {             /* menos color y más oscuro, como el vistazo */
-            const DWORD v = sm.px[i];
-            const float rr = (float)((v >> 16) & 255), gg = (float)((v >> 8) & 255), bb = (float)(v & 255);
-            const float y = rr * 0.30f + gg * 0.59f + bb * 0.11f;
-            sm.px[i] = (DWORD)((y + (rr - y) * 0.45f) * 0.42f) << 16 | (DWORD)((y + (gg - y) * 0.45f) * 0.42f) << 8
-                     | (DWORD)((y + (bb - y) * 0.45f) * 0.42f);
-        }
-        /* a tamaño completo una sola vez (bilineal); al pintar solo se copia */
-        ok = Canvas_Init(&j->full, w, h - 1);
-        if (ok) { Gfx_BlitScaled(&j->full, &sm, w * 0.5f, h * 0.5f, (float)w / sw); GdiFlush(); }
-        Canvas_Free(&sm);
-    }
-    if (!ok || !PostMessageW(j->notify, WM_LN_BACKDROP, 0, (LPARAM)j)) {
-        Canvas_Free(&j->full);
-        HeapFree(GetProcessHeap(), 0, j);
-    }
-    return 0;
-}
-
-/* Pide la imagen del fondo para el monitor hm (la recibe Backdrop_Show). */
-static void Backdrop_Open(HMONITOR hm, HWND above)
-{
-    if (BD.hwnd) DestroyWindow(BD.hwnd);
-    MONITORINFO mi = { sizeof(mi) };
-    if (!above || !GetMonitorInfoW(hm, &mi)) return;
-    BdJob *j = (BdJob *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(BdJob));
-    if (!j) return;
-    j->notify = above;
-    j->r = mi.rcMonitor;
-    j->blur = max(1, SS(14) / 4);
-    HANDLE t = CreateThread(NULL, 0, BackdropWork, j, 0, NULL);
-    if (t) CloseHandle(t);
-    else HeapFree(GetProcessHeap(), 0, j);
-}
-
-/* La imagen está lista (en el hilo de la interfaz): su ventana, justo por debajo del buscador. */
-static void Backdrop_Show(BdJob *j, HWND above)
-{
-    const RECT r = j->r;
-    if (BD.hwnd) DestroyWindow(BD.hwnd);
-    BD.full = j->full;                      /* la imagen pasa a ser del fondo */
-    HeapFree(GetProcessHeap(), 0, j);
-    BD.hwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-                              BD_CLASS, L"", WS_POPUP, r.left, r.top, BD.full.w, BD.full.h, NULL, NULL, g_inst, NULL);
-    if (!BD.hwnd) { Canvas_Free(&BD.full); return; }
-    if (App_HideFromCapture(FALSE)) SetWindowDisplayAffinity(BD.hwnd, WDA_EXCLUDEFROMCAPTURE);
-    BD.a = 0;
-    BD.target = 1;
-    BD.last = GetTickCount();
-    SetLayeredWindowAttributes(BD.hwnd, 0, 0, LWA_ALPHA);
-    SetWindowPos(BD.hwnd, above, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    UpdateWindow(BD.hwnd);
-    SetTimer(BD.hwnd, 1, 10, NULL);
-}
-
-static void Backdrop_Close(void)
-{
-    if (!BD.hwnd || BD.target == 0) return;
-    BD.target = 0;
-    BD.last = GetTickCount();
-    SetTimer(BD.hwnd, 1, 10, NULL);
 }
 
 static void Open(void)
@@ -2038,7 +1887,6 @@ static void Open(void)
     Paint();
     ShowWindow(L.hwnd, SW_SHOW);
     TakeFocus(L.hwnd);
-    PostMessageW(L.hwnd, WM_LN_BACKDROP, 0, 0);     /* el fondo, después: el buscador sale ya */
     L.openedAt = GetTickCount();
     SetTimer(L.hwnd, TIMER_CARET, 530, NULL);
     SetTimer(L.hwnd, TIMER_FOCUS, 250, NULL);
@@ -2154,11 +2002,6 @@ void Launcher_Register(void)
     wc.lpszClassName = LN_CLASS;
     wc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
     RegisterClassExW(&wc);
-    WNDCLASSEXW bd = { sizeof(bd) };
-    bd.lpfnWndProc   = BackdropProc;
-    bd.hInstance     = g_inst;
-    bd.lpszClassName = BD_CLASS;
-    RegisterClassExW(&bd);
 }
 
 static void StopHook(void)
@@ -2210,7 +2053,6 @@ void Launcher_Apply(void)
     if (!g_cfg.launcher) {
         StopHook();
         if (L.hwnd) DestroyWindow(L.hwnd);
-        if (BD.hwnd) DestroyWindow(BD.hwnd);
         if (s_filesThread || s_apps) StopIndex();
         return;
     }
@@ -2227,6 +2069,5 @@ void Launcher_Destroy(void)
 {
     StopHook();
     if (L.hwnd) DestroyWindow(L.hwnd);
-    if (BD.hwnd) DestroyWindow(BD.hwnd);
     StopIndex();
 }
