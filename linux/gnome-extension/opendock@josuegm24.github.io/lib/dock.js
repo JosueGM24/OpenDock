@@ -27,6 +27,18 @@ const GAP = 12;
 const PAD_X = 16;
 const PAD_Y = 11;
 const HIDE_DELAY_MS = 450;
+const HOP_S = 0.4;                // cada salto del rebote de lanzamiento
+const HOPS = 3;
+
+// Otros docks: con el de OpenDock a la vez serían dos. Se desactivan mientras el
+// nuestro esté encendido (se pueden volver a encender en la app Extensiones).
+const RIVAL_DOCKS = [
+    'dash-to-dock@micxgx.gmail.com',
+    'ubuntu-dock@ubuntu.com',
+    'dash-to-panel@jderose9.github.com',
+    'dash2dock-lite@icedman.github.com',
+];
+const EXTENSION_ACTIVE = 1;       // ExtensionState.ACTIVE (ENABLED en GNOME 45)
 
 // vista previa (los mismos números que la de Windows)
 const PREVIEW_DELAY_MS = 400;     // cursor quieto sobre la app
@@ -48,6 +60,9 @@ export class DockManager {
         this._monitorsChangedId = null;
         this._fullscreenId = null;
         this._focusId = null;
+        this._overviewIds = [];
+        this._rivalsId = null;
+        this._rivalsIdleId = null;
     }
 
     enable() {
@@ -61,7 +76,50 @@ export class DockManager {
         this._favoritesId = AppFavorites.getAppFavorites().connect('changed', () => this._rebuild());
         this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => this._syncViews());
         this._fullscreenId = global.display.connect('in-fullscreen-changed', () => this._syncFullscreen());
+        // En la vista de actividades manda el dash de GNOME (con su botón de apps):
+        // el nuestro se aparta para no quedar uno encima del otro.
+        this._overviewIds.push(Main.overview.connect('showing', () => this._syncOverview(true)));
+        this._overviewIds.push(Main.overview.connect('hidden', () => this._syncOverview(false)));
+        this._settingsIds.push(this._settings.connect('changed::show-dock',
+            () => this._scheduleRivals()));
+        this._rivalsId = Main.extensionManager.connect('extension-state-changed',
+            (_manager, extension) => {
+                if (extension && RIVAL_DOCKS.includes(extension.uuid) &&
+                    extension.state === EXTENSION_ACTIVE)
+                    this._scheduleRivals();
+            });
         this._syncViews();
+        this._scheduleRivals();
+    }
+
+    // Fuera de la señal (y de la carga de extensiones de GNOME): en reposo.
+    _scheduleRivals() {
+        if (this._rivalsIdleId)
+            return;
+        this._rivalsIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._rivalsIdleId = null;
+            this._disableRivals();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _disableRivals() {
+        if (!this._settings.get_boolean('show-dock'))
+            return;
+        for (const uuid of RIVAL_DOCKS) {
+            try {
+                const extension = Main.extensionManager.lookup(uuid);
+                if (extension && extension.state === EXTENSION_ACTIVE)
+                    Main.extensionManager.disableExtension(uuid);
+            } catch (e) {
+                logError(e, `OpenDock: no se pudo desactivar ${uuid}`);
+            }
+        }
+    }
+
+    _syncOverview(showing) {
+        for (const view of this._views)
+            view.setOverview(showing);
     }
 
     disable() {
@@ -84,6 +142,17 @@ export class DockManager {
             global.display.disconnect(this._fullscreenId);
             this._fullscreenId = null;
         }
+        for (const id of this._overviewIds)
+            Main.overview.disconnect(id);
+        this._overviewIds = [];
+        if (this._rivalsId) {
+            Main.extensionManager.disconnect(this._rivalsId);
+            this._rivalsId = null;
+        }
+        if (this._rivalsIdleId) {
+            GLib.source_remove(this._rivalsIdleId);
+            this._rivalsIdleId = null;
+        }
         this._destroyViews();
     }
 
@@ -101,6 +170,7 @@ export class DockManager {
             this._views.push(new DockView(this._settings, this._extensionObject, i));
         this._rebuild();
         this._syncFullscreen();
+        this._syncOverview(Main.overview.visible);
     }
 
     _rebuild() {
@@ -127,6 +197,10 @@ class DockView {
         this._hideTimeoutId = null;
         this._hovering = false;
         this._fullscreen = false;
+        this._overview = false;
+        this._pointerX = null;           // x del cursor sobre el dock (null = fuera)
+        this._bounces = new Map();       // id de app -> {t, amp}: sobrevive a rehacer los iconos
+        this._baseWidth = 0;
         this._offsetSpring = new Spring(260, 0.95, 0);
         this._runner = new SpringRunner(dt => this._tick(dt));
         this._preview = null;
@@ -174,8 +248,13 @@ class DockView {
             this._show();
             return Clutter.EVENT_PROPAGATE;
         });
-        this._actor.connect('leave-event', () => {
+        this._actor.connect('leave-event', (_actor, event) => {
+            // pasar a un icono (hijo) no es salir del dock
+            if (this._actor.contains(event.get_related()))
+                return Clutter.EVENT_PROPAGATE;
             this._hovering = false;
+            this._pointerX = null;
+            this._retargetIcons();       // la lupa se deshace con su muelle
             this._scheduleHide();
             return Clutter.EVENT_PROPAGATE;
         });
@@ -183,6 +262,11 @@ class DockView {
             this._onMotion(event);
             return Clutter.EVENT_PROPAGATE;
         });
+
+        // El fondo va aparte: se ensancha con la lupa sin mover el actor que
+        // recibe el cursor ni la zona reservada.
+        this._bg = new St.Widget({name: 'opendock-dock-bg'});
+        this._actor.add_child(this._bg);
 
         this._iconBox = new St.BoxLayout({
             style: `spacing: ${GAP}px;`,
@@ -205,8 +289,11 @@ class DockView {
         const height = PANEL_HEIGHT;
         const radius = Math.round(height * 0.30);
         const palette = this._palette();
-        this._actor.set_style(
+        this._bg.set_style(
             `background-color: ${cssRgba(palette.background, 0.75)}; border-radius: ${radius}px;`);
+        this._baseWidth = width;
+        this._bg.set_position(0, 0);
+        this._bg.set_size(width, height);
         this._actor.set_size(width, height);
         this._iconBox.set_position(PAD_X, PAD_Y);
         this._actor.set_position(
@@ -216,7 +303,18 @@ class DockView {
 
     _updateVisible() {
         if (this._actor)
-            this._actor.visible = this._settings.get_boolean('show-dock') && !this._fullscreen;
+            this._actor.visible = this._settings.get_boolean('show-dock') && !this._fullscreen && !this._overview;
+    }
+
+    setOverview(showing) {
+        if (showing === this._overview)
+            return;
+        this._overview = showing;
+        if (showing) {
+            this._closePreview(true);
+            this._menu?.close(BoxPointer.PopupAnimation.NONE);
+        }
+        this._updateVisible();
     }
 
     // Una ventana a pantalla completa en este monitor: su dock se aparta (el de los demás, no).
@@ -241,6 +339,10 @@ class DockView {
         if (!this._settings.get_boolean('show-dock'))
             return;
 
+        // los muelles de la lupa siguen con su app: rehacer los iconos no da un salto
+        const springs = new Map();
+        for (const wrapper of this._icons)
+            springs.set(wrapper._opendock.app.get_id(), wrapper._opendock.scale);
         this._iconBox.destroy_all_children();
         this._icons = [];
 
@@ -262,19 +364,22 @@ class DockView {
         }
 
         for (const entry of apps)
-            this._icons.push(this._buildIcon(entry.app, baseSize));
+            this._icons.push(this._buildIcon(entry.app, baseSize, springs.get(entry.app.get_id())));
 
         this._layoutIcons();
+        this._retargetIcons();
+        this._tick(0);
         if (this._preview)
             this._preview.refresh();
     }
 
-    _buildIcon(app, baseSize) {
+    _buildIcon(app, baseSize, spring = null) {
         const running = app.get_n_windows() > 0;
         const focused = running && global.display.focus_window &&
             app.get_windows().includes(global.display.focus_window);
 
         const wrapper = new St.BoxLayout({vertical: true, reactive: true});
+        wrapper.set_pivot_point(0.5, 1);     // la lupa crece desde la base del dock
         const texture = app.create_icon_texture(baseSize);
         const iconButton = new St.Button({child: texture, track_hover: true});
         iconButton.connect('clicked', () => this._activate(app, iconButton));
@@ -297,7 +402,10 @@ class DockView {
         });
         wrapper.add_child(indicator);
 
-        wrapper._opendock = {app, baseSize, iconButton, indicator};
+        wrapper._opendock = {
+            app, baseSize, iconButton, indicator,
+            scale: spring || new Spring(520, 0.66, 1),
+        };
         this._iconBox.add_child(wrapper);
         return wrapper;
     }
@@ -315,7 +423,7 @@ class DockView {
         this._previewSuppress = iconButton;
         const wasRunning = app.get_n_windows() > 0;
         if (!wasRunning)
-            this._bounce(iconButton);
+            this._bounce(app, iconButton);
         try {
             app.activate();
         } catch (e) {
@@ -522,52 +630,42 @@ class DockView {
             this._scheduleHide();
     }
 
-    _bounce(actor) {
-        const baseSize = actor.height || BASE_ICON;
-        let amplitude = 0.75 * baseSize;
-        const hop = remaining => {
-            if (remaining <= 0)
-                return;
-            actor.ease({
-                translation_y: -amplitude,
-                duration: 190,
-                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                onComplete: () => {
-                    actor.ease({
-                        translation_y: 0,
-                        duration: 190,
-                        mode: Clutter.AnimationMode.EASE_IN_QUAD,
-                        onComplete: () => {
-                            amplitude *= 0.62;
-                            hop(remaining - 1);
-                        },
-                    });
-                },
-            });
-        };
-        hop(3);
+    // Rebote de lanzamiento: 3 saltos de 0,4 s, cada uno ×0,62 del anterior.
+    // Va por id de app, no por actor: GNOME rehace los iconos en cuanto la app
+    // empieza a abrirse y el salto se cortaba.
+    _bounce(app, iconButton) {
+        const baseSize = iconButton.height || BASE_ICON;
+        this._bounces.set(app.get_id(), {t: 0, amp: 0.75 * baseSize});
+        if (!this._runner.running)
+            this._runner.start();
     }
 
     _onMotion(event) {
-        if (!this._icons.length)
-            return;
         const [stageX] = event.get_coords();
-        const [actorX] = this._actor.get_transformed_position();
-        const localX = stageX - actorX - PAD_X;
-        const step = (this._icons[0]?.width || BASE_ICON) + GAP;
-        if (!step || step <= 0)
+        this._pointerX = stageX;
+        this._retargetIcons();
+    }
+
+    // Lupa: 1 + 0,5·exp(−((i − f)/1,55)²), cada icono con su muelle.
+    _retargetIcons() {
+        if (!this._icons.length || !this._actor)
             return;
-        const f = localX / step;
+        let f = null;
+        if (this._pointerX !== null) {
+            const [actorX] = this._actor.get_transformed_position();
+            const iconWidth = this._icons[0].width || this._icons[0]._opendock.baseSize;
+            f = (this._pointerX - actorX - PAD_X - iconWidth / 2) / (iconWidth + GAP);
+        }
         this._icons.forEach((wrapper, i) => {
-            const d = (i - f) / 1.55;
-            const scale = 1 + 0.5 * Math.exp(-(d * d));
-            wrapper.ease({
-                scale_x: scale,
-                scale_y: scale,
-                duration: 90,
-                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-            });
+            let target = 1;
+            if (f !== null) {
+                const d = (i - f) / 1.55;
+                target = 1 + 0.5 * Math.exp(-(d * d));
+            }
+            wrapper._opendock.scale.setTarget(target);
         });
+        if (!this._runner.running)
+            this._runner.start();
     }
 
     _show() {
@@ -603,10 +701,65 @@ class DockView {
     }
 
     _tick(dt) {
-        this._offsetSpring.step(dt);
+        if (dt > 0)
+            this._offsetSpring.step(dt);
         if (this._actor && this._monitor)
             this._actor.translation_y = this._offsetSpring.value;
-        return this._offsetSpring.isSettled();
+        let settled = this._offsetSpring.isSettled();
+        if (!this._actor)
+            return settled;
+
+        // lupa: los iconos crecen, se apartan entre sí y el panel se ensancha
+        const base = [];
+        const grown = [];
+        let baseTotal = 0, total = 0;
+        for (const wrapper of this._icons) {
+            const spring = wrapper._opendock.scale;
+            if (dt > 0)
+                spring.step(dt);
+            if (spring.isSettled(0.001))
+                spring.jumpTo(spring.target);
+            else
+                settled = false;
+            const w = wrapper.width || wrapper._opendock.baseSize;
+            base.push(w);
+            grown.push(w * spring.value);
+            baseTotal += w;
+            total += w * spring.value;
+        }
+        const extra = total - baseTotal;
+        let x = -extra / 2, baseX = 0;
+        this._icons.forEach((wrapper, i) => {
+            const s = wrapper._opendock.scale.value;
+            wrapper.set_scale(s, s);
+            wrapper.translation_x = (x + grown[i] / 2) - (baseX + base[i] / 2);
+            x += grown[i] + GAP;
+            baseX += base[i] + GAP;
+        });
+        if (this._bg && this._baseWidth) {
+            this._bg.set_position(-extra / 2, 0);
+            this._bg.set_size(this._baseWidth + extra, PANEL_HEIGHT);
+        }
+
+        // rebote de lanzamiento
+        for (const [id, bounce] of this._bounces) {
+            bounce.t += dt;
+            if (bounce.t >= HOPS * HOP_S)
+                this._bounces.delete(id);
+            else
+                settled = false;
+        }
+        for (const wrapper of this._icons) {
+            const bounce = this._bounces.get(wrapper._opendock.app.get_id());
+            let lift = 0;
+            if (bounce) {
+                const hop = Math.floor(bounce.t / HOP_S);
+                const phase = (bounce.t - hop * HOP_S) / HOP_S;
+                lift = bounce.amp * Math.pow(0.62, hop) * Math.sin(Math.PI * phase);
+            }
+            wrapper._opendock.iconButton.translation_y = -lift;
+        }
+        return settled;
     }
 
     get palette() {

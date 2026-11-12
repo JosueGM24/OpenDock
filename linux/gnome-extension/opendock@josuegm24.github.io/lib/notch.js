@@ -6,10 +6,11 @@ import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import Pango from 'gi://Pango';
+import Cairo from 'gi://cairo';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Config from 'resource:///org/gnome/shell/misc/config.js';
-import {Spring, SpringRunner} from './spring.js';
-import {paletteFor, zetaFor} from './theme.js';
+import {Spring, SpringRunner, tween} from './spring.js';
+import {paletteFor, zetaFor, hexToRgba} from './theme.js';
 import {playSoundFile} from './sound.js';
 
 const PEEK_WIDTH = 360;
@@ -46,6 +47,8 @@ const TRASH_COLOR = '#E5443C';
 const TRASH_COLOR_HOVER = '#FF453A';
 const DELETE_FADE_MS = 260;
 const SCROLL_STEP_PX = 60;
+const SHOULDER = 7;            // hombros cóncavos que unen la isla con la barra
+const CENTER_PAD = (CENTER_WIDTH - CARD_WIDTH) / 2;
 
 function formatTime(date) {
     const hh = String(date.getHours()).padStart(2, '0');
@@ -102,10 +105,18 @@ export class NotchManager {
         this._scrollAdjustment = null;
 
         this._monitorsChangedId = null;
+        this._shoulders = [];
+        this._shoulderRadius = 0;
+        this._materialId = null;
     }
 
     enable() {
         this._buildPeek();
+        this._buildShoulders();
+        this._materialId = this._settings.connect('changed::material', () => {
+            for (const area of this._shoulders)
+                area.queue_repaint();
+        });
         this._buildHotStrip();
         this._patchMessageTray();
         this._connectExistingSources();
@@ -151,6 +162,15 @@ export class NotchManager {
         this._cardExpandTimeouts.clear();
         this._cardSprings.clear();
         this._closeCenter();
+        if (this._materialId) {
+            this._settings.disconnect(this._materialId);
+            this._materialId = null;
+        }
+        for (const area of this._shoulders) {
+            Main.layoutManager.uiGroup.remove_child(area);
+            area.destroy();
+        }
+        this._shoulders = [];
 
         for (const actor of [this._actor, this._hotStrip, this._mini]) {
             if (actor) {
@@ -245,6 +265,46 @@ export class NotchManager {
         this._actor.set_size(0, 0);
     }
 
+    // Hombros: la isla cuelga de la barra, y a cada lado una curva cóncava
+    // (radio min(7, alto/2)) la une con ella, como en Windows. Son dos piezas
+    // aparte porque quedan fuera del rectángulo de la isla.
+    _buildShoulders() {
+        for (const side of ['left', 'right']) {
+            const area = new St.DrawingArea({
+                name: `opendock-notch-shoulder-${side}`,
+                width: SHOULDER,
+                height: SHOULDER,
+                reactive: false,
+                visible: false,
+            });
+            area.connect('repaint', widget => this._paintShoulder(widget, side));
+            Main.layoutManager.uiGroup.add_child(area);
+            this._shoulders.push(area);
+        }
+    }
+
+    _paintShoulder(area, side) {
+        const cr = area.get_context();
+        const r = this._shoulderRadius;
+        cr.save();
+        cr.setOperator(Cairo.Operator.CLEAR);
+        cr.paint();
+        cr.restore();
+        if (r > 0.2) {
+            const [red, green, blue] = hexToRgba(this._palette().background);
+            // el rincón pegado a la barra y a la isla, menos el cuarto de círculo
+            const x0 = side === 'left' ? SHOULDER - r : 0;
+            cr.setOperator(Cairo.Operator.OVER);
+            cr.setSourceRGBA(red, green, blue, 1);
+            cr.rectangle(x0, 0, r, r);
+            cr.fill();
+            cr.setOperator(Cairo.Operator.CLEAR);
+            cr.arc(side === 'left' ? x0 : r, r, r, 0, 2 * Math.PI);
+            cr.fill();
+        }
+        cr.$dispose();
+    }
+
     _buildHotStrip() {
         // Franja central invisible bajo la barra: detecta el cursor para el
         // mini notch (110x9), que lo sigue (muelle k 240) y se imanta al
@@ -297,9 +357,16 @@ export class NotchManager {
         if (!this._actor || !this._monitor)
             return;
         const w = this._actor.width;
-        this._actor.set_position(
-            this._monitor.x + Math.round(this._monitor.width / 2 - w / 2),
-            this._monitor.y + this._panelHeight);
+        const x = this._monitor.x + Math.round(this._monitor.width / 2 - w / 2);
+        const y = this._monitor.y + this._panelHeight;
+        this._actor.set_position(x, y);
+        if (this._shoulders.length === 2) {
+            const shown = this._actor.height > 0.5 && w > 2 * SHOULDER;
+            this._shoulders[0].set_position(x - SHOULDER, y);
+            this._shoulders[1].set_position(Math.round(x + w), y);
+            for (const area of this._shoulders)
+                area.visible = shown;
+        }
     }
 
     // ---- MessageTray ------------------------------------------------------
@@ -521,17 +588,24 @@ export class NotchManager {
         const w = Math.max(0, this._widthSpring.value);
         const h = Math.max(0, this._heightSpring.value);
         this._actor.set_size(w, h);
-        this._positionPeek();
         // el cuerpo ocupa lo que la isla ha crecido; cerrado, vuelve a una línea
         const bottomPad = PEEK_HEIGHT - PEEK_BODY_Y - PEEK_BODY_LINE;
         this._bodyLabel.set_height(Math.max(PEEK_BODY_LINE, Math.round(h) - PEEK_BODY_Y - bottomPad));
         if (!this._peekExpanded && h <= PEEK_HEIGHT + 1 && this._bodyLabel.clutter_text.get_line_wrap())
             this._setPeekBodyWrap(false);
 
-        const shoulder = Math.min(7, h / 2);
+        // arriba recta (cuelga de la barra, con sus hombros); abajo, radio 16
+        const bottom = Math.min(16, h / 2);
         this._actor.set_style(
             `background-color: ${this._palette().background}; ` +
-            `border-radius: ${shoulder}px ${shoulder}px 16px 16px;`);
+            `border-radius: 0px 0px ${bottom}px ${bottom}px;`);
+        const shoulder = Math.round(Math.min(SHOULDER, h / 2) * 2) / 2;
+        if (shoulder !== this._shoulderRadius) {
+            this._shoulderRadius = shoulder;
+            for (const area of this._shoulders)
+                area.queue_repaint();
+        }
+        this._positionPeek();
 
         this._contentBox.visible = h > 0.55 * PEEK_HEIGHT;
 
@@ -685,17 +759,25 @@ export class NotchManager {
         header.add_child(headerLabel);
         const clearButton = new St.Button({
             label: 'Borrar',
-            style: `color: ${palette.text}; padding: 6px 10px;`,
+            style: `color: ${palette.text}; background-color: ${palette.card}; font-size: 12px; ` +
+                `font-weight: 600; padding: 6px 14px; border-radius: 14px; margin-right: ${CENTER_PAD}px;`,
             y_align: Clutter.ActorAlign.CENTER,
         });
         clearButton.connect('clicked', () => this._clearAll());
         header.add_child(clearButton);
         this._center.add_child(header);
 
-        this._cardList = new St.BoxLayout({vertical: true, style: `spacing: ${CARD_GAP}px;`});
+        // Tarjetas centradas (348 dentro de 384) y con aire abajo; la lista mide lo
+        // que sus tarjetas, hasta 6, y a partir de ahí se desplaza.
+        this._cardList = new St.BoxLayout({
+            vertical: true,
+            style: `spacing: ${CARD_GAP}px; padding: 0 ${CENTER_PAD}px ${CENTER_PAD}px ${CENTER_PAD}px;`,
+        });
         const scroll = new St.ScrollView({
-            height: MAX_VISIBLE_CARDS * (CARD_HEIGHT + CARD_GAP),
             width: CENTER_WIDTH,
+            hscrollbar_policy: St.PolicyType.NEVER,
+            vscrollbar_policy: St.PolicyType.AUTOMATIC,
+            style: `max-height: ${MAX_VISIBLE_CARDS * (CARD_HEIGHT + CARD_GAP) + CENTER_PAD}px;`,
         });
         // En GNOME 45 St.ScrollView sólo coloca al hijo que entra por
         // add_actor (set_child es el de St.Bin y lo deja sin colocar: el
@@ -791,13 +873,37 @@ export class NotchManager {
         this._hoveredCard = null;
 
         const palette = this._palette();
-        const notifications = [];
-        for (const source of this._sourceIds.keys()) {
-            for (const notification of source.notifications || [])
-                notifications.push(notification);
-        }
+        const notifications = this._sortedNotifications();
         for (const notification of notifications)
             this._cardList.add_child(this._buildCard(notification, palette));
+        if (!notifications.length) {
+            this._cardList.add_child(new St.Label({
+                text: 'Sin notificaciones',
+                x_align: Clutter.ActorAlign.CENTER,
+                x_expand: true,
+                style: `color: ${palette.tertiary}; font-size: 13px; font-weight: 600; padding: 10px 0 14px 0;`,
+            }));
+        }
+    }
+
+    // Todas las notificaciones, la más reciente arriba. GNOME las guarda por app
+    // (fuente): sin ordenar salían agrupadas por app y, dentro, de vieja a nueva.
+    _sortedNotifications() {
+        const stamp = notification => {
+            try {
+                const d = notification.datetime;
+                return d ? d.to_unix() * 1000000 + d.get_microsecond() : 0;
+            } catch (e) {
+                return 0;
+            }
+        };
+        const entries = [];
+        for (const source of this._sourceIds.keys()) {
+            for (const notification of source.notifications || [])
+                entries.push({notification, time: stamp(notification), order: entries.length});
+        }
+        entries.sort((a, b) => (b.time - a.time) || (b.order - a.order));
+        return entries.map(entry => entry.notification);
     }
 
     // ---- tarjetas del centro de notificaciones -----------------------------
@@ -870,6 +976,11 @@ export class NotchManager {
             style: `background-color: ${TRASH_COLOR}; border-radius: 0 16px 16px 0;`,
             width: TRASH_WIDTH,
             height: CARD_HEIGHT,
+            child: new St.Icon({
+                icon_name: 'user-trash-symbolic',
+                icon_size: 16,
+                style: 'color: #FFFFFF;',
+            }),
         });
         trash.set_position(CARD_WIDTH - TRASH_WIDTH, 0);
         trash.connect('clicked', () => {
@@ -878,22 +989,13 @@ export class NotchManager {
         });
         trash.connect('enter-event', () => {
             trash.set_style(`background-color: ${TRASH_COLOR_HOVER}; border-radius: 0 16px 16px 0;`);
-            trash.ease({
-                width: TRASH_WIDTH_HOVER,
-                duration: 150,
-                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-            });
-            trash.set_position(CARD_WIDTH - TRASH_WIDTH_HOVER, 0);
+            // ancho y posición a la vez: crece hacia dentro sin despegarse del borde
+            tween(trash, {width: TRASH_WIDTH_HOVER, x: CARD_WIDTH - TRASH_WIDTH_HOVER}, 150);
             return Clutter.EVENT_PROPAGATE;
         });
         trash.connect('leave-event', () => {
             trash.set_style(`background-color: ${TRASH_COLOR}; border-radius: 0 16px 16px 0;`);
-            trash.ease({
-                width: TRASH_WIDTH,
-                duration: 150,
-                mode: Clutter.AnimationMode.EASE_IN_QUAD,
-            });
-            trash.set_position(CARD_WIDTH - TRASH_WIDTH, 0);
+            tween(trash, {width: TRASH_WIDTH, x: CARD_WIDTH - TRASH_WIDTH}, 150, {easeIn: true});
             return Clutter.EVENT_PROPAGATE;
         });
         card.add_child(trash);
@@ -981,26 +1083,15 @@ export class NotchManager {
             card._opendockActions.visible = expanded;
         }
         if (label) {
-            label.ease({
-                height: CARD_BODY_LINE + extra,
-                duration: 150,
-                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            tween(label, {height: CARD_BODY_LINE + extra}, 150, {
                 onComplete: () => {
                     if (!card._opendockDestroyed && !card._opendockExpanded)
                         label.clutter_text.set_line_wrap(false);
                 },
             });
         }
-        card._opendockTrash?.ease({
-            height,
-            duration: 150,
-            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-        });
-        card.ease({
-            height,
-            duration: 150,
-            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-        });
+        tween(card._opendockTrash, {height}, 150);
+        tween(card, {height}, 150);
     }
 
     _cardTick(dt) {
@@ -1055,16 +1146,13 @@ export class NotchManager {
         if (this._hoveredCard === card)
             this._hoveredCard = null;
 
-        card.ease({
-            translation_x: CARD_WIDTH,
-            opacity: 0,
-            duration: DELETE_FADE_MS,
-            mode: Clutter.AnimationMode.EASE_IN_QUAD,
+        card.reactive = false;
+        tween(card, {translation_x: CARD_WIDTH, opacity: 0}, DELETE_FADE_MS, {
+            easeIn: true,
             onComplete: () => {
-                card.ease({
-                    height: 0,
-                    duration: 150,
-                    mode: Clutter.AnimationMode.EASE_IN_QUAD,
+                // las de abajo suben mientras esta se cierra
+                tween(card, {height: 0}, 150, {
+                    easeIn: true,
                     onComplete: () => {
                         this._destroyNotification(notification);
                         this._refreshCenter();

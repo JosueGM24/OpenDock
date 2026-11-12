@@ -4,6 +4,7 @@ import {CornerManager} from './lib/corners.js';
 import {PanelStyler, PANEL_HEIGHT} from './lib/panel.js';
 import {NotchManager} from './lib/notch.js';
 import {DockManager} from './lib/dock.js';
+import {cancelAllTweens} from './lib/spring.js';
 
 export default class OpenDockExtension extends Extension {
     enable() {
@@ -33,6 +34,7 @@ export default class OpenDockExtension extends Extension {
                 logError(e, 'OpenDock: fallo al desactivar un componente');
             }
         }
+        cancelAllTweens();
         this._dock = null;
         this._notch = null;
         this._panel = null;
