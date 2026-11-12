@@ -18,6 +18,7 @@ import * as AppFavorites from 'resource:///org/gnome/shell/ui/appFavorites.js';
 import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Spring, SpringRunner} from './spring.js';
+import {vbox} from './ui.js';
 import {paletteFor, zetaFor, cssRgba} from './theme.js';
 
 const PANEL_HEIGHT = 60;
@@ -378,7 +379,7 @@ class DockView {
         const focused = running && global.display.focus_window &&
             app.get_windows().includes(global.display.focus_window);
 
-        const wrapper = new St.BoxLayout({vertical: true, reactive: true});
+        const wrapper = vbox({reactive: true});
         wrapper.set_pivot_point(0.5, 1);     // la lupa crece desde la base del dock
         const texture = app.create_icon_texture(baseSize);
         const iconButton = new St.Button({child: texture, track_hover: true});
@@ -880,7 +881,7 @@ class WindowPreview {
             can_focus: false,
             style: 'border-radius: 12px; padding: 6px;',
         });
-        const box = new St.BoxLayout({vertical: true, style: 'spacing: 6px;'});
+        const box = vbox({style: 'spacing: 6px;'});
         card.set_child(box);
 
         const header = new St.BoxLayout({style: 'spacing: 6px;'});

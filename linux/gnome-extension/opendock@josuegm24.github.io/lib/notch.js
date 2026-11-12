@@ -10,6 +10,7 @@ import Cairo from 'gi://cairo';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 import {Spring, SpringRunner, tween} from './spring.js';
+import {vbox} from './ui.js';
 import {paletteFor, zetaFor, hexToRgba} from './theme.js';
 import {playSoundFile} from './sound.js';
 
@@ -741,9 +742,8 @@ export class NotchManager {
         if (this._center)
             return;
         const palette = this._palette();
-        this._center = new St.BoxLayout({
+        this._center = vbox({
             name: 'opendock-notch-center',
-            vertical: true,
             reactive: true,
             style: `background-color: ${palette.background}; border-radius: 16px 16px 26px 26px;`,
             width: CENTER_WIDTH,
@@ -769,8 +769,7 @@ export class NotchManager {
 
         // Tarjetas centradas (348 dentro de 384) y con aire abajo; la lista mide lo
         // que sus tarjetas, hasta 6, y a partir de ahí se desplaza.
-        this._cardList = new St.BoxLayout({
-            vertical: true,
+        this._cardList = vbox({
             style: `spacing: ${CARD_GAP}px; padding: 0 ${CENTER_PAD}px ${CENTER_PAD}px ${CENTER_PAD}px;`,
         });
         const scroll = new St.ScrollView({
@@ -928,8 +927,7 @@ export class NotchManager {
             card._opendockDestroyed = true;
         });
 
-        const text = new St.BoxLayout({
-            vertical: true,
+        const text = vbox({
             width: CARD_WIDTH - TRASH_WIDTH,
             style: 'padding: 8px 12px;',
         });
